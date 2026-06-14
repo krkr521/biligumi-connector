@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.3.21
+// @version      0.3.22
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -22,12 +22,13 @@
   const BGM_WEB_BASE = "https://bgm.tv";
   const PANEL_ID = "biligumi-connector-panel";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.3.21";
+  const SCRIPT_VERSION = "0.3.22";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
     whitelist: "biligumi.whitelist",
     panelCollapsed: "biligumi.panelCollapsed",
+    syncHistory: "biligumi.syncHistory",
   };
 
   const SUBJECT_TYPES = {
@@ -44,6 +45,28 @@
     2: "看过",
     3: "抛弃",
   };
+
+  const EPISODE_PATTERNS = [
+    /第\s*([0-9]+(?:\.[0-9]+)?)\s*[话集]/i,
+    /S\d+\s*E\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /EP\.?\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /#\s*([0-9]+(?:\.[0-9]+)?)\b/i,
+    /[\[【]\s*([0-9]+(?:\.[0-9]+)?)\s*[\]】]/,
+    /『[^』]*』\s*([0-9]+(?:\.[0-9]+)?)/,
+    /(?:^|[\s#\[])([0-9]+(?:\.[0-9]+)?)\s*(?:话|集|]|$)/i,
+  ];
+
+  const COMMON_RESOLUTIONS = new Set([144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320]);
+  const TITLE_PROPERTY_TAGS = [
+    "4K", "1080P", "720P", "480P", "HDR", "SDR", "BD", "BDRIP", "WEB", "WEBRIP",
+    "简中", "繁中", "简体", "繁体", "中字", "中日", "字幕", "字幕组", "压制",
+    "超清", "高清", "标清", "新番", "完结", "全集",
+  ];
+
+  const pendingRequests = new Map();
+  const REQUEST_DEDUP_TTL = 500;
+  const REQUEST_MAX_RETRIES = 3;
+  const REQUEST_RETRY_BASE_MS = 800;
 
   const state = {
     pageKey: "",
@@ -67,6 +90,7 @@
     message: "",
     error: "",
     searchResults: [],
+    syncHistory: readJsonValue(STORAGE.syncHistory, {}),
   };
 
   GM_addStyle(`
@@ -1663,6 +1687,7 @@
     const response = await bgmRequest("/v0/search/subjects?limit=8", {
       method: "POST",
       body: { keyword, sort: "match", filter: { type: [2] } },
+      dedup: true,
     });
     state.searchResults = response.data || [];
     state.message = state.searchResults.length ? "请选择正确的 Bangumi 条目绑定。" : "没有搜到结果，可以换个关键词。";
@@ -1898,7 +1923,38 @@
       body: { episode_id: episodeIds, type },
       expectNoContent: true,
     });
+    if (type === 2) recordEpisodeSync(episodeIds);
     if (reload) await loadSubjectBundle();
+  }
+
+  function recordEpisodeSync(episodeIds) {
+    const byId = new Map(getNormalEpisodes().map((ep) => [Number(ep.id), ep]));
+    const now = Date.now();
+    let changed = false;
+    for (const episodeId of episodeIds) {
+      const ep = byId.get(Number(episodeId));
+      if (!ep) continue;
+      const sort = Number(ep.sort);
+      const key = `${state.subjectId}_${Number.isFinite(sort) ? sort : episodeId}`;
+      state.syncHistory[key] = {
+        subjectId: state.subjectId,
+        episodeId: Number(episodeId),
+        episodeSort: Number.isFinite(sort) ? sort : null,
+        subjectName: state.subject ? displaySubjectName(state.subject) : "",
+        syncedAt: now,
+      };
+      changed = true;
+    }
+    if (changed) {
+      pruneSyncHistory();
+      writeJsonValue(STORAGE.syncHistory, state.syncHistory);
+    }
+  }
+
+  function pruneSyncHistory() {
+    const entries = Object.entries(state.syncHistory || {})
+      .sort((a, b) => Number(b[1] && b[1].syncedAt || 0) - Number(a[1] && a[1].syncedAt || 0));
+    state.syncHistory = Object.fromEntries(entries.slice(0, 300));
   }
 
   function applyLocalEpisodeProgress(wantedDone) {
@@ -2071,20 +2127,54 @@
 
   function bgmRequest(path, options = {}) {
     const method = options.method || "GET";
+    const url = `${API_BASE}${path}`;
+    const data = options.body ? JSON.stringify(options.body) : undefined;
+    const shouldDedup = options.dedup === true || (options.dedup !== false && method === "GET");
+    const dedupKey = `${method} ${url} ${data || ""}`;
+    if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
+
+    const promise = bgmRequestWithRetry(method, url, data, options);
+    if (shouldDedup) {
+      pendingRequests.set(dedupKey, promise);
+      promise.then(() => {
+        window.setTimeout(() => pendingRequests.delete(dedupKey), REQUEST_DEDUP_TTL);
+      }, () => {
+        window.setTimeout(() => pendingRequests.delete(dedupKey), REQUEST_DEDUP_TTL);
+      });
+    }
+    return promise;
+  }
+
+  async function bgmRequestWithRetry(method, url, data, options) {
+    let lastError = null;
+    for (let attempt = 0; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
+      try {
+        return await bgmRequestOnce(method, url, data, options);
+      } catch (error) {
+        lastError = error;
+        if (!isRetryableApiError(error) || attempt >= REQUEST_MAX_RETRIES) throw error;
+        await sleep(REQUEST_RETRY_BASE_MS * Math.pow(2, attempt));
+      }
+    }
+    throw lastError || new Error("Bangumi API 请求失败");
+  }
+
+  function bgmRequestOnce(method, url, data, options) {
     const headers = {
       "Accept": "application/json",
       "Content-Type": "application/json",
-      "User-Agent": "biligumi-connector/0.1.0 (https://github.com/local/biligumi-connector)",
+      "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/local/biligumi-connector)`,
     };
     if (options.auth) headers.Authorization = `Bearer ${state.token}`;
 
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method,
-        url: `${API_BASE}${path}`,
+        url,
         headers,
-        data: options.body ? JSON.stringify(options.body) : undefined,
+        data,
         responseType: "json",
+        timeout: 30000,
         onload: (response) => {
           if (options.allow404 && response.status === 404) {
             resolve(null);
@@ -2095,15 +2185,32 @@
             return;
           }
           if (response.status < 200 || response.status >= 300) {
-            reject(new Error(extractApiError(response)));
+            reject(makeApiError(response));
             return;
           }
           resolve(response.response || tryParseJson(response.responseText) || {});
         },
-        onerror: () => reject(new Error("Bangumi API 请求失败，可能是网络或 userscript 跨域权限问题")),
-        ontimeout: () => reject(new Error("Bangumi API 请求超时")),
+        onerror: () => reject(makeNetworkError("Bangumi API 请求失败，可能是网络或 userscript 跨域权限问题")),
+        ontimeout: () => reject(makeNetworkError("Bangumi API 请求超时")),
       });
     });
+  }
+
+  function makeApiError(response) {
+    const error = new Error(extractApiError(response));
+    error.status = Number(response.status) || 0;
+    return error;
+  }
+
+  function makeNetworkError(message) {
+    const error = new Error(message);
+    error.status = 0;
+    return error;
+  }
+
+  function isRetryableApiError(error) {
+    const status = Number(error && error.status);
+    return status === 0 || status >= 500;
   }
 
   function extractApiError(response) {
@@ -2259,16 +2366,70 @@
   }
 
   function cleanTitle(title) {
+    const raw = normalizeTitleText(title);
+    if (!raw) return "";
+
+    const bookTitle = raw.match(/《([^》]+)》/);
+    if (bookTitle && !isTitlePropertyTag(bookTitle[1])) return cleanupAnimeTitle(bookTitle[1]);
+
+    const cornerTitle = raw.match(/『([^』]+)』/);
+    if (cornerTitle && !isTitlePropertyTag(cornerTitle[1])) return cleanupAnimeTitle(cornerTitle[1]);
+
+    const fullBracket = raw.match(/【([^】]+)】/);
+    if (fullBracket) {
+      const content = fullBracket[1].trim();
+      const afterBracket = raw.replace(/【[^】]+】/, " ").trim();
+      const afterTitle = cleanupAnimeTitle(afterBracket);
+      if (afterTitle && (isTitlePropertyTag(content) || isSeasonMarker(content) || detectEpisodeNo(afterBracket))) return afterTitle;
+      if (!isTitlePropertyTag(content) && !isSeasonMarker(content)) return cleanupAnimeTitle(content);
+      if (afterTitle) return afterTitle;
+    }
+
+    const squareBracket = raw.match(/\[([^\]]+)\]/);
+    if (squareBracket) {
+      const content = squareBracket[1].trim();
+      const afterBracket = raw.replace(/\[[^\]]+\]/, " ").trim();
+      const afterTitle = cleanupAnimeTitle(afterBracket);
+      if (afterTitle && (isTitlePropertyTag(content) || detectEpisodeNo(afterBracket))) return afterTitle;
+      if (!isTitlePropertyTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
+      if (afterTitle) return afterTitle;
+    }
+
+    return cleanupAnimeTitle(raw);
+  }
+
+  function normalizeTitleText(title) {
     return String(title || "")
       .replace(/_哔哩哔哩_bilibili.*$/i, "")
       .replace(/\s*-\s*哔哩哔哩.*$/i, "")
-      .replace(/^第\s*\d+(?:\.\d+)?\s*[话集][：:《\s]*/, "")
-      .replace(/\s*第\s*\d+(?:\.\d+)?\s*[话集].*$/i, "")
-      .replace(/\s*(?:EP\.?|#)\s*\d+(?:\.\d+)?\s*$/i, "")
-      .replace(/\s*\[\s*\d+(?:\.\d+)?\s*\]\s*$/i, "")
-      .replace(/[《》]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
+  }
+
+  function cleanupAnimeTitle(title) {
+    return String(title || "")
+      .replace(/^第\s*\d+(?:\.\d+)?\s*[话集][：:\s]*/, "")
+      .replace(/\s*第\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话集].*$/i, "")
+      .replace(/\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*话.*$/i, "")
+      .replace(/\s*S\d+\s*E\s*\d+(?:\.\d+)?\s*$/i, "")
+      .replace(/\s*(?:EP\.?|#)\s*\d+(?:\.\d+)?\s*$/i, "")
+      .replace(/\s*[\[【]\s*\d+(?:\.\d+)?\s*[\]】]\s*$/i, "")
+      .replace(/[《》『』]/g, " ")
+      .replace(/【(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|字幕组?|压制|超清|高清|标清|新番|完结|全集)[^】]*】/gi, " ")
+      .replace(/\[(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|字幕组?|压制|超清|高清|标清|新番|完结|全集)[^\]]*\]/gi, " ")
+      .replace(/\s*\/\s*/g, " ")
+      .replace(/[\s\-~]+/g, " ")
+      .trim();
+  }
+
+  function isTitlePropertyTag(value) {
+    const upper = String(value || "").trim().toUpperCase();
+    if (!upper) return false;
+    return TITLE_PROPERTY_TAGS.some((tag) => upper.includes(tag.toUpperCase()));
+  }
+
+  function isSeasonMarker(value) {
+    return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(String(value || "").trim());
   }
 
   function suggestSearchKeyword() {
@@ -2276,9 +2437,16 @@
   }
 
   function detectEpisodeNo(text) {
-    const match = String(text || "").match(/第\s*([0-9]+(?:\.[0-9]+)?)\s*[话集]/)
-      || String(text || "").match(/(?:^|[\s#\[])([0-9]+(?:\.[0-9]+)?)\s*(?:话|集|]|$)/i);
-    return match ? Number(match[1]) : null;
+    const title = String(text || "");
+    for (const pattern of EPISODE_PATTERNS) {
+      const match = title.match(pattern);
+      if (!match) continue;
+      const value = Number(match[1]);
+      if (!Number.isFinite(value) || value <= 0) continue;
+      if (Number.isInteger(value) && COMMON_RESOLUTIONS.has(value)) continue;
+      return value;
+    }
+    return null;
   }
 
   function detectCurrentEpisodeNo(rawTitle) {
