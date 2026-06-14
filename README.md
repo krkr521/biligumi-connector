@@ -49,15 +49,6 @@ Access Token 可以在 Bangumi 官方页面生成：
 - 还没有接入 Bilibili API，也没有做播放完成后自动同步。
 - 白名单支持 UP 主 UID/名称、BV 号、页面 key 或 URL 片段；齿轮按钮会同时配置 Access Token 和白名单。
 
-## 下一步
-
-优先顺序建议：
-
-1. 在真实 Bilibili 番剧页上调右侧插入位置，确保它正好插在选集/推荐之间。
-2. 做 Bilibili `ss/ep/md/BV` 到 Bangumi subject 的自动匹配缓存。
-3. 监听播放器进度，在播放到片尾后自动把当前集标为看过。
-4. 把 UI 拆成可维护模块，再考虑浏览器扩展版本。
-
 ## 参考
 
 - [Bangumi API 文档](https://bangumi.github.io/api/)：用于 Bangumi 条目、收藏、评分、章节进度相关接口。
