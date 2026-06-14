@@ -2,11 +2,13 @@
 
 把 Bangumi 的收藏状态、评分和观看进度面板嵌入 Bilibili 网页端播放页右侧。
 
-当前是最小 Tampermonkey 原型，目标先验证三件事：
+这是一个非官方 Tampermonkey / Violentmonkey userscript 原型，目标先验证三件事：
 
 - 能稳定插入到 Bilibili 播放页右侧栏。
 - 能搜索并绑定 Bangumi 动画条目。
 - 能读取和更新 Bangumi 收藏状态、评分、章节看过状态。
+
+本项目由人工需求驱动，并通过 Codex vibe coding 协作实现和整理。
 
 ## 安装
 
@@ -58,6 +60,9 @@ Access Token 可以在 Bangumi 官方页面生成：
 
 ## 参考
 
-- [Bangumi API 文档](https://bangumi.github.io/api/)
-- [Noneqin57/bilibili2bangumi](https://github.com/Noneqin57/bilibili2bangumi)
-- [wopub/Bilibili2Bangumi](https://github.com/wopub/Bilibili2Bangumi)
+- [Bangumi API 文档](https://bangumi.github.io/api/)：用于 Bangumi 条目、收藏、评分、章节进度相关接口。
+- [Bangumi](https://bgm.tv/)：面板信息结构和视觉风格参考自 Bangumi 条目页、收藏盒、评分区域与章节列表。
+- [Noneqin57/bilibili2bangumi](https://github.com/Noneqin57/bilibili2bangumi)：重点参考了 Bilibili 标题解析、UP 主白名单、同步流程、防重复和请求稳定性等思路。
+- [wopub/Bilibili2Bangumi](https://github.com/wopub/Bilibili2Bangumi)：作为同类项目参考。
+
+本项目不隶属于 Bangumi、Bilibili 或上述参考项目。引用、改写或继续开发时请注明相应来源。

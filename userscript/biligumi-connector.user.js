@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.3.22
+// @version      0.3.23
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -22,7 +22,7 @@
   const BGM_WEB_BASE = "https://bgm.tv";
   const PANEL_ID = "biligumi-connector-panel";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.3.22";
+  const SCRIPT_VERSION = "0.3.23";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -62,6 +62,7 @@
     "简中", "繁中", "简体", "繁体", "中字", "中日", "字幕", "字幕组", "压制",
     "超清", "高清", "标清", "新番", "完结", "全集",
   ];
+  const NON_MAIN_EPISODE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》])(?:PV|CM|OP|ED|NCOP|NCED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|先导|先導|特报|特報|特典|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._-])/i;
 
   const pendingRequests = new Map();
   const REQUEST_DEDUP_TTL = 500;
@@ -1990,7 +1991,10 @@
     const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
     const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
-    if (nextToken !== state.token) state.username = "";
+    if (nextToken !== state.token) {
+      state.username = "";
+      pendingRequests.clear();
+    }
     state.token = nextToken;
     state.whitelist = parseList(String(whitelistInput && whitelistInput.value || ""));
     writeValue(STORAGE.token, state.token);
@@ -2130,7 +2134,8 @@
     const url = `${API_BASE}${path}`;
     const data = options.body ? JSON.stringify(options.body) : undefined;
     const shouldDedup = options.dedup === true || (options.dedup !== false && method === "GET");
-    const dedupKey = `${method} ${url} ${data || ""}`;
+    const authKey = options.auth ? `auth:${state.token || ""}` : "public";
+    const dedupKey = `${method} ${url} ${authKey} ${data || ""}`;
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
     const promise = bgmRequestWithRetry(method, url, data, options);
@@ -2380,6 +2385,7 @@
       const content = fullBracket[1].trim();
       const afterBracket = raw.replace(/【[^】]+】/, " ").trim();
       const afterTitle = cleanupAnimeTitle(afterBracket);
+      if (isNonMainEpisodeTitle(afterBracket) && !isTitlePropertyTag(content) && !isSeasonMarker(content)) return cleanupAnimeTitle(content);
       if (afterTitle && (isTitlePropertyTag(content) || isSeasonMarker(content) || detectEpisodeNo(afterBracket))) return afterTitle;
       if (!isTitlePropertyTag(content) && !isSeasonMarker(content)) return cleanupAnimeTitle(content);
       if (afterTitle) return afterTitle;
@@ -2390,6 +2396,7 @@
       const content = squareBracket[1].trim();
       const afterBracket = raw.replace(/\[[^\]]+\]/, " ").trim();
       const afterTitle = cleanupAnimeTitle(afterBracket);
+      if (isNonMainEpisodeTitle(afterBracket) && !isTitlePropertyTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
       if (afterTitle && (isTitlePropertyTag(content) || detectEpisodeNo(afterBracket))) return afterTitle;
       if (!isTitlePropertyTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
       if (afterTitle) return afterTitle;
@@ -2432,12 +2439,17 @@
     return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(String(value || "").trim());
   }
 
+  function isNonMainEpisodeTitle(value) {
+    return NON_MAIN_EPISODE_PATTERN.test(String(value || ""));
+  }
+
   function suggestSearchKeyword() {
     return state.subject ? displaySubjectName(state.subject) : state.pageTitle;
   }
 
   function detectEpisodeNo(text) {
     const title = String(text || "");
+    if (isNonMainEpisodeTitle(title)) return null;
     for (const pattern of EPISODE_PATTERNS) {
       const match = title.match(pattern);
       if (!match) continue;
