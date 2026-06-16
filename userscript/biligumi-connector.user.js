@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.4.0
+// @version      0.4.2
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -22,7 +22,7 @@
   const BGM_WEB_BASE = "https://bgm.tv";
   const PANEL_ID = "biligumi-connector-panel";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.4.0";
+  const SCRIPT_VERSION = "0.4.2";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -527,6 +527,32 @@
     #${PANEL_ID} .biligumi-current-meta {
       color: #7b8794;
       font-size: 13px;
+    }
+    #${PANEL_ID} .biligumi-collection-box {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      overflow: hidden;
+      border: 1px solid #d9dde4;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 2px 8px rgba(52, 64, 84, .08);
+    }
+    #${PANEL_ID} .biligumi-collection-box button {
+      min-width: 0;
+      height: 34px;
+      border: 0;
+      border-left: 1px solid #e2e5e8;
+      background: transparent;
+      color: #596a7a;
+      cursor: pointer;
+      font-size: 14px;
+    }
+    #${PANEL_ID} .biligumi-collection-box button:first-child {
+      border-left: 0;
+    }
+    #${PANEL_ID} .biligumi-collection-box button:hover {
+      background: #edf5ff;
+      color: var(--bgm-link);
     }
     #${PANEL_ID} .biligumi-card-line {
       border-top: 1px solid var(--bgm-line);
@@ -1414,30 +1440,57 @@
 
     return `
       <div class="biligumi-card-body">
-        <div class="biligumi-row">
-          <div class="biligumi-current">
-            ${escapeHtml(getCollectionSentence())}
-            <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
-          </div>
-          <div class="biligumi-current-meta">${escapeHtml(getCollectionUpdatedText())}</div>
-        </div>
-        <div class="biligumi-row">
-          <div class="biligumi-label">我的评价 <span class="biligumi-rate-text" data-role="rate-preview">${escapeHtml(formatRatePreview(getRate()))}</span></div>
-          <div class="biligumi-rate-line">
-            <div class="biligumi-stars" data-role="rate-stars">
-              <button class="biligumi-rate-clear" data-action="rate-clear" title="清除评分">−</button>
-              ${Array.from({ length: 10 }, (_, i) => {
-                const value = i + 1;
-                return `<button class="biligumi-star ${value <= getRate() ? "active" : ""}" data-action="rate-star" data-rate="${value}" title="${value} 分">★</button>`;
-              }).join("")}
-            </div>
-          </div>
-        </div>
-        ${renderEpisodeGrid()}
+        ${renderCollectionSection()}
         <div class="biligumi-row">
           ${renderScoreBox()}
         </div>
       </div>
+    `;
+  }
+
+  function renderCollectionSection() {
+    if (!state.token) {
+      return `
+        <div class="biligumi-row">
+          <div class="biligumi-current">未设置 Access Token，无法读取收藏盒。</div>
+          <div class="biligumi-current-meta">设置 token 后可查看和同步收藏、评分、章节进度。</div>
+        </div>
+      `;
+    }
+    if (!hasCollection()) {
+      return `
+        <div class="biligumi-row">
+          <div class="biligumi-label">收藏盒</div>
+          <div class="biligumi-collection-box">
+            ${Object.entries(SUBJECT_TYPES).map(([value, label]) => `
+              <button data-action="set-collection-type" data-type="${value}" title="收藏为${escapeHtml(label)}">${escapeHtml(label)}</button>
+            `).join("")}
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="biligumi-row">
+        <div class="biligumi-current">
+          ${escapeHtml(getCollectionSentence())}
+          <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
+          <button data-action="delete-collection" title="删除 Bangumi 收藏记录">删除</button>
+        </div>
+        <div class="biligumi-current-meta">${escapeHtml(getCollectionUpdatedText())}</div>
+      </div>
+      <div class="biligumi-row">
+        <div class="biligumi-label">我的评价 <span class="biligumi-rate-text" data-role="rate-preview">${escapeHtml(formatRatePreview(getRate()))}</span></div>
+        <div class="biligumi-rate-line">
+          <div class="biligumi-stars" data-role="rate-stars">
+            <button class="biligumi-rate-clear" data-action="rate-clear" title="清除评分">−</button>
+            ${Array.from({ length: 10 }, (_, i) => {
+              const value = i + 1;
+              return `<button class="biligumi-star ${value <= getRate() ? "active" : ""}" data-action="rate-star" data-rate="${value}" title="${value} 分">★</button>`;
+            }).join("")}
+          </div>
+        </div>
+      </div>
+      ${renderEpisodeGrid()}
     `;
   }
 
@@ -1827,6 +1880,8 @@
     if (action === "edit-collection") openCollectionEditor();
     if (action === "collection-cancel") closeCollectionEditor();
     if (action === "collection-save") saveCollectionEditor().catch(showError);
+    if (action === "set-collection-type") updateCollection({ type: Number(target.dataset.type) }).catch(showError);
+    if (action === "delete-collection") deleteCollection().catch(showError);
     if (action === "cycle-type") cycleCollectionType().catch(showError);
     if (action === "rate-star") rateSubject(Number(target.dataset.rate)).catch(showError);
     if (action === "rate-clear") rateSubject(0).catch(showError);
@@ -2182,8 +2237,48 @@
     }
   }
 
+  async function deleteCollection() {
+    ensureToken();
+    if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    if (!hasCollection()) {
+      state.message = "这个条目当前没有 Bangumi 收藏记录。";
+      state.error = "";
+      render();
+      return;
+    }
+    const ok = window.confirm("确定删除这个 Bangumi 收藏记录吗？评分、标签、吐槽和章节进度会一起移除。");
+    if (!ok) return;
+
+    setBusy("正在删除 Bangumi 收藏记录...");
+    const subjectId = Number(state.subjectId);
+    const pageHtml = await bgmWebRequest(`/subject/${subjectId}`);
+    const webUsername = parseBangumiWebUsername(pageHtml);
+    const tokenUsername = await getCurrentUsername();
+    if (!webUsername) {
+      throw new Error("无法读取 Bangumi 网页登录状态，请先在 bgm.tv 登录后再删除收藏。");
+    }
+    if (tokenUsername && webUsername !== tokenUsername) {
+      throw new Error(`Bangumi 网页登录账号（${webUsername}）和 Access Token 账号（${tokenUsername}）不一致，已停止删除。`);
+    }
+    const gh = parseSubjectRemoveHash(pageHtml, subjectId);
+    if (!gh) {
+      throw new Error("无法从 Bangumi 页面读取删除令牌，请刷新页面或确认这个条目仍在网页端收藏中。");
+    }
+
+    await bgmWebRequest(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`);
+    state.collection = null;
+    state.episodeCollections = [];
+    state.pendingCollection = null;
+    state.busy = false;
+    state.message = "Bangumi 收藏记录已删除。";
+    state.error = "";
+    render();
+    window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+  }
+
   async function saveProgressFromInput() {
     ensureToken();
+    ensureCollectionForEpisodeSync();
     const input = document.querySelector(`#${PANEL_ID} [data-role='progress']`);
     const episodes = getNormalEpisodes();
     const count = Math.max(0, Math.min(episodes.length, Number(input && input.value) || 0));
@@ -2218,11 +2313,13 @@
 
   async function toggleEpisode(episodeId, isDone) {
     ensureToken();
+    ensureCollectionForEpisodeSync();
     await patchEpisodes([episodeId], isDone ? 0 : 2, isDone ? "正在取消章节标记..." : "正在标记章节看过...");
   }
 
   async function patchEpisodes(episodeIds, type, message, reload = true) {
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    ensureCollectionForEpisodeSync();
     if (!episodeIds.length) {
       if (reload) await loadSubjectBundle();
       return;
@@ -2360,13 +2457,14 @@
       comment: String(commentInput && commentInput.value || ""),
       private: Boolean(privateInput && privateInput.checked),
     };
+    const hadCollection = hasCollection();
     state.collectionEditorOpen = false;
     removeModal();
     state.collection = { ...(state.collection || {}), ...payload };
     state.pendingCollection = { ...(state.pendingCollection || {}), subjectId: state.subjectId, ...payload, createdAt: Date.now() };
     setBusy("正在保存记录...");
     await bgmRequest(`/v0/users/-/collections/${state.subjectId}`, {
-      method: "POST",
+      method: hadCollection ? "PATCH" : "POST",
       auth: true,
       body: payload,
       expectNoContent: true,
@@ -2527,6 +2625,32 @@
     });
   }
 
+  function bgmWebRequest(path) {
+    const url = `${BGM_WEB_BASE}${path}`;
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url,
+        headers: {
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/local/biligumi-connector)`,
+        },
+        anonymous: false,
+        withCredentials: true,
+        timeout: 30000,
+        onload: (response) => {
+          if (response.status < 200 || response.status >= 400) {
+            reject(new Error(`Bangumi 网页请求返回 ${response.status}`));
+            return;
+          }
+          resolve(response.responseText || "");
+        },
+        onerror: () => reject(makeNetworkError("Bangumi 网页请求失败，可能是网络或 userscript 跨域权限问题")),
+        ontimeout: () => reject(makeNetworkError("Bangumi 网页请求超时")),
+      });
+    });
+  }
+
   function makeApiError(response) {
     const error = new Error(extractApiError(response));
     error.status = Number(response.status) || 0;
@@ -2537,6 +2661,32 @@
     const error = new Error(message);
     error.status = 0;
     return error;
+  }
+
+  function parseBangumiWebUsername(html) {
+    const match = String(html || "").match(/\bCHOBITS_USERNAME\s*=\s*'((?:\\'|[^'])*)'/);
+    return match ? decodeJsString(match[1]).trim() : "";
+  }
+
+  function parseSubjectRemoveHash(html, subjectId) {
+    const id = String(Number(subjectId));
+    const text = String(html || "");
+    const escapedId = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const callPattern = new RegExp(`eraseSubjectCollect\\(\\s*${escapedId}\\s*,\\s*'((?:\\\\'|[^'])+)'\\s*\\)`);
+    const callMatch = text.match(callPattern);
+    if (callMatch) return decodeJsString(callMatch[1]);
+    const hrefPattern = new RegExp(`/subject/${escapedId}/remove\\?gh=([^"'&\\s<>]+)`);
+    const hrefMatch = text.match(hrefPattern);
+    return hrefMatch ? decodeURIComponent(hrefMatch[1]) : "";
+  }
+
+  function decodeJsString(value) {
+    return String(value || "")
+      .replace(/\\u([0-9a-fA-F]{4})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\x([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+      .replace(/\\'/g, "'")
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, "\\");
   }
 
   function isRetryableApiError(error) {
@@ -3172,7 +3322,17 @@
   }
 
   function getCollectionType() {
-    return state.collection && Number(state.collection.type) ? Number(state.collection.type) : 3;
+    return hasCollection() ? Number(state.collection.type) : 3;
+  }
+
+  function hasCollection() {
+    return Boolean(state.collection && Number(state.collection.type));
+  }
+
+  function ensureCollectionForEpisodeSync() {
+    if (!hasCollection()) {
+      throw new Error("请先在收藏盒选择想看、看过、在看、搁置或抛弃，再同步章节进度。");
+    }
   }
 
   function getCollectionSentence() {
