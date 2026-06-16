@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.3.23
+// @version      0.4.0
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -22,13 +22,15 @@
   const BGM_WEB_BASE = "https://bgm.tv";
   const PANEL_ID = "biligumi-connector-panel";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.3.23";
+  const SCRIPT_VERSION = "0.4.0";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
     whitelist: "biligumi.whitelist",
+    whitelistLabels: "biligumi.whitelistLabels",
     panelCollapsed: "biligumi.panelCollapsed",
     syncHistory: "biligumi.syncHistory",
+    nonMainPreview: "biligumi.nonMainPreview",
   };
 
   const SUBJECT_TYPES = {
@@ -47,24 +49,30 @@
   };
 
   const EPISODE_PATTERNS = [
-    /第\s*([0-9]+(?:\.[0-9]+)?)\s*[话集]/i,
+    /第\s*([0-9]+(?:\.[0-9]+)?)(?:\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?)?\s*[话話集]/i,
     /S\d+\s*E\s*([0-9]+(?:\.[0-9]+)?)/i,
     /EP\.?\s*([0-9]+(?:\.[0-9]+)?)/i,
     /#\s*([0-9]+(?:\.[0-9]+)?)\b/i,
     /[\[【]\s*([0-9]+(?:\.[0-9]+)?)\s*[\]】]/,
     /『[^』]*』\s*([0-9]+(?:\.[0-9]+)?)/,
+    /(?:^|[\s#\[])([0-9]+(?:\.[0-9]+)?)(?:\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?)?\s*(?:话|話|集|]|$)/i,
+    /(?:^|[\s#])0*([0-9]{1,3})(?:\s*[\[【][^\]】]+[\]】])?\s*$/i,
     /(?:^|[\s#\[])([0-9]+(?:\.[0-9]+)?)\s*(?:话|集|]|$)/i,
   ];
 
   const COMMON_RESOLUTIONS = new Set([144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320]);
   const TITLE_PROPERTY_TAGS = [
     "4K", "1080P", "720P", "480P", "HDR", "SDR", "BD", "BDRIP", "WEB", "WEBRIP",
-    "简中", "繁中", "简体", "繁体", "中字", "中日", "字幕", "字幕组", "压制",
+    "简中", "繁中", "简体", "繁体", "中字", "中日", "中文字幕", "中文", "字幕", "字幕组", "汉化组", "漢化組", "压制",
     "超清", "高清", "标清", "新番", "完结", "全集",
   ];
-  const NON_MAIN_EPISODE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》])(?:PV|CM|OP|ED|NCOP|NCED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|先导|先導|特报|特報|特典|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._-])/i;
+  const NON_MAIN_EPISODE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》&＆])(?:(?:正式|主|第\s*\d+\s*(?:[弹彈]|话|話|集)|先导|先導|定档|定檔|特报|特報|预告|預告)\s*)?(?:PV|CM|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|特典|告知|情报|情報|回顾|回顧|映像|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/;
+  const NON_MAIN_KEYWORD_PATTERN = /(?:^|[^A-Za-z])(?:(?:PV|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED)\s*\d*(?:\.\d+)?|(?:第\s*\d+\s*(?:话|話|集)\s*)?(?:番宣|预告|預告|预告片|預告片|特报|特報|告知|情报|情報|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾)|无字幕OP|无字幕ED)/;
+  const WHITELIST_NEWS_NON_MAIN_PATTERN = /(?:TV\s*)?(?:动画化|動畫化|アニメ化|anime化)\s*(?:决定|決定|确定|確定|企划|企劃|制作决定|制作決定|发表|發表|公布)|(?:剧场|劇場)?上映\s*(?:决定|決定|确定|確定)/i;
 
   const pendingRequests = new Map();
+  const subjectBundleRequests = new Map();
+  const nonMainPreviewRequests = new Map();
   const REQUEST_DEDUP_TTL = 500;
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
@@ -77,6 +85,7 @@
     token: readValue(STORAGE.token, ""),
     bindings: readJsonValue(STORAGE.bindings, {}),
     whitelist: readListValue(STORAGE.whitelist, []),
+    whitelistLabels: readJsonValue(STORAGE.whitelistLabels, {}),
     subjectId: null,
     subject: null,
     collection: null,
@@ -91,6 +100,13 @@
     message: "",
     error: "",
     searchResults: [],
+    nonMainPreviewEnabled: readValue(STORAGE.nonMainPreview, "1") !== "0",
+    nonMainResults: [],
+    nonMainKeyword: "",
+    nonMainBusy: false,
+    nonMainError: "",
+    nonMainSearched: false,
+    nonMainSearchSeq: 0,
     syncHistory: readJsonValue(STORAGE.syncHistory, {}),
   };
 
@@ -291,13 +307,14 @@
     }
     .biligumi-result {
       display: grid;
-      grid-template-columns: 44px 1fr auto;
+      grid-template-columns: 44px minmax(0, 1fr) max-content;
       gap: 8px;
       align-items: center;
       padding: 6px;
       border: 1px solid var(--bgm-border);
       border-radius: 7px;
       background: var(--bgm-soft);
+      min-width: 0;
     }
     .biligumi-result img {
       width: 44px;
@@ -313,10 +330,100 @@
       text-overflow: ellipsis;
       white-space: nowrap;
     }
+    .biligumi-result-body {
+      min-width: 0;
+      overflow: hidden;
+    }
+    .biligumi-result .biligumi-button {
+      justify-self: end;
+      white-space: nowrap;
+    }
     .biligumi-result-sub {
       margin-top: 2px;
       color: var(--bgm-muted);
       font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .biligumi-lite-note {
+      margin: 0 0 8px;
+      color: var(--bgm-muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .biligumi-lite-results {
+      display: grid;
+      gap: 5px;
+    }
+    .biligumi-lite-result {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) max-content;
+      gap: 8px;
+      align-items: center;
+      padding: 6px 7px;
+      border: 1px solid var(--bgm-border);
+      border-radius: 6px;
+      background: var(--bgm-soft);
+      min-width: 0;
+    }
+    .biligumi-lite-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: #5a6d82;
+      font-weight: 600;
+      font-size: 13px;
+    }
+    .biligumi-lite-sub {
+      margin-top: 1px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--bgm-muted);
+      font-size: 11px;
+    }
+    .biligumi-lite-open {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 26px;
+      padding: 3px 9px;
+      border: 1px solid var(--bgm-pink);
+      border-radius: 6px;
+      background: var(--bgm-pink);
+      color: #fff;
+      text-decoration: none;
+      white-space: nowrap;
+      font-size: 12px;
+    }
+    .biligumi-lite-open:hover {
+      border-color: #e56a83;
+      background: #e56a83;
+      color: #fff;
+    }
+    .biligumi-lite-actions {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      justify-self: end;
+      white-space: nowrap;
+    }
+    .biligumi-lite-bind {
+      min-height: 26px;
+      padding: 3px 9px;
+      border: 1px solid var(--bgm-border);
+      border-radius: 6px;
+      background: #fff;
+      color: #5a6d82;
+      cursor: pointer;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .biligumi-lite-bind:hover {
+      border-color: var(--bgm-blue);
+      color: var(--bgm-blue);
     }
     .biligumi-notice {
       margin-top: 10px;
@@ -742,6 +849,20 @@
       max-height: 52px;
       overflow: auto;
     }
+    #${SETTINGS_ID} .biligumi-settings-check {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      color: #4f6072;
+      font-size: 13px;
+      line-height: 1.35;
+    }
+    #${SETTINGS_ID} .biligumi-settings-check input {
+      width: auto;
+      height: auto;
+      margin: 2px 0 0;
+      flex: 0 0 auto;
+    }
     #${SETTINGS_ID} .biligumi-settings-actions {
       display: flex;
       justify-content: flex-end;
@@ -902,6 +1023,7 @@
   init();
 
   function init() {
+    normalizeStoredWhitelist();
     refreshPageContext();
     state.subjectId = getCurrentBinding();
     injectWhenReady();
@@ -974,8 +1096,17 @@
     const seriesTitle = getSeriesTitle();
     state.pageKey = getPageKey();
     state.rawTitle = rawTitle;
-    state.pageTitle = cleanTitle(seriesTitle || rawTitle);
+    state.pageTitle = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : cleanTitle(seriesTitle || rawTitle);
     state.currentEpisodeNo = detectCurrentEpisodeNo(rawTitle);
+    const previewKeyword = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : "";
+    if (previewKeyword !== state.nonMainKeyword) {
+      state.nonMainKeyword = "";
+      state.nonMainResults = [];
+      state.nonMainError = "";
+      state.nonMainBusy = false;
+      state.nonMainSearched = false;
+      state.nonMainSearchSeq += 1;
+    }
   }
 
   function getCurrentBinding() {
@@ -984,6 +1115,16 @@
         migrateCurrentBindingKeys(state.bindings[key]);
         return state.bindings[key];
       }
+    }
+    const crossOwnerSubjectId = getCrossOwnerTitleBinding();
+    if (crossOwnerSubjectId) {
+      migrateCurrentBindingKeys(crossOwnerSubjectId);
+      return crossOwnerSubjectId;
+    }
+    const nonMainSubjectId = getNonMainTitleBinding();
+    if (nonMainSubjectId) {
+      migrateCurrentBindingKeys(nonMainSubjectId);
+      return nonMainSubjectId;
     }
     return null;
   }
@@ -1021,7 +1162,7 @@
     schedulePanelReposition();
     bindViewportLayoutEvents();
 
-    if (isWhitelistedPage() && state.subjectId) {
+    if (shouldRenderFullPanel() && state.subjectId) {
       loadSubjectBundle().catch(showError);
     }
   }
@@ -1178,9 +1319,20 @@
   function render() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
+    updateCurrentWhitelistLabel();
     syncSettingsDialog();
 
-    if (!isWhitelistedPage()) {
+    if (!shouldRenderFullPanel()) {
+      const nonMainKeyword = getNonMainPreviewKeyword();
+      if (nonMainKeyword) {
+        panel.className = "biligumi-panel";
+        panel.innerHTML = renderNonMainPreview(nonMainKeyword);
+        bindPanelEvents();
+        layoutPanelWithoutOwningBiliDom();
+        ensureNonMainPreviewSearch(nonMainKeyword);
+        return;
+      }
+
       panel.className = "biligumi-panel biligumi-collapsed";
       panel.innerHTML = `
         <div class="biligumi-head">
@@ -1233,6 +1385,12 @@
 
     bindPanelEvents();
     layoutPanelWithoutOwningBiliDom();
+    const inlineAutoKeyword = getInlineAutoPreviewKeyword();
+    if (inlineAutoKeyword) ensureNonMainPreviewSearch(inlineAutoKeyword);
+  }
+
+  function shouldRenderFullPanel() {
+    return isWhitelistedPage() || (isNonMainPreviewPage() && Boolean(state.subjectId));
   }
 
   function renderSearchOrSubject() {
@@ -1247,6 +1405,7 @@
               <button class="biligumi-search-button" data-action="search">搜索</button>
             </div>
           </div>
+          ${renderInlineAutoPreview()}
           ${state.searchResults.length ? `<div class="biligumi-row biligumi-search-results">${state.searchResults.map(renderSearchResult).join("")}</div>` : ""}
           ${state.subjectId ? `<div class="biligumi-row"><button class="biligumi-button" data-action="unbind">解绑当前页面</button></div>` : ""}
         </div>
@@ -1282,6 +1441,71 @@
     `;
   }
 
+  function renderNonMainPreview(keyword) {
+    const rows = state.nonMainResults.slice(0, 2).map((subject) => renderNonMainCandidate(subject)).join("");
+    const status = renderNonMainPreviewStatus(rows);
+    return `
+      <div class="biligumi-head">
+        <div class="biligumi-title" title="${escapeHtml(keyword)}">${escapeHtml(keyword)}</div>
+        <div class="biligumi-actions">
+          ${isWhitelistedPage() ? "" : '<button class="biligumi-icon-btn" data-action="add-whitelist" title="加入白名单">＋</button>'}
+          <button class="biligumi-icon-btn" data-action="settings" title="设置 Access Token / 白名单">⚙</button>
+        </div>
+      </div>
+      <div class="biligumi-lite-note">检测到 OP / ED / PV / 预告，仅显示前 2 个 Bangumi 候选。</div>
+      ${status}
+      <div class="biligumi-foot">
+        <span>轻量匹配 · v${SCRIPT_VERSION}</span>
+        <a href="${BGM_WEB_BASE}/" target="_blank" rel="noreferrer">Bangumi</a>
+      </div>
+    `;
+  }
+
+  function renderInlineAutoPreview() {
+    const keyword = getInlineAutoPreviewKeyword();
+    if (!keyword) return "";
+    const isNonMain = isNonMainPreviewPage();
+    const rows = state.nonMainResults.slice(0, 2).map((subject) => renderNonMainCandidate(subject, true)).join("");
+    const note = isNonMain
+      ? `检测到 OP / ED / PV / 预告，下面是按「${escapeHtml(keyword)}」匹配的跳转候选。`
+      : `下面是按「${escapeHtml(keyword)}」自动匹配的候选。`;
+    return `
+      <div class="biligumi-row">
+        <div class="biligumi-lite-note">${note}</div>
+        ${renderNonMainPreviewStatus(rows)}
+      </div>
+    `;
+  }
+
+  function renderNonMainPreviewStatus(rows) {
+    return state.nonMainBusy
+      ? '<div class="biligumi-lite-note">正在轻量匹配 Bangumi...</div>'
+      : state.nonMainError
+        ? `<div class="biligumi-lite-note">${escapeHtml(state.nonMainError)} <button class="biligumi-lite-bind" data-action="refresh-non-main">重试</button></div>`
+        : rows
+          ? `<div class="biligumi-lite-results">${rows}</div>`
+          : '<div class="biligumi-lite-note">暂时没有匹配候选。</div>';
+  }
+
+  function renderNonMainCandidate(subject, canBind = false) {
+    const name = displaySubjectName(subject);
+    const date = subject.date || "未知日期";
+    const eps = subject.eps ? `${subject.eps} 话` : "话数未知";
+    const bindButton = canBind ? `<button class="biligumi-lite-bind" data-action="bind" data-subject-id="${subject.id}">绑定</button>` : "";
+    return `
+      <div class="biligumi-lite-result">
+        <div>
+          <div class="biligumi-lite-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
+          <div class="biligumi-lite-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
+        </div>
+        <div class="biligumi-lite-actions">
+          <a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subject.id}" target="_blank" rel="noreferrer">打开</a>
+          ${bindButton}
+        </div>
+      </div>
+    `;
+  }
+
   function renderSettingsDialog() {
     const currentHints = formatWhitelistHintCandidates();
     return `
@@ -1295,8 +1519,15 @@
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
-            <textarea id="biligumi-whitelist-input" data-role="settings-whitelist" placeholder="每行一个 UP 主 UID/名称、BV、页面 key 或 URL 片段">${escapeHtml(state.whitelist.join("\n"))}</textarea>
+            <textarea id="biligumi-whitelist-input" data-role="settings-whitelist" placeholder="每行一个 UP 主 UID/名称、BV、页面 key 或 URL 片段">${escapeHtml(formatWhitelistForSettings())}</textarea>
             <div class="biligumi-settings-help compact">当前页面候选：${escapeHtml(currentHints || "无")}</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-non-main-preview" ${state.nonMainPreviewEnabled ? "checked" : ""}>
+              <span>OP / ED / PV / 预告页面无视白名单显示 2 个轻量 Bangumi 候选。</span>
+            </label>
+            <div class="biligumi-settings-help">如果清洗出的番名已经绑定过，会直接显示正常面板。</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
@@ -1314,6 +1545,15 @@
       .map((value) => value.length > 42 ? `${value.slice(0, 39)}...` : value)
       .filter((value, index, list) => list.indexOf(value) === index);
     return candidates.slice(0, 5).join(", ");
+  }
+
+  function formatWhitelistForSettings() {
+    return state.whitelist
+      .map((item) => {
+        const label = getWhitelistLabel(item);
+        return label ? `${item} # ${label}` : item;
+      })
+      .join("\n");
   }
 
   function renderCollectionEditorDialog() {
@@ -1384,7 +1624,7 @@
     return `
       <div class="biligumi-result">
         ${image ? `<img src="${escapeHtml(image)}" alt="">` : "<div></div>"}
-        <div>
+        <div class="biligumi-result-body">
           <div class="biligumi-result-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
           <div class="biligumi-result-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
         </div>
@@ -1580,6 +1820,7 @@
     if (action === "add-edit-tag") addEditorTag(target.dataset.tag || "");
     if (action === "add-whitelist") addCurrentPageToWhitelist();
     if (action === "refresh") loadSubjectBundle().catch(showError);
+    if (action === "refresh-non-main") retryNonMainPreviewSearch();
     if (action === "search") searchSubjects().catch(showError);
     if (action === "bind") bindSubject(Number(target.dataset.subjectId)).catch(showError);
     if (action === "unbind") unbindSubject();
@@ -1697,6 +1938,64 @@
     render();
   }
 
+  function ensureNonMainPreviewSearch(keyword) {
+    const searchKeyword = String(keyword || "").trim();
+    if (!searchKeyword) return;
+    if (state.nonMainKeyword === searchKeyword && (state.nonMainBusy || state.nonMainSearched || state.nonMainError)) return;
+    if (nonMainPreviewRequests.has(searchKeyword)) {
+      state.nonMainKeyword = searchKeyword;
+      state.nonMainBusy = true;
+      state.nonMainError = "";
+      render();
+      return;
+    }
+
+    const seq = ++state.nonMainSearchSeq;
+    state.nonMainKeyword = searchKeyword;
+    state.nonMainBusy = true;
+    state.nonMainError = "";
+    state.nonMainResults = [];
+    state.nonMainSearched = false;
+    const promise = loadNonMainPreviewCandidates(searchKeyword, seq)
+      .catch((error) => {
+        if (seq !== state.nonMainSearchSeq) return;
+        state.nonMainBusy = false;
+        state.nonMainSearched = true;
+        state.nonMainError = error && error.message ? error.message : "轻量匹配失败。";
+        render();
+      })
+      .finally(() => {
+        if (nonMainPreviewRequests.get(searchKeyword) === promise) nonMainPreviewRequests.delete(searchKeyword);
+      });
+    nonMainPreviewRequests.set(searchKeyword, promise);
+    render();
+  }
+
+  function retryNonMainPreviewSearch() {
+    const keyword = state.nonMainKeyword || getNonMainPreviewKeyword() || getInlineAutoPreviewKeyword();
+    state.nonMainKeyword = "";
+    state.nonMainResults = [];
+    state.nonMainError = "";
+    state.nonMainBusy = false;
+    state.nonMainSearched = false;
+    state.nonMainSearchSeq += 1;
+    ensureNonMainPreviewSearch(keyword);
+  }
+
+  async function loadNonMainPreviewCandidates(keyword, seq) {
+    const response = await bgmRequest("/v0/search/subjects?limit=2", {
+      method: "POST",
+      body: { keyword, sort: "match", filter: { type: [2] } },
+      dedup: true,
+    });
+    if (seq !== state.nonMainSearchSeq) return;
+    state.nonMainResults = (response.data || []).slice(0, 2);
+    state.nonMainBusy = false;
+    state.nonMainError = "";
+    state.nonMainSearched = true;
+    render();
+  }
+
   async function bindSubjectFromDirectInput(subjectId) {
     setBusy(`正在读取 Bangumi 条目 ${subjectId}...`);
     const subject = await bgmRequest(`/v0/subjects/${subjectId}`);
@@ -1757,14 +2056,25 @@
       render();
       return;
     }
+    const subjectId = Number(state.subjectId);
+    const requestKey = `${subjectId}|${state.token || ""}`;
+    if (subjectBundleRequests.has(requestKey)) return subjectBundleRequests.get(requestKey);
+    const promise = loadSubjectBundleFresh(subjectId, state.token || "")
+      .finally(() => subjectBundleRequests.delete(requestKey));
+    subjectBundleRequests.set(requestKey, promise);
+    return promise;
+  }
+
+  async function loadSubjectBundleFresh(subjectId, tokenSnapshot) {
     setBusy("正在读取 Bangumi 数据...");
-    const collectionPath = state.token ? await getCollectionReadPath() : "";
+    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId) : "";
     const [subject, episodes, collection, episodeCollections] = await Promise.all([
-      bgmRequest(`/v0/subjects/${state.subjectId}`),
-      bgmRequest(`/v0/episodes?subject_id=${state.subjectId}&type=0&limit=200`),
+      bgmRequest(`/v0/subjects/${subjectId}`),
+      bgmRequest(`/v0/episodes?subject_id=${subjectId}&type=0&limit=200`),
       collectionPath ? bgmRequest(collectionPath, { auth: true, allow404: true }) : Promise.resolve(null),
-      state.token ? bgmRequest(`/v0/users/-/collections/${state.subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
+      tokenSnapshot ? bgmRequest(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
     ]);
+    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
     state.episodes = episodes.data || [];
     state.collection = mergePendingCollection(collection);
@@ -1778,7 +2088,7 @@
   async function loadSubjectBundlePreservingLocal(localCollection) {
     const optimistic = localCollection ? { ...localCollection } : null;
     if (!state.subjectId) return;
-    const collectionPath = state.token ? await getCollectionReadPath() : "";
+    const collectionPath = state.token ? await getCollectionReadPath(state.subjectId) : "";
     const [subject, episodes, collection, episodeCollections] = await Promise.all([
       bgmRequest(`/v0/subjects/${state.subjectId}`),
       bgmRequest(`/v0/episodes?subject_id=${state.subjectId}&type=0&limit=200`),
@@ -1811,9 +2121,9 @@
     return { ...(collection || {}), ...pending };
   }
 
-  async function getCollectionReadPath() {
+  async function getCollectionReadPath(subjectId = state.subjectId) {
     const username = await getCurrentUsername();
-    return username ? `/v0/users/${encodeURIComponent(username)}/collections/${state.subjectId}` : "";
+    return username ? `/v0/users/${encodeURIComponent(username)}/collections/${subjectId}` : "";
   }
 
   async function getCurrentUsername() {
@@ -1990,21 +2300,36 @@
   function saveSettings() {
     const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
     const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
+    const nonMainPreviewInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-non-main-preview']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
+    const nextNonMainPreviewEnabled = Boolean(nonMainPreviewInput && nonMainPreviewInput.checked);
     if (nextToken !== state.token) {
       state.username = "";
       pendingRequests.clear();
     }
     state.token = nextToken;
-    state.whitelist = parseList(String(whitelistInput && whitelistInput.value || ""));
+    const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
+    state.whitelist = parsedWhitelist.items;
+    state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
+    if (nextNonMainPreviewEnabled !== state.nonMainPreviewEnabled) {
+      state.nonMainPreviewEnabled = nextNonMainPreviewEnabled;
+      state.nonMainKeyword = "";
+      state.nonMainResults = [];
+      state.nonMainError = "";
+      state.nonMainBusy = false;
+      state.nonMainSearched = false;
+      state.nonMainSearchSeq += 1;
+    }
     writeValue(STORAGE.token, state.token);
     writeListValue(STORAGE.whitelist, state.whitelist);
+    writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
+    writeValue(STORAGE.nonMainPreview, state.nonMainPreviewEnabled ? "1" : "0");
     state.settingsOpen = false;
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
     state.error = "";
     render();
-    if (isWhitelistedPage() && state.subjectId) loadSubjectBundle().catch(showError);
+    if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
   }
 
   function openCollectionEditor() {
@@ -2106,6 +2431,7 @@
       state.whitelist = parseList(state.whitelist.join("\n"));
       writeListValue(STORAGE.whitelist, state.whitelist);
     }
+    updateCurrentWhitelistLabel(candidate);
     state.message = `已加入白名单：${candidate}`;
     state.error = "";
     render();
@@ -2246,11 +2572,38 @@
   }
 
   function getTitleBindingKey() {
-    const title = cleanTitle(getSeriesTitle() || getPageTitle());
-    if (!title) return "";
+    const titleToken = getTitleBindingTitleToken();
+    if (!titleToken) return "";
     const owner = getPageOwnerInfo();
     const ownerKey = owner.mid || owner.uid || owner.name || "";
-    return `title:${normalizeBindingToken(ownerKey)}|${normalizeBindingToken(title)}`;
+    return `title:${normalizeBindingToken(ownerKey)}|${titleToken}`;
+  }
+
+  function getTitleBindingTitleToken() {
+    const title = cleanTitle(getSeriesTitle() || getPageTitle());
+    return title ? normalizeBindingToken(title) : "";
+  }
+
+  function getCrossOwnerTitleBinding() {
+    if (!isWhitelistedOwner()) return null;
+    const titleToken = getTitleBindingTitleToken();
+    return getUniqueTitleBindingByToken(titleToken, getTitleBindingKey());
+  }
+
+  function getNonMainTitleBinding() {
+    if (!isNonMainPreviewPage()) return null;
+    const titleToken = getNonMainPreviewTitleToken();
+    return getUniqueTitleBindingByToken(titleToken, getTitleBindingKey());
+  }
+
+  function getUniqueTitleBindingByToken(titleToken, excludeKey) {
+    if (!titleToken) return null;
+    const titleSuffix = `|${titleToken}`;
+    const subjectIds = Object.entries(state.bindings || {})
+      .filter(([key, subjectId]) => key.startsWith("title:") && key.endsWith(titleSuffix) && key !== excludeKey && subjectId)
+      .map(([, subjectId]) => String(subjectId));
+    const uniqueSubjectIds = subjectIds.filter((subjectId, index, list) => list.indexOf(subjectId) === index);
+    return uniqueSubjectIds.length === 1 ? uniqueSubjectIds[0] : null;
   }
 
   function getPathToken(prefix) {
@@ -2283,6 +2636,19 @@
     });
   }
 
+  function isWhitelistedOwner() {
+    if (!state.whitelist.length) return false;
+    const owner = getPageOwnerInfo();
+    const candidates = [owner.mid, owner.uid, owner.name, owner.username]
+      .map(normalizeWhitelistToken)
+      .filter(Boolean);
+    if (!candidates.length) return false;
+    return state.whitelist.some((entry) => {
+      const normalized = normalizeWhitelistToken(entry);
+      return normalized && candidates.some((candidate) => candidate === normalized || candidate.includes(normalized));
+    });
+  }
+
   function getWhitelistCandidates() {
     const owner = getPageOwnerInfo();
     return [
@@ -2290,8 +2656,8 @@
       location.pathname,
       location.href,
       owner.mid,
-      owner.name,
-      owner.username,
+      sanitizeWhitelistToken(owner.name),
+      sanitizeWhitelistToken(owner.username),
       owner.uid,
       getBvIdFromUrl(),
     ]
@@ -2302,25 +2668,189 @@
 
   function getPreferredWhitelistCandidate() {
     const owner = getPageOwnerInfo();
-    return String(owner.mid || owner.uid || owner.name || getBvIdFromUrl() || state.pageKey || "").trim();
+    return String(owner.mid || owner.uid || sanitizeWhitelistToken(owner.name) || "").trim();
   }
 
   function getWhitelistHint() {
     const preferred = getPreferredWhitelistCandidate();
-    return preferred ? `当前页面标识：${preferred}。点 + 加入白名单后展开。` : "点齿轮设置白名单后展开。";
+    const label = getDisplayNameForWhitelistCandidate(preferred);
+    return preferred ? `当前页面标识：${label}。点 + 加入白名单后展开。` : "点齿轮设置白名单后展开。";
+  }
+
+  function getDisplayNameForWhitelistCandidate(candidate) {
+    const token = String(candidate || "").trim();
+    if (!token) return "";
+    const owner = getPageOwnerInfo();
+    const name = cleanOwnerName(owner.name || owner.username || getWhitelistLabel(token));
+    return name && name !== token ? `${name}（${token}）` : token;
+  }
+
+  function updateCurrentWhitelistLabel(preferredToken = "") {
+    const owner = getPageOwnerInfo();
+    const label = cleanOwnerName(owner.name || owner.username || "");
+    if (!label) return;
+    const ownerTokens = [owner.mid, owner.uid, preferredToken]
+      .map((value) => String(value || "").trim())
+      .filter(Boolean);
+    if (!ownerTokens.length) return;
+    let changed = false;
+    const nextLabels = { ...state.whitelistLabels };
+    for (const entry of state.whitelist) {
+      const entryToken = normalizeWhitelistToken(stripWhitelistComment(entry));
+      if (!entryToken) continue;
+      const matched = ownerTokens.some((token) => normalizeWhitelistToken(token) === entryToken);
+      if (matched && nextLabels[entry] !== label) {
+        nextLabels[entry] = label;
+        changed = true;
+      }
+    }
+    if (changed) {
+      state.whitelistLabels = pruneWhitelistLabels(nextLabels, state.whitelist);
+      writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
+    }
+  }
+
+  function getWhitelistLabel(item) {
+    const direct = state.whitelistLabels[item];
+    if (direct) return direct;
+    const normalized = normalizeWhitelistToken(item);
+    const matchedKey = Object.keys(state.whitelistLabels || {}).find((key) => normalizeWhitelistToken(key) === normalized);
+    return matchedKey ? state.whitelistLabels[matchedKey] : "";
+  }
+
+  function pruneWhitelistLabels(labels, whitelist) {
+    const valid = new Set(whitelist.map((item) => normalizeWhitelistToken(item)).filter(Boolean));
+    return Object.fromEntries(Object.entries(labels || {})
+      .filter(([key, value]) => valid.has(normalizeWhitelistToken(key)) && String(value || "").trim())
+      .map(([key, value]) => [stripWhitelistComment(key), cleanOwnerName(value)]));
   }
 
   function getPageOwnerInfo() {
     const initial = window.__INITIAL_STATE__ || {};
     const videoData = initial.videoData || {};
-    const owner = videoData.owner || initial.owner || {};
-    const domName = document.querySelector(".up-name, .upname, .up-detail-top a, .up-detail a")?.textContent;
+    const owner = getInitialOwnerInfo(initial, videoData);
+    const domOwner = getPrimaryDomOwnerInfo();
+    const mid = owner.mid || owner.uid || videoData.mid || domOwner.mid || "";
+    const name = cleanOwnerName(owner.name || domOwner.name || findDomOwnerNameByMid(mid));
     return {
-      mid: owner.mid || owner.uid || videoData.mid || "",
-      uid: owner.uid || "",
-      name: owner.name || domName || "",
+      mid,
+      uid: owner.uid || domOwner.uid || "",
+      name,
       username: owner.username || "",
     };
+  }
+
+  function getInitialOwnerInfo(initial, videoData) {
+    const candidates = [
+      videoData.owner,
+      initial.owner,
+      initial.aidData && initial.aidData.owner,
+      initial.videoInfo && initial.videoInfo.owner,
+      initial.arc && initial.arc.owner,
+      initial.view && initial.view.owner,
+    ];
+    return candidates.find((owner) => owner && (owner.mid || owner.uid || owner.name || owner.username)) || {};
+  }
+
+  function getPrimaryDomOwnerInfo() {
+    const teamOwner = findDomOwnerByRole();
+    if (teamOwner.mid || teamOwner.name) return teamOwner;
+    const directAnchor = document.querySelector(
+      ".up-name[href*='space.bilibili.com'], .upname[href*='space.bilibili.com'], .up-detail-top a[href*='space.bilibili.com'], .up-detail a[href*='space.bilibili.com'], .up-info-container a[href*='space.bilibili.com'], .up-panel-container a[href*='space.bilibili.com']"
+    );
+    if (directAnchor && !isNonOwnerSpaceAnchor(directAnchor)) return ownerInfoFromAnchor(directAnchor);
+    const domName = document.querySelector(".up-name, .upname, .up-detail-top a, .up-detail a")?.textContent;
+    return { mid: "", uid: "", name: cleanOwnerName(domName), username: "" };
+  }
+
+  function findDomOwnerByRole() {
+    const roots = Array.from(document.querySelectorAll(
+      ".membersinfo-container, .membersinfo-upcard-wrap, .membersinfo-upcard, .membersinfo-normalcard, .membersinfo-card, .up-card, .up-panel-container, .up-info-container, .up-info--left, .up-detail, .up-detail-top"
+    ));
+    const anchors = uniqueElements(roots.flatMap((root) => Array.from(root.querySelectorAll("a[href*='space.bilibili.com']"))));
+    for (const anchor of anchors) {
+      if (isNonOwnerSpaceAnchor(anchor)) continue;
+      const card = anchor.closest(".membersinfo-upcard-wrap, .membersinfo-upcard, .membersinfo-normalcard, .membersinfo-card, .up-card")
+        || findOwnerRoleContainer(anchor);
+      const text = String(card && card.textContent || anchor.textContent || "");
+      if (/UP主/i.test(text)) return ownerInfoFromAnchor(anchor, card);
+    }
+    return { mid: "", uid: "", name: "", username: "" };
+  }
+
+  function uniqueElements(elements) {
+    return elements.filter((element, index, list) => element && list.indexOf(element) === index);
+  }
+
+  function isNonOwnerSpaceAnchor(anchor) {
+    return Boolean(anchor && anchor.closest(
+      ".video-desc-container, .desc-info, .basic-desc-info, .video-desc, .reply, .comment, .bili-comment, .activity-m-v1, .tag-panel, .video-tag-container"
+    ));
+  }
+
+  function findOwnerRoleContainer(anchor) {
+    let node = anchor;
+    for (let depth = 0; node && depth < 6; depth += 1) {
+      const text = String(node.textContent || "");
+      if (/UP主/i.test(text)) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function ownerInfoFromAnchor(anchor, card) {
+    const href = anchor && anchor.getAttribute("href") || "";
+    const mid = getSpaceMidFromHref(href);
+    const name = getOwnerNameNearAnchor(anchor, card);
+    return { mid, uid: mid, name, username: "" };
+  }
+
+  function findDomOwnerNameByMid(mid) {
+    const ownerMid = String(mid || "").trim();
+    if (!ownerMid) return "";
+    const anchors = Array.from(document.querySelectorAll(`a[href*='space.bilibili.com/${ownerMid}']`));
+    for (const anchor of anchors) {
+      if (isNonOwnerSpaceAnchor(anchor)) continue;
+      const name = getOwnerNameNearAnchor(anchor, anchor.closest(".membersinfo-upcard-wrap, .membersinfo-upcard, .membersinfo-normalcard, .membersinfo-card, .up-card, .up-panel-container, .up-info-container, .up-info--left, .up-detail, .up-detail-top"));
+      if (name) return name;
+    }
+    return "";
+  }
+
+  function getOwnerNameNearAnchor(anchor, card) {
+    const direct = cleanOwnerName(anchor && (anchor.getAttribute("title") || anchor.getAttribute("aria-label") || anchor.textContent) || "");
+    if (direct) return direct;
+    const imageName = cleanOwnerName(anchor && anchor.querySelector("img") && (anchor.querySelector("img").getAttribute("alt") || anchor.querySelector("img").getAttribute("title")) || "");
+    if (imageName) return imageName;
+    return extractOwnerNameFromText(card && card.textContent || "");
+  }
+
+  function extractOwnerNameFromText(value) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text) return "";
+    const beforeRole = text.split(/UP主|发消息|已关注|关注|充电|谢谢大家|个人认证|bilibili个人认证|bilibili机构认证|参演|策划/)[0];
+    return cleanOwnerName(beforeRole);
+  }
+
+  function getSpaceMidFromHref(href) {
+    const match = String(href || "").match(/space\.bilibili\.com\/(\d+)/i) || String(href || "").match(/\/space\/(\d+)/i);
+    return match ? match[1] : "";
+  }
+
+  function cleanOwnerName(value) {
+    const text = String(value || "")
+      .replace(/UP主/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return isSuspiciousOwnerName(text) ? "" : text;
+  }
+
+  function isSuspiciousOwnerName(value) {
+    const text = String(value || "").trim();
+    return !text
+      || text.length > 40
+      || /[{};]/.test(text)
+      || /\b(?:window|document|function|var|let|const|performance|playerInfo|embedPlayer)\b/i.test(text);
   }
 
   function getBvIdFromUrl() {
@@ -2374,6 +2904,23 @@
     const raw = normalizeTitleText(title);
     if (!raw) return "";
 
+    const animeWorkTitle = extractAnimeWorkTitle(raw);
+    if (animeWorkTitle) return cleanupAnimeTitle(animeWorkTitle);
+
+    if (isNonMainEpisodeTitle(raw) || isWhitelistNewsNonMainTitle(raw)) {
+      const edgeStrippedTitle = stripNonMainEdgeBracketTags(raw);
+      const markerStrippedTitle = stripNonMainMarkerTail(edgeStrippedTitle);
+      const promoStrippedTitle = stripNonMainPromoSuffix(markerStrippedTitle);
+      const strippedTitle = cleanupAnimeTitle(extractQuotedWorkTitle(promoStrippedTitle) || getNonMainTitleSource(promoStrippedTitle));
+      return strippedTitle;
+    }
+
+    const titleBeforeEpisode = extractTitleBeforeEpisodeMarker(raw);
+    if (titleBeforeEpisode) return cleanupAnimeTitle(titleBeforeEpisode);
+
+    const titleAfterJapaneseQuote = extractTitleAfterJapaneseQuoteBeforeEpisode(raw);
+    if (titleAfterJapaneseQuote) return cleanupAnimeTitle(titleAfterJapaneseQuote);
+
     const bookTitle = raw.match(/《([^》]+)》/);
     if (bookTitle && !isTitlePropertyTag(bookTitle[1])) return cleanupAnimeTitle(bookTitle[1]);
 
@@ -2385,9 +2932,9 @@
       const content = fullBracket[1].trim();
       const afterBracket = raw.replace(/【[^】]+】/, " ").trim();
       const afterTitle = cleanupAnimeTitle(afterBracket);
-      if (isNonMainEpisodeTitle(afterBracket) && !isTitlePropertyTag(content) && !isSeasonMarker(content)) return cleanupAnimeTitle(content);
-      if (afterTitle && (isTitlePropertyTag(content) || isSeasonMarker(content) || detectEpisodeNo(afterBracket))) return afterTitle;
-      if (!isTitlePropertyTag(content) && !isSeasonMarker(content)) return cleanupAnimeTitle(content);
+      if (isNonMainEpisodeTitle(afterBracket) && !isTitleMetaTag(content)) return cleanupAnimeTitle(content);
+      if (afterTitle && (isTitleMetaTag(content) || detectEpisodeNo(afterBracket))) return afterTitle;
+      if (!isTitleMetaTag(content)) return cleanupAnimeTitle(content);
       if (afterTitle) return afterTitle;
     }
 
@@ -2396,19 +2943,89 @@
       const content = squareBracket[1].trim();
       const afterBracket = raw.replace(/\[[^\]]+\]/, " ").trim();
       const afterTitle = cleanupAnimeTitle(afterBracket);
-      if (isNonMainEpisodeTitle(afterBracket) && !isTitlePropertyTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
-      if (afterTitle && (isTitlePropertyTag(content) || detectEpisodeNo(afterBracket))) return afterTitle;
-      if (!isTitlePropertyTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
+      if (isNonMainEpisodeTitle(afterBracket) && !isTitleMetaTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
+      if (afterTitle && (isTitleMetaTag(content) || detectEpisodeNo(afterBracket))) return afterTitle;
+      if (!isTitleMetaTag(content) && !/^[0-9]+(?:\.[0-9]+)?$/.test(content)) return cleanupAnimeTitle(content);
       if (afterTitle) return afterTitle;
     }
 
     return cleanupAnimeTitle(raw);
   }
 
+  function extractAnimeWorkTitle(title) {
+    const text = String(title || "");
+    const patterns = [
+      /(?:TV\s*)?(?:动画|動畫|アニメ|anime|ANIME|电视动画|電視動畫)[^「」『』《》【】"'“”]{0,18}[「『《【"'“]([^」』》】"'”]+)[」』》】"'”]/i,
+      /[「『《【"'“]([^」』》】"'”]+)[」』》】"'”]\s*(?:TV\s*)?(?:动画|動畫|アニメ|anime|ANIME|电视动画|電視動畫)/i,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1] && !isTitleMetaTag(match[1])) return match[1].trim();
+    }
+    return "";
+  }
+
+  function extractQuotedWorkTitle(title) {
+    const text = String(title || "");
+    const patterns = [
+      /《([^》]+)》/,
+      /『([^』]+)』/,
+      /「([^」]+)」/,
+      /“([^”]+)”/,
+      /"([^"]+)"/,
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1] && !isTitleMetaTag(match[1])) return match[1].trim();
+    }
+    return "";
+  }
+
+  function getNonMainTitleSource(title) {
+    const withoutLeadingMeta = String(title || "").replace(/^[【\[]([^】\]]+)[】\]]\s*/i, (match, content) => (isTitleMetaTag(content) ? " " : match)).trim();
+    const parts = withoutLeadingMeta.split(/\s*[\/／]\s*/).map((part) => part.trim()).filter(Boolean);
+    return parts.length > 1 ? parts[parts.length - 1] : withoutLeadingMeta;
+  }
+
+  function extractTitleBeforeEpisodeMarker(title) {
+    const text = String(title || "");
+    const match = text.match(/^(?:\s*[【\[][^\]】]+[\]】])?\s*(.+?)\s+第\s*\d+(?:\.\d+)?(?:\s*[-~～至到]\s*\d+(?:\.\d+)?)?\s*[话話集](?:\s|$|[【\[])/i);
+    return match && match[1] ? match[1].trim() : "";
+  }
+
+  function extractTitleAfterJapaneseQuoteBeforeEpisode(title) {
+    const text = String(title || "");
+    const match = text.match(/^[\s【\[][^\]】]+[\]】]\s*[「『][^」』]+[」』]\s*(.+?)\s+(?:S\d+\s*)?0*\d{1,3}(?:\s*[\[【]|$)/i)
+      || text.match(/^[「『][^」』]+[」』]\s*(.+?)\s+(?:S\d+\s*)?0*\d{1,3}(?:\s*[\[【]|$)/i);
+    return match && match[1] ? match[1].trim() : "";
+  }
+
+  function stripNonMainEdgeBracketTags(title) {
+    return String(title || "")
+      .replace(/^(?:\s*[【\[][^\]】]+[\]】])+\s*/i, " ")
+      .replace(/\s*(?:[【\[][^\]】]+[\]】]\s*)+$/i, " ")
+      .trim();
+  }
+
+  function stripNonMainMarkerTail(title) {
+    return String(title || "")
+      .replace(/\s*(?:(?:TV\s*)?(?:动画化|動畫化|アニメ化|anime化)\s*(?:决定|決定|确定|確定|企划|企劃|制作决定|制作決定|发表|發表|公布)|(?:剧场|劇場)?上映\s*(?:决定|決定|确定|確定)).*$/i, "")
+      .replace(/(^|[^A-Za-z])(?:(?:正式|主|第\s*\d+\s*(?:[弹彈]|话|話|集)|先导|先導|定档|定檔|超|特报|特報|预告|預告)\s*)?(?:PV|CM|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|告知|情报|情報|回顾|回顧|映像|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾|无字幕OP|无字幕ED)\s*\d*(?:\.\d+)?.*$/, "$1")
+      .trim();
+  }
+
+  function stripNonMainPromoSuffix(title) {
+    return String(title || "")
+      .replace(/\s*(?:新|主|先导|先導)?\s*(?:视觉图|視覺圖|主视觉图|主視覺圖|视觉海报|視覺海報|海报|海報)\s*(?:公开|公開|解禁|释出|釋出)?\s*(?:[&＆+＋]\s*)?$/i, "")
+      .replace(/\s*(?:公开|公開|解禁|释出|釋出)\s*(?:[&＆+＋]\s*)?$/i, "")
+      .trim();
+  }
+
   function normalizeTitleText(title) {
     return String(title || "")
       .replace(/_哔哩哔哩_bilibili.*$/i, "")
       .replace(/\s*-\s*哔哩哔哩.*$/i, "")
+      .replace(/[~～〜－–—―|｜·・•、，,;；:：]+/g, " ")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -2417,16 +3034,29 @@
     return String(title || "")
       .replace(/^第\s*\d+(?:\.\d+)?\s*[话集][：:\s]*/, "")
       .replace(/\s*第\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话集].*$/i, "")
+      .replace(/\s*全\s*\d+(?:\.\d+)?\s*[话話集].*$/i, "")
       .replace(/\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*话.*$/i, "")
-      .replace(/\s*S\d+\s*E\s*\d+(?:\.\d+)?\s*$/i, "")
+      .replace(/\s*S0*(\d+)\s*E\s*\d+(?:\.\d+)?\s*$/i, (_, season) => ` S${Number(season)}`)
       .replace(/\s*(?:EP\.?|#)\s*\d+(?:\.\d+)?\s*$/i, "")
       .replace(/\s*[\[【]\s*\d+(?:\.\d+)?\s*[\]】]\s*$/i, "")
-      .replace(/[《》『』]/g, " ")
-      .replace(/【(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|字幕组?|压制|超清|高清|标清|新番|完结|全集)[^】]*】/gi, " ")
-      .replace(/\[(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|字幕组?|压制|超清|高清|标清|新番|完结|全集)[^\]]*\]/gi, " ")
-      .replace(/\s*\/\s*/g, " ")
-      .replace(/[\s\-~]+/g, " ")
+      .replace(/^[【\[]([^】\]]+)[】\]]\s*/i, (match, content) => (isTitleMetaTag(content) ? " " : match))
+      .replace(/【[^】]*(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|中文字幕|中文|字幕组?|汉化组|漢化組|压制|超清|高清|标清|新番|完结|全集)[^】]*】/gi, " ")
+      .replace(/\[[^\]]*(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|中文字幕|中文|字幕组?|汉化组|漢化組|压制|超清|高清|标清|新番|完结|全集)[^\]]*\]/gi, " ")
+      .replace(/\s+0*([0-9]{1,3})\s*$/i, (match, value) => (isCommonResolutionNumber(value) ? match : " "))
+      .replace(/\s+(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*(?:\s*[&＆/+]\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*)+(?:\s*[【\[].*?[】\]])?\s*$/, "")
+      .replace(/[《》『』【】\[\]]/g, " ")
+      .replace(/\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*(?:\s*[&＆/+]\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*)+\s*$/, "")
+      .replace(/\s*(?:(?:定档|定檔|放送|播出|开播|開播)\s*)?(?:告知|情报|情報)(?:\s*[+＋&＆/]\s*(?:(?:第\s*)?[一二三四五六七八九十\d]+\s*季\s*)?(?:回顾|回顧|回顾映像|回顧映像|映像|总集篇|總集篇))*\s*$/i, "")
+      .replace(/\s*(?:(?:第\s*)?[一二三四五六七八九十\d]+\s*季\s*)?(?:回顾|回顧|回顾映像|回顧映像|映像|总集篇|總集篇)\s*$/i, "")
+      .replace(/\s*(?:(?:正式|主|第\s*\d+\s*[弹彈]|先导|先導)\s*)?(?:PV|CM|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|先导|先導|特报|特報|特典|片头|片尾|无字幕OP|无字幕ED)(?:\s*\d+(?:\.\d+)?)?\s*$/, "")
+      .replace(/[\s\-~～〜－–—―|｜·・•、，,;；:：／/]+/g, " ")
       .trim();
+  }
+
+  function isTitleMetaTag(value) {
+    const text = String(value || "").trim();
+    if (!text) return false;
+    return isTitlePropertyTag(text) || isSeasonMarker(text) || isReleaseInfoTag(text);
   }
 
   function isTitlePropertyTag(value) {
@@ -2439,8 +3069,50 @@
     return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(String(value || "").trim());
   }
 
+  function isCommonResolutionNumber(value) {
+    const number = Number(String(value || "").trim());
+    return Number.isInteger(number) && COMMON_RESOLUTIONS.has(number);
+  }
+
+  function isReleaseInfoTag(value) {
+    const dateTag = /(?:\d{4}\s*年\s*)?\d{1,2}\s*(?:月|[/.])\s*\d{0,2}\s*(?:日|号|號)?/.source;
+    const releaseTag = /(?:定档|定檔|放送|播出|开播|開播)\s*(?:\d{1,2}\s*月|\d{1,2}\s*(?:月|[/.])\s*\d{0,2}\s*(?:日|号|號)?)/.source;
+    const broadcastTag = /(?:首日|初回|首播)?\s*(?:[一二两兩三四五六七八九十\d]+\s*)?(?:集|话|話)?\s*(?:连播|連播|连续放送|連續放送|连续播出|連續播出)/.source;
+    const infoTag = `(?:${releaseTag}|${dateTag}|${broadcastTag}|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|附歌词|附歌詞|歌词|歌詞|最终章|最終章|完结篇|完結篇|剧场版|劇場版|特别篇|特別篇)`;
+    return new RegExp(`^${infoTag}(?:\\s*[/／|｜-]\\s*${infoTag})*$`, "i").test(String(value || "").trim());
+  }
+
   function isNonMainEpisodeTitle(value) {
-    return NON_MAIN_EPISODE_PATTERN.test(String(value || ""));
+    const title = normalizeTitleText(value);
+    return NON_MAIN_KEYWORD_PATTERN.test(title) || NON_MAIN_EPISODE_PATTERN.test(title);
+  }
+
+  function isWhitelistNewsNonMainTitle(value) {
+    return WHITELIST_NEWS_NON_MAIN_PATTERN.test(normalizeTitleText(value));
+  }
+
+  function shouldUseRawTitleForPreview(rawTitle = state.rawTitle || getPageTitle()) {
+    return state.nonMainPreviewEnabled
+      && (isNonMainEpisodeTitle(rawTitle) || (isWhitelistedPage() && isWhitelistNewsNonMainTitle(rawTitle)));
+  }
+
+  function isNonMainPreviewPage() {
+    return shouldUseRawTitleForPreview();
+  }
+
+  function getNonMainPreviewKeyword() {
+    if (!isNonMainPreviewPage()) return "";
+    return cleanTitle(state.rawTitle || getPageTitle());
+  }
+
+  function getInlineAutoPreviewKeyword() {
+    if (!isWhitelistedPage() || state.subjectId || state.subject) return "";
+    return suggestSearchKeyword();
+  }
+
+  function getNonMainPreviewTitleToken() {
+    const keyword = getNonMainPreviewKeyword();
+    return keyword ? normalizeBindingToken(keyword) : "";
   }
 
   function suggestSearchKeyword() {
@@ -2453,12 +3125,19 @@
     for (const pattern of EPISODE_PATTERNS) {
       const match = title.match(pattern);
       if (!match) continue;
+      if (isTotalEpisodeCountMatch(title, match)) continue;
       const value = Number(match[1]);
       if (!Number.isFinite(value) || value <= 0) continue;
-      if (Number.isInteger(value) && COMMON_RESOLUTIONS.has(value)) continue;
+      if (isCommonResolutionNumber(value)) continue;
       return value;
     }
     return null;
+  }
+
+  function isTotalEpisodeCountMatch(title, match) {
+    const index = typeof match.index === "number" ? match.index : -1;
+    if (index < 0) return false;
+    return /全\s*$/.test(String(title || "").slice(0, index));
   }
 
   function detectCurrentEpisodeNo(rawTitle) {
@@ -2651,9 +3330,61 @@
   function parseList(value) {
     return String(value || "")
       .split(/[\n,，;；]+/)
-      .map((item) => item.trim())
+      .map(stripWhitelistComment)
+      .map(sanitizeWhitelistToken)
       .filter(Boolean)
       .filter((item, index, list) => list.indexOf(item) === index);
+  }
+
+  function parseWhitelistInput(value) {
+    const labels = {};
+    const items = String(value || "")
+      .split(/[\n,，;；]+/)
+      .map((rawItem) => {
+        const raw = String(rawItem || "").trim();
+        const item = sanitizeWhitelistToken(stripWhitelistComment(raw));
+        const label = getWhitelistComment(raw);
+        if (item && label) labels[item] = label;
+        return item;
+      })
+      .filter(Boolean)
+      .filter((item, index, list) => list.indexOf(item) === index);
+    return { items, labels };
+  }
+
+  function stripWhitelistComment(value) {
+    return String(value || "").replace(/\s*#.*$/, "").trim();
+  }
+
+  function sanitizeWhitelistToken(value) {
+    const token = String(value || "").trim();
+    if (!token || isSuspiciousWhitelistToken(token)) return "";
+    return token;
+  }
+
+  function isSuspiciousWhitelistToken(value) {
+    const token = String(value || "").trim();
+    return token.length > 120
+      || /[{};]/.test(token)
+      || /\b(?:window|document|function|var|let|const|performance|playerInfo|embedPlayer)\b/i.test(token);
+  }
+
+  function normalizeStoredWhitelist() {
+    const rawWhitelist = readValue(STORAGE.whitelist, "");
+    const parsedRaw = tryParseJson(rawWhitelist);
+    const rawWhitelistText = Array.isArray(parsedRaw) ? parsedRaw.join("\n") : rawWhitelist;
+    const migrated = parseWhitelistInput(rawWhitelistText);
+    const cleanedWhitelist = parseList([...state.whitelist, ...migrated.items].join("\n"));
+    const changedWhitelist = cleanedWhitelist.join("\n") !== state.whitelist.join("\n");
+    state.whitelist = cleanedWhitelist;
+    state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...migrated.labels }, state.whitelist);
+    if (changedWhitelist || Object.keys(migrated.labels).length) writeListValue(STORAGE.whitelist, state.whitelist);
+    writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
+  }
+
+  function getWhitelistComment(value) {
+    const match = String(value || "").match(/#\s*(.+)$/);
+    return match ? cleanOwnerName(match[1]) : "";
   }
 
   function parseTags(value) {
