@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.4.2
+// @version      0.4.5
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -21,8 +21,10 @@
   const API_BASE = "https://api.bgm.tv";
   const BGM_WEB_BASE = "https://bgm.tv";
   const PANEL_ID = "biligumi-connector-panel";
+  const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
+  const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.4.2";
+  const SCRIPT_VERSION = "0.4.5";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -31,6 +33,10 @@
     panelCollapsed: "biligumi.panelCollapsed",
     syncHistory: "biligumi.syncHistory",
     nonMainPreview: "biligumi.nonMainPreview",
+    officialBangumiLayout: "biligumi.officialBangumiLayout",
+    autoWatchThresholds: "biligumi.autoWatchThresholds",
+    subjectInfoPanel: "biligumi.subjectInfoPanel",
+    characterStrip: "biligumi.characterStrip",
   };
 
   const SUBJECT_TYPES = {
@@ -73,9 +79,13 @@
   const pendingRequests = new Map();
   const subjectBundleRequests = new Map();
   const nonMainPreviewRequests = new Map();
+  const subjectInfoLinkRequests = new Map();
+  const subjectInfoLinkCache = new Map();
+  const COLLECTION_COMMENT_MAX_LENGTH = 380;
   const REQUEST_DEDUP_TTL = 500;
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
+  const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
 
   const state = {
     pageKey: "",
@@ -88,6 +98,15 @@
     whitelistLabels: readJsonValue(STORAGE.whitelistLabels, {}),
     subjectId: null,
     subject: null,
+    subjectInfoLinks: {},
+    characters: [],
+    characterError: "",
+    previewSubject: null,
+    previewCharacters: [],
+    previewCharacterError: "",
+    previewCharacterKey: "",
+    previewCharacterBusy: false,
+    previewCharacterFailedKey: "",
     collection: null,
     episodes: [],
     episodeCollections: [],
@@ -101,6 +120,10 @@
     error: "",
     searchResults: [],
     nonMainPreviewEnabled: readValue(STORAGE.nonMainPreview, "1") !== "0",
+    officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
+    autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
+    subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
+    characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     nonMainResults: [],
     nonMainKeyword: "",
     nonMainBusy: false,
@@ -108,10 +131,18 @@
     nonMainSearched: false,
     nonMainSearchSeq: 0,
     syncHistory: readJsonValue(STORAGE.syncHistory, {}),
+    autoEpisodeSyncing: false,
+    autoEpisodeSyncLastKey: "",
+    autoWatchLastVideoKey: "",
+    autoWatchLastVideoTime: 0,
+    autoWatchSeekStartTime: null,
+    autoWatchBlockedKey: "",
   };
 
   GM_addStyle(`
-    #${PANEL_ID} {
+    #${PANEL_ID},
+    #${SUBJECT_INFO_ID},
+    #${CHARACTER_STRIP_ID} {
       --bgm-pink: #f07f95;
       --bgm-blue: #2f8cff;
       --bgm-ink: #1f2329;
@@ -131,13 +162,317 @@
       background: var(--bgm-bg);
       color: var(--bgm-ink);
       font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    #${PANEL_ID} {
       box-shadow: 0 4px 18px rgba(23, 27, 38, 0.08);
     }
     #${PANEL_ID} * { box-sizing: border-box; }
+    #${SUBJECT_INFO_ID} * { box-sizing: border-box; }
+    #${CHARACTER_STRIP_ID} * { box-sizing: border-box; }
     #${PANEL_ID} button,
     #${PANEL_ID} input,
     #${PANEL_ID} select {
       font: inherit;
+    }
+    #${SUBJECT_INFO_ID} {
+      margin: 14px 0 18px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--bgm-ink);
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-overview {
+      display: grid;
+      grid-template-columns: minmax(148px, 190px) minmax(0, 1fr);
+      gap: 18px;
+      align-items: start;
+      padding: 14px 0 18px;
+      border-top: 1px solid #edf0f5;
+      border-bottom: 1px solid #edf0f5;
+    }
+    .left-container.biligumi-subject-side-layout {
+      display: grid !important;
+      grid-template-columns: minmax(150px, 188px) minmax(0, 1fr);
+      column-gap: 16px;
+      align-items: start;
+      grid-auto-flow: row;
+    }
+    .left-container.biligumi-subject-side-layout > .video-info-container,
+    .left-container.biligumi-subject-side-layout > .video-info,
+    .left-container.biligumi-subject-side-layout > #viewbox_report {
+      grid-column: 2;
+      grid-row: 1;
+      min-width: 0;
+      width: 100% !important;
+    }
+    .left-container.biligumi-subject-side-layout > #${SUBJECT_INFO_ID} {
+      grid-column: 1;
+      grid-row: 1 / span 999;
+      min-width: 0;
+      margin: 0 0 18px;
+    }
+    .left-container.biligumi-subject-side-layout > #playerWrap {
+      grid-column: 2;
+      grid-row: 2;
+      min-width: 0;
+      width: 100% !important;
+    }
+    .left-container.biligumi-subject-side-layout > #playerWrap > #bilibili-player {
+      width: 100% !important;
+    }
+    .left-container.biligumi-subject-side-layout > .video-toolbar-container,
+    .left-container.biligumi-subject-side-layout > #arc_toolbar_report {
+      grid-column: 2;
+      grid-row: 3;
+      min-width: 0;
+      width: 100% !important;
+    }
+    .left-container.biligumi-subject-side-layout > #${CHARACTER_STRIP_ID},
+    .left-container.biligumi-subject-side-layout > .video-tag-container,
+    .left-container.biligumi-subject-side-layout > .tag-panel,
+    .left-container.biligumi-subject-side-layout > .left-container-under-player,
+    .left-container.biligumi-subject-side-layout > .video-desc-container,
+    .left-container.biligumi-subject-side-layout > .video-note-container,
+    .left-container.biligumi-subject-side-layout > .comment-m,
+    .left-container.biligumi-subject-side-layout > #comment,
+    .left-container.biligumi-subject-side-layout > .reply-warp,
+    .left-container.biligumi-subject-side-layout > .reply-wrap,
+    .left-container.biligumi-subject-side-layout > [class*='video-tag'],
+    .left-container.biligumi-subject-side-layout > [class*='VideoTag'],
+    .left-container.biligumi-subject-side-layout > [class*='reply'],
+    .left-container.biligumi-subject-side-layout > [class*='comment'],
+    .left-container.biligumi-subject-side-layout > [class*='Comment'] {
+      grid-column: 2;
+      min-width: 0;
+      width: 100% !important;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar {
+      display: block;
+      padding: 0;
+      border-top: 0;
+      border-bottom: 0;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-cover-wrap {
+      width: 100%;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-info-main {
+      margin-top: 12px;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-info-title {
+      font-size: 18px;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-info-box {
+      max-height: none;
+      overflow: visible;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-info-row {
+      display: block;
+      padding: 6px 0;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-sidebar .biligumi-subject-info-key {
+      margin-bottom: 2px;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-official-compact {
+      display: block;
+      margin: 14px 0 18px;
+      padding: 14px 0 12px;
+      border-top: 1px solid #edf0f5;
+      border-bottom: 1px solid #edf0f5;
+    }
+    #${SUBJECT_INFO_ID}.biligumi-subject-official-compact .biligumi-subject-info-box {
+      max-height: none;
+      overflow: visible;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-cover-wrap {
+      min-width: 0;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-cover {
+      display: block;
+      width: 100%;
+      aspect-ratio: 3 / 4.25;
+      object-fit: cover;
+      object-position: top center;
+      border: 1px solid #d9dde4;
+      background: #f7f8fa;
+      box-shadow: 0 3px 10px rgba(23, 27, 38, 0.14);
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-cover-placeholder {
+      display: grid;
+      place-items: center;
+      color: #9aa4b2;
+      font-size: 42px;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-name {
+      margin-top: 8px;
+      color: #18191c;
+      font-size: 14px;
+      line-height: 1.35;
+      font-weight: 600;
+      overflow-wrap: anywhere;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-title {
+      font-size: 20px;
+      font-weight: 500;
+      color: #18191c;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-more {
+      color: #2f8cff;
+      font-size: 13px;
+      text-decoration: none;
+      white-space: nowrap;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-box {
+      max-height: 520px;
+      overflow: auto;
+      font-size: 14px;
+      line-height: 1.42;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-row {
+      display: grid;
+      grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+      gap: 8px;
+      padding: 7px 0;
+      border-bottom: 1px solid #edf0f5;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-row:last-child {
+      border-bottom: 0;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-key {
+      color: #7b8794;
+      white-space: nowrap;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-value {
+      min-width: 0;
+      color: #1f2329;
+      overflow-wrap: anywhere;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-value a {
+      color: #2080c0;
+      text-decoration: none;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-value a:hover {
+      color: #2f8cff;
+    }
+    #${SUBJECT_INFO_ID} .biligumi-subject-info-sep {
+      color: #a0a8b2;
+    }
+    @media (max-width: 780px) {
+      #${SUBJECT_INFO_ID}.biligumi-subject-overview {
+        grid-template-columns: 116px minmax(0, 1fr);
+        gap: 12px;
+      }
+      #${SUBJECT_INFO_ID} .biligumi-subject-info-title {
+        font-size: 18px;
+      }
+      #${SUBJECT_INFO_ID} .biligumi-subject-info-row {
+        grid-template-columns: 1fr;
+        gap: 2px;
+      }
+    }
+    #${CHARACTER_STRIP_ID} {
+      width: 100%;
+      margin: 14px 0 18px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: var(--bgm-ink);
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 8px;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-title {
+      font-size: 18px;
+      font-weight: 500;
+      color: #18191c;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-more {
+      color: #2f8cff;
+      font-size: 13px;
+      text-decoration: none;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-list {
+      display: flex;
+      gap: 12px;
+      overflow-x: auto;
+      overflow-y: hidden;
+      padding: 2px 2px 8px;
+      scrollbar-width: thin;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-card {
+      flex: 0 0 92px;
+      min-width: 0;
+      color: inherit;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-card a {
+      color: inherit;
+      text-decoration: none;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-card a:hover {
+      color: #2f8cff;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-cover {
+      width: 92px;
+      height: 124px;
+      border-radius: 8px;
+      border: 1px solid #edf0f5;
+      background: #f7f8fa;
+      box-shadow: 0 4px 12px rgba(23, 27, 38, 0.08);
+      object-fit: cover;
+      object-position: top center;
+      display: block;
+      image-rendering: auto;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-placeholder {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #9aa4b2;
+      font-size: 28px;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-name {
+      margin-top: 6px;
+      color: #2080c0;
+      font-size: 13px;
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-relation {
+      margin-top: 4px;
+      color: #8a96a3;
+      font-size: 12px;
+      line-height: 1.2;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-cv {
+      margin-top: 4px;
+      color: #6b7280;
+      font-size: 12px;
+      line-height: 1.25;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${CHARACTER_STRIP_ID} .biligumi-character-empty {
+      padding: 14px 16px;
+      border-radius: 8px;
+      background: #f7f8fa;
+      color: #7b8794;
+      font-size: 13px;
     }
     .biligumi-head {
       display: flex;
@@ -844,6 +1179,20 @@
       color: #6d7886;
       font-size: 13px;
     }
+    #${SETTINGS_ID} .biligumi-comment-label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    #${SETTINGS_ID} .biligumi-comment-count {
+      color: #8a96a3;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #${SETTINGS_ID} .biligumi-comment-count.warning {
+      color: #d16b00;
+    }
     #${SETTINGS_ID} .biligumi-settings-field input,
     #${SETTINGS_ID} .biligumi-settings-field textarea {
       width: 100%;
@@ -875,6 +1224,10 @@
       max-height: 52px;
       overflow: auto;
     }
+    #${SETTINGS_ID} .biligumi-settings-help.warning {
+      color: #d03030;
+      font-weight: 600;
+    }
     #${SETTINGS_ID} .biligumi-settings-check {
       display: flex;
       align-items: flex-start;
@@ -888,6 +1241,24 @@
       height: auto;
       margin: 2px 0 0;
       flex: 0 0 auto;
+    }
+    #${SETTINGS_ID} .biligumi-threshold-line {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      align-items: center;
+      gap: 12px;
+    }
+    #${SETTINGS_ID} .biligumi-threshold-line input[type="range"] {
+      height: auto;
+      padding: 0;
+      accent-color: #ea8fa3;
+    }
+    #${SETTINGS_ID} .biligumi-threshold-value {
+      min-width: 42px;
+      color: #4f6072;
+      font-size: 13px;
+      font-weight: 700;
+      text-align: right;
     }
     #${SETTINGS_ID} .biligumi-settings-actions {
       display: flex;
@@ -1055,6 +1426,7 @@
     injectWhenReady();
     observeRouteChanges();
     hookHistoryNavigation();
+    bindAutoWatchProgressEvents();
   }
 
   function observeRouteChanges() {
@@ -1109,11 +1481,22 @@
     refreshPageContext();
     state.subjectId = getCurrentBinding();
     state.subject = null;
+    state.subjectInfoLinks = {};
+    state.characters = [];
+    state.characterError = "";
+    state.previewSubject = null;
+    state.previewCharacters = [];
+    state.previewCharacterError = "";
+    state.previewCharacterKey = "";
+    state.previewCharacterBusy = false;
     state.collection = null;
     state.episodes = [];
     state.episodeCollections = [];
     state.busy = false;
     state.message = "";
+    state.autoEpisodeSyncing = false;
+    state.autoEpisodeSyncLastKey = "";
+    state.autoWatchBlockedKey = "";
     injectWhenReady(true);
   }
 
@@ -1201,6 +1584,8 @@
       "#app .right",
       ".player-auxiliary-area",
       ".media-right",
+      ".plp-r",
+      ".plp-r-wrap",
     ];
     for (const selector of selectors) {
       const el = document.querySelector(selector);
@@ -1281,13 +1666,16 @@
     const rightColumn = findRightColumn();
     const inner = rightColumn && rightColumn.querySelector(".right-container-inner");
     const upPanel = inner && inner.querySelector(".up-panel-container, .up-info-container");
-    if (!panel || !rightColumn || !inner || !upPanel || !isVisible(upPanel)) {
+    const officialAnchor = rightColumn && findOfficialBangumiLayoutAnchor(rightColumn);
+    const layoutAnchor = upPanel && isVisible(upPanel) ? upPanel : officialAnchor;
+    if (!panel || !rightColumn || !layoutAnchor || !isVisible(layoutAnchor)) {
       if (panel) {
         panel.style.position = "fixed";
         panel.style.top = "";
         panel.style.left = "";
         panel.style.right = "";
       }
+      clearReservedLayoutSpace();
       return;
     }
 
@@ -1297,17 +1685,46 @@
     const scrollX = window.scrollX || window.pageXOffset || 0;
     const scrollY = window.scrollY || window.pageYOffset || 0;
     const rightRect = rightColumn.getBoundingClientRect();
-    const upRect = upPanel.getBoundingClientRect();
+    const anchorRect = layoutAnchor.getBoundingClientRect();
     panel.style.left = `${Math.round(rightRect.left + scrollX)}px`;
-    panel.style.top = `${Math.round(upRect.bottom + scrollY + 12)}px`;
+    panel.style.top = `${Math.round(anchorRect.bottom + scrollY + 12)}px`;
     panel.style.width = `${Math.round(rightRect.width)}px`;
     panel.style.right = "auto";
 
     const reserve = Math.ceil(panel.getBoundingClientRect().height + 24);
-    if (upPanel.__biligumiReserved !== reserve) {
-      upPanel.style.marginBottom = `${reserve}px`;
-      upPanel.__biligumiReserved = reserve;
+    reserveLayoutSpace(layoutAnchor, reserve);
+  }
+
+  function findOfficialBangumiLayoutAnchor(rightColumn) {
+    if (!state.officialBangumiLayoutEnabled || !isOfficialBangumiPage()) return null;
+    const modules = Array.from(rightColumn.querySelectorAll("#eplist_module, [class*='eplist_ep_list_wrapper']"))
+      .filter(isVisible);
+    const mainList = modules.find((node) => {
+      const text = (node.textContent || "").replace(/\s+/g, "");
+      return text.includes("正片") || text.includes("选集") || text.includes("剧集");
+    });
+    return mainList || modules[0] || null;
+  }
+
+  function reserveLayoutSpace(target, reserve) {
+    const previous = window.__biligumiReservedLayoutTarget;
+    if (previous && previous !== target) {
+      previous.style.marginBottom = "";
+      previous.__biligumiReserved = null;
     }
+    if (target.__biligumiReserved !== reserve) {
+      target.style.marginBottom = `${reserve}px`;
+      target.__biligumiReserved = reserve;
+    }
+    window.__biligumiReservedLayoutTarget = target;
+  }
+
+  function clearReservedLayoutSpace() {
+    const previous = window.__biligumiReservedLayoutTarget;
+    if (!previous) return;
+    previous.style.marginBottom = "";
+    previous.__biligumiReserved = null;
+    window.__biligumiReservedLayoutTarget = null;
   }
 
   function findDirectChildByText(host, keywords) {
@@ -1349,6 +1766,8 @@
     syncSettingsDialog();
 
     if (!shouldRenderFullPanel()) {
+      removeSubjectInfoPanel();
+      removeCharacterStrip();
       const nonMainKeyword = getNonMainPreviewKeyword();
       if (nonMainKeyword) {
         panel.className = "biligumi-panel";
@@ -1379,6 +1798,9 @@
     const progress = getProgressInfo();
     const bangumiUrl = state.subjectId ? `${BGM_WEB_BASE}/subject/${state.subjectId}` : `${BGM_WEB_BASE}/`;
     const subjectName = state.subject ? displaySubjectName(state.subject) : "Bangumi";
+    const footerLink = state.subjectId
+      ? `<a href="${bangumiUrl}" target="_blank" rel="noreferrer">打开 Bangumi</a>`
+      : "";
 
     const headerHtml = `
       <div class="biligumi-head" data-action="toggle-panel" title="${state.panelCollapsed ? "展开 Bangumi 面板" : "折叠 Bangumi 面板"}">
@@ -1395,6 +1817,8 @@
       panel.innerHTML = headerHtml;
       bindPanelEvents();
       layoutPanelWithoutOwningBiliDom();
+      syncSubjectInfoPanel();
+      syncCharacterStrip();
       return;
     }
 
@@ -1405,18 +1829,588 @@
       ${state.error ? `<div class="biligumi-notice error">${escapeHtml(state.error)}</div>` : ""}
       <div class="biligumi-foot">
         <span>${state.busy ? "处理中..." : progress.summary} · v${SCRIPT_VERSION}</span>
-        <a href="${bangumiUrl}" target="_blank" rel="noreferrer">打开 Bangumi</a>
+        ${footerLink}
       </div>
     `;
 
     bindPanelEvents();
     layoutPanelWithoutOwningBiliDom();
+    syncSubjectInfoPanel();
+    syncCharacterStrip();
     const inlineAutoKeyword = getInlineAutoPreviewKeyword();
     if (inlineAutoKeyword) ensureNonMainPreviewSearch(inlineAutoKeyword);
   }
 
+  function syncSubjectInfoPanel() {
+    if (!state.subjectInfoPanelEnabled || !shouldRenderFullPanel() || !state.subjectId || !state.subject) {
+      removeSubjectInfoPanel();
+      return;
+    }
+
+    const host = findSubjectInfoInsertHost();
+    if (!host) {
+      window.setTimeout(syncSubjectInfoPanel, 900);
+      return;
+    }
+
+    let box = document.getElementById(SUBJECT_INFO_ID);
+    if (!box) {
+      box = document.createElement("section");
+      box.id = SUBJECT_INFO_ID;
+    }
+    box.className = host.officialCompact
+      ? "biligumi-subject-overview biligumi-subject-official-compact"
+      : host.sideLayout
+        ? "biligumi-subject-overview biligumi-subject-sidebar"
+        : "biligumi-subject-overview";
+
+    if (host.mode === "after" && box.previousElementSibling !== host.node) {
+      host.node.insertAdjacentElement("afterend", box);
+    } else if (host.mode === "before" && box.nextElementSibling !== host.node) {
+      host.node.parentElement.insertBefore(box, host.node);
+    }
+    syncSubjectSideLayout(host);
+
+    box.innerHTML = renderSubjectInfoPanel();
+  }
+
+  function removeSubjectInfoPanel() {
+    const box = document.getElementById(SUBJECT_INFO_ID);
+    if (box) box.remove();
+    clearSubjectSideLayout();
+  }
+
+  function syncCharacterStrip() {
+    if (!state.characterStripEnabled || !shouldRenderFullPanel()) {
+      removeCharacterStrip();
+      return;
+    }
+    if (!getCharacterStripSubjectId() || !getCharacterStripSubject()) {
+      if (isOfficialBangumiPage() && !state.subjectId) {
+        ensureOfficialCharacterStripPreview();
+        return;
+      }
+      removeCharacterStrip();
+      return;
+    }
+
+    const host = findCharacterStripInsertHost();
+    if (!host) {
+      window.setTimeout(syncCharacterStrip, 900);
+      return;
+    }
+
+    let strip = document.getElementById(CHARACTER_STRIP_ID);
+    if (!strip) {
+      strip = document.createElement("section");
+      strip.id = CHARACTER_STRIP_ID;
+    }
+
+    const subjectInfo = document.getElementById(SUBJECT_INFO_ID);
+    const shouldFollowSubjectInfo = subjectInfo
+      && subjectInfo.parentElement
+      && !subjectInfo.classList.contains("biligumi-subject-sidebar");
+    if (shouldFollowSubjectInfo && strip.previousElementSibling !== subjectInfo) {
+      subjectInfo.insertAdjacentElement("afterend", strip);
+    } else if (host.mode === "after" && strip.previousElementSibling !== host.node && !shouldFollowSubjectInfo) {
+      host.node.insertAdjacentElement("afterend", strip);
+    } else if (host.mode === "before" && strip.nextElementSibling !== host.node) {
+      host.node.parentElement.insertBefore(strip, host.node);
+    }
+
+    strip.innerHTML = renderCharacterStrip();
+  }
+
+  function ensureOfficialCharacterStripPreview() {
+    if (!state.characterStripEnabled || state.subjectId || !isOfficialBangumiPage()) return;
+    const keyword = getOfficialBangumiCharacterKeyword();
+    if (!keyword) return;
+    const key = normalizeBindingToken(keyword);
+    if (state.previewCharacterBusy && state.previewCharacterKey === key) return;
+    if (state.previewSubject && state.previewCharacterKey === key) return;
+    if (state.previewCharacterFailedKey === key) return;
+
+    state.previewCharacterBusy = true;
+    state.previewCharacterKey = key;
+    bgmRequest("/v0/search/subjects?limit=1", {
+      method: "POST",
+      body: { keyword, sort: "match", filter: { type: [2] } },
+      dedup: true,
+    })
+      .then(async (response) => {
+        const subject = response && Array.isArray(response.data) ? response.data[0] : null;
+        if (!subject || !subject.id || state.subjectId || state.previewCharacterKey !== key) {
+          if (!subject || !subject.id) state.previewCharacterFailedKey = key;
+          return;
+        }
+        const charactersResult = await loadSubjectCharacters(subject.id);
+        if (state.subjectId || state.previewCharacterKey !== key) return;
+        state.previewSubject = subject;
+        state.previewCharacters = charactersResult.characters;
+        state.previewCharacterError = charactersResult.error;
+        if (!charactersResult.characters.length && charactersResult.error) state.previewCharacterFailedKey = key;
+      })
+      .catch((error) => {
+        if (state.previewCharacterKey !== key) return;
+        state.previewSubject = null;
+        state.previewCharacters = [];
+        state.previewCharacterError = error && error.message ? error.message : "角色信息读取失败";
+        state.previewCharacterFailedKey = key;
+      })
+      .finally(() => {
+        if (state.previewCharacterKey === key) state.previewCharacterBusy = false;
+        syncCharacterStrip();
+      });
+  }
+
+  function getOfficialBangumiCharacterKeyword() {
+    const mediaInfo = findOfficialBangumiMediaInfoNode();
+    const titleEl = mediaInfo && (
+      mediaInfo.querySelector("h1, h2, [class*='title'], [class*='Title'], [class*='mediaTitle']")
+    );
+    const fromNode = titleEl && (titleEl.getAttribute("title") || titleEl.textContent || "").trim();
+    return cleanTitle(fromNode || getSeriesTitle() || state.pageTitle || getPageTitle());
+  }
+
+  function removeCharacterStrip() {
+    const strip = document.getElementById(CHARACTER_STRIP_ID);
+    if (strip) strip.remove();
+  }
+
+  function renderSubjectInfoPanel() {
+    const rows = getSubjectInfoRows();
+    const isOfficialCompact = isOfficialBangumiPage();
+    const subjectName = state.subject ? displaySubjectName(state.subject) : "Bangumi";
+    const bangumiUrl = `${BGM_WEB_BASE}/subject/${state.subjectId}`;
+    const image = getBestSubjectCover(state.subject);
+    const body = rows.length
+      ? rows.map(renderSubjectInfoRow).join("")
+      : `<div class="biligumi-subject-info-row"><div class="biligumi-subject-info-value">暂时没有条目信息。</div></div>`;
+    if (isOfficialCompact) {
+      return `
+        <div class="biligumi-subject-info-main">
+          <div class="biligumi-subject-info-head">
+            <div class="biligumi-subject-info-title">条目信息</div>
+            <a class="biligumi-subject-info-more" href="${bangumiUrl}" target="_blank" rel="noreferrer" title="${escapeHtml(subjectName)}">更多</a>
+          </div>
+          <div class="biligumi-subject-info-box">
+            ${body}
+          </div>
+        </div>
+      `;
+    }
+    return `
+      <div class="biligumi-subject-cover-wrap">
+        <a href="${bangumiUrl}" target="_blank" rel="noreferrer" title="${escapeHtml(subjectName)}">
+          ${image
+            ? `<img class="biligumi-subject-cover" src="${escapeHtml(image)}" alt="${escapeHtml(subjectName)}" loading="lazy">`
+            : `<div class="biligumi-subject-cover biligumi-subject-cover-placeholder">?</div>`}
+        </a>
+        <div class="biligumi-subject-name">${escapeHtml(subjectName)}</div>
+      </div>
+      <div class="biligumi-subject-info-main">
+        <div class="biligumi-subject-info-head">
+          <div class="biligumi-subject-info-title">条目信息</div>
+          <a class="biligumi-subject-info-more" href="${bangumiUrl}" target="_blank" rel="noreferrer" title="${escapeHtml(subjectName)}">更多</a>
+        </div>
+        <div class="biligumi-subject-info-box">
+          ${body}
+        </div>
+      </div>
+    `;
+  }
+
+  function getBestSubjectCover(subject) {
+    const images = subject && subject.images ? subject.images : {};
+    return images.large || images.common || images.medium || images.grid || images.small || "";
+  }
+
+  function getSubjectInfoRows() {
+    const infobox = state.subject && Array.isArray(state.subject.infobox) ? state.subject.infobox : [];
+    const rows = infobox
+      .filter((item) => item && item.key && item.value != null)
+      .map((item) => ({ key: String(item.key), value: item.value }));
+    if (!isOfficialBangumiPage()) return rows;
+    const startIndex = rows.findIndex((item) => isDirectorInfoKey(item.key));
+    return startIndex >= 0 ? rows.slice(startIndex) : rows;
+  }
+
+  function isDirectorInfoKey(key) {
+    return /^(?:导演|導演|監督|总导演|總導演|総監督)$/.test(String(key || "").trim());
+  }
+
+  function renderSubjectInfoRow(item) {
+    return `
+      <div class="biligumi-subject-info-row">
+        <div class="biligumi-subject-info-key">${escapeHtml(item.key)}:</div>
+        <div class="biligumi-subject-info-value">${renderSubjectInfoValue(item.value)}</div>
+      </div>
+    `;
+  }
+
+  function renderSubjectInfoValue(value) {
+    if (Array.isArray(value)) {
+      return value.map(renderSubjectInfoAtom).filter(Boolean).join('<span class="biligumi-subject-info-sep">、</span>');
+    }
+    return renderSubjectInfoAtom(value);
+  }
+
+  function renderSubjectInfoAtom(value) {
+    if (value == null) return "";
+    if (typeof value === "object") {
+      const text = String(value.v || value.value || value.name || value.title || value.k || "").trim();
+      if (!text) return "";
+      const href = getSubjectInfoHref(value.href || value.url || value.k || text);
+      return href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(text)}</a>` : renderLinkedSubjectInfoText(text);
+    }
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const href = getSubjectInfoHref(text);
+    return href ? `<a href="${escapeHtml(href)}" target="_blank" rel="noreferrer">${escapeHtml(text)}</a>` : renderLinkedSubjectInfoText(text);
+  }
+
+  function renderLinkedSubjectInfoText(text) {
+    const value = String(text || "");
+    const exactHref = getSubjectInfoLinkByText(value);
+    if (exactHref) {
+      return `<a href="${escapeHtml(exactHref)}" target="_blank" rel="noreferrer">${escapeHtml(value)}</a>`;
+    }
+    const entries = getSubjectInfoLinkEntries();
+    if (!entries.length) return escapeHtml(value);
+    const matches = [];
+    entries.forEach((entry) => {
+      if (entry.text.length < 2) return;
+      let start = 0;
+      while (start < value.length) {
+        const index = value.indexOf(entry.text, start);
+        if (index < 0) break;
+        matches.push({ index, end: index + entry.text.length, ...entry });
+        start = index + entry.text.length;
+      }
+    });
+    matches.sort((a, b) => a.index - b.index || b.text.length - a.text.length);
+    const picked = [];
+    let cursor = 0;
+    matches.forEach((match) => {
+      if (match.index < cursor) return;
+      picked.push(match);
+      cursor = match.end;
+    });
+    if (!picked.length) return escapeHtml(value);
+    let html = "";
+    let offset = 0;
+    picked.forEach((match) => {
+      html += escapeHtml(value.slice(offset, match.index));
+      html += `<a href="${escapeHtml(match.href)}" target="_blank" rel="noreferrer">${escapeHtml(value.slice(match.index, match.end))}</a>`;
+      offset = match.end;
+    });
+    html += escapeHtml(value.slice(offset));
+    return html;
+  }
+
+  function getSubjectInfoLinkByText(text) {
+    const links = state.subjectInfoLinks || {};
+    return links[normalizeSubjectInfoLinkText(text)] || "";
+  }
+
+  function getSubjectInfoLinkEntries() {
+    const links = state.subjectInfoLinks || {};
+    return Object.entries(links)
+      .map(([text, href]) => ({ text, href }))
+      .filter((entry) => entry.text && entry.href)
+      .sort((a, b) => b.text.length - a.text.length);
+  }
+
+  function normalizeSubjectInfoLinkText(text) {
+    return String(text || "").replace(/\s+/g, " ").trim();
+  }
+
+  function getSubjectInfoHref(value) {
+    const text = String(value || "").trim();
+    if (/^https?:\/\//i.test(text)) return text;
+    if (/^\/?(?:subject|person|character|ep|index|wiki)\//i.test(text)) {
+      return `${BGM_WEB_BASE}/${text.replace(/^\/+/, "")}`;
+    }
+    return "";
+  }
+
+  function findSubjectInfoInsertHost() {
+    const officialHost = findOfficialSubjectInfoInsertHost();
+    if (officialHost) return officialHost;
+    const sideHost = findPlayerSideSubjectHost();
+    if (sideHost) return sideHost;
+    clearSubjectSideLayout();
+    return findLeftContentInsertHost();
+  }
+
+  function findOfficialSubjectInfoInsertHost() {
+    if (!isOfficialBangumiPage()) return null;
+    clearSubjectSideLayout();
+    const mediaInfo = findOfficialBangumiMediaInfoNode();
+    if (mediaInfo && mediaInfo.parentElement && isVisible(mediaInfo)) {
+      return {
+        node: mediaInfo,
+        mode: "after",
+        officialCompact: true,
+      };
+    }
+    return null;
+  }
+
+  function findPlayerSideSubjectHost() {
+    if (isOfficialBangumiPage()) return null;
+    const player = document.querySelector("#playerWrap");
+    const leftContainer = player && player.parentElement && player.parentElement.closest(".left-container");
+    if (!isVisible(player) || !isVisible(leftContainer)) return null;
+    const rect = leftContainer.getBoundingClientRect();
+    if (rect.width < 620) return null;
+    return { node: player, mode: "before", sideLayout: true, layoutContainer: leftContainer };
+  }
+
+  function syncSubjectSideLayout(host) {
+    clearSubjectSideLayout(host && host.layoutContainer);
+    if (host && host.sideLayout && host.layoutContainer) {
+      host.layoutContainer.classList.add("biligumi-subject-side-layout");
+    }
+  }
+
+  function clearSubjectSideLayout(except) {
+    document.querySelectorAll(".biligumi-subject-side-layout").forEach((node) => {
+      if (node !== except) node.classList.remove("biligumi-subject-side-layout");
+    });
+  }
+
+  function findLeftContentInsertHost() {
+    if (isOfficialBangumiPage()) {
+      const officialSelectors = [
+        ".media-info",
+        ".media-info-wrp",
+        ".media-info-wrap",
+        ".media-info-container",
+        ".media-desc",
+        ".media-title",
+        ".media-name",
+        ".left-container-under-player",
+        ".video-info-container",
+        ".video-info",
+        ".player-left-components",
+        "[class*='under-player']",
+        "[class*='video-info']",
+        ".bangumi-info",
+        ".bangumi-title",
+        "[class*='media-info']",
+        "[class*='bangumi-info']",
+        "[class*='season-info']",
+      ];
+      for (const selector of officialSelectors) {
+        const node = document.querySelector(selector);
+        if (isVisible(node)) return { node, mode: "after" };
+      }
+    }
+
+    const contentSelectors = [
+      ".video-toolbar-container",
+      ".left-container-under-player",
+      ".video-info-container",
+      ".video-info",
+      "#viewbox_report",
+      "#arc_toolbar_report",
+      "[class*='under-player']",
+      "[class*='video-info']",
+      "[class*='toolbar']",
+    ];
+    for (const selector of contentSelectors) {
+      const node = document.querySelector(selector);
+      if (isVisible(node)) return { node, mode: "after" };
+    }
+
+    const tagSelectors = [
+      ".video-tag-container",
+      ".tag-panel",
+      "[class*='video-tag']",
+      "[class*='VideoTag']",
+    ];
+    for (const selector of tagSelectors) {
+      const node = document.querySelector(selector);
+      if (isVisible(node)) return { node, mode: "after" };
+    }
+
+    const commentSelectors = [
+      "#comment",
+      ".reply-warp",
+      ".reply-wrap",
+      ".comment-container",
+      ".bili-comment-container",
+      ".bb-comment",
+      "[class*='comment']",
+      "[class*='Comment']",
+    ];
+    for (const selector of commentSelectors) {
+      const node = document.querySelector(selector);
+      if (node && node.parentElement && isVisible(node)) return { node, mode: "before" };
+    }
+
+    return null;
+  }
+
+  function findCharacterStripInsertHost() {
+    if (!isOfficialBangumiPage()) return findLeftContentInsertHost();
+
+    const mediaInfo = findOfficialBangumiMediaInfoNode();
+    if (mediaInfo && mediaInfo.parentElement && isVisible(mediaInfo)) {
+      return { node: mediaInfo, mode: "after" };
+    }
+
+    const commentSelectors = [
+      "#comment",
+      ".reply-warp",
+      ".reply-wrap",
+      ".comment-container",
+      ".bili-comment-container",
+      "[class*='comment']",
+      "[class*='Comment']",
+    ];
+    for (const selector of commentSelectors) {
+      const node = document.querySelector(selector);
+      if (node && node.parentElement && isVisible(node)) return { node, mode: "before" };
+    }
+
+    const player = findOfficialBangumiPlayerNode();
+    if (player && player.parentElement && isVisible(player)) {
+      return { node: player, mode: "after" };
+    }
+
+    return findLeftContentInsertHost();
+  }
+
+  function findOfficialBangumiMediaInfoNode() {
+    const scopedSelectors = [
+      ".player-left-components [class*='mediaInfoWrap']",
+      ".player-left-components [class*='mediainfo']",
+      ".player-left-components .media-info",
+      ".player-left-components .media-info-wrp",
+      ".player-left-components .media-info-wrap",
+      ".player-left-components .media-info-container",
+      ".player-left-components .media-desc",
+    ];
+    for (const selector of scopedSelectors) {
+      const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      if (nodes.length) return nodes[nodes.length - 1];
+    }
+
+    const fallbackSelectors = [
+      "[class*='mediaInfoWrap']",
+      "[class*='mediainfo']",
+      ".media-info",
+      ".media-info-wrp",
+      ".media-info-wrap",
+      ".media-info-container",
+    ];
+    for (const selector of fallbackSelectors) {
+      const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible);
+      if (nodes.length) return nodes[nodes.length - 1];
+    }
+    return null;
+  }
+
+  function findOfficialBangumiPlayerNode() {
+    const candidates = [
+      "#playerWrap",
+      "#bilibili-player",
+      ".bpx-player-container",
+      "[class*='player-wrap']",
+      "[class*='PlayerWrap']",
+    ];
+    for (const selector of candidates) {
+      const node = document.querySelector(selector);
+      if (!isVisible(node)) continue;
+      const wrapper = node.closest("#playerWrap, [class*='player-wrap'], [class*='PlayerWrap']");
+      return wrapper && wrapper.parentElement ? wrapper : node;
+    }
+    return null;
+  }
+
+  function renderCharacterStrip() {
+    const subject = getCharacterStripSubject();
+    const subjectId = getCharacterStripSubjectId();
+    const subjectName = subject ? displaySubjectName(subject) : "Bangumi";
+    const bangumiCharactersUrl = `${BGM_WEB_BASE}/subject/${subjectId}/characters`;
+    const characters = getDisplayCharacters();
+    const body = characters.length
+      ? `<div class="biligumi-character-list">${characters.map(renderCharacterCard).join("")}</div>`
+      : `<div class="biligumi-character-empty">${escapeHtml(getCharacterStripError() || "暂时没有角色/CV 信息。")}</div>`;
+    return `
+      <div class="biligumi-character-head">
+        <div class="biligumi-character-title">角色 / CV</div>
+        <a class="biligumi-character-more" href="${bangumiCharactersUrl}" target="_blank" rel="noreferrer" title="${escapeHtml(subjectName)}">更多</a>
+      </div>
+      ${body}
+    `;
+  }
+
+  function getDisplayCharacters() {
+    const source = state.subjectId ? state.characters : state.previewCharacters;
+    const characters = Array.isArray(source) ? source : [];
+    return characters
+      .filter((character) => character && character.name)
+      .slice(0, 12);
+  }
+
+  function getCharacterStripSubjectId() {
+    return state.subjectId || (state.previewSubject && state.previewSubject.id) || null;
+  }
+
+  function getCharacterStripSubject() {
+    return state.subject || state.previewSubject || null;
+  }
+
+  function getCharacterStripError() {
+    return state.subjectId ? state.characterError : state.previewCharacterError;
+  }
+
+  function renderCharacterCard(character) {
+    const actor = Array.isArray(character.actors) ? character.actors[0] : null;
+    const image = getBestCharacterImage(character);
+    const characterUrl = `${BGM_WEB_BASE}/character/${character.id}`;
+    const actorName = actor && actor.name ? String(actor.name) : "";
+    const actorUrl = actor && actor.id ? `${BGM_WEB_BASE}/person/${actor.id}` : "";
+    return `
+      <div class="biligumi-character-card" title="${escapeHtml(character.name)}">
+        <a href="${characterUrl}" target="_blank" rel="noreferrer">
+          ${image
+            ? `<img class="biligumi-character-cover" src="${escapeHtml(image)}" alt="${escapeHtml(character.name)}" loading="lazy">`
+            : `<div class="biligumi-character-cover biligumi-character-placeholder">?</div>`}
+        </a>
+        <a class="biligumi-character-name" href="${characterUrl}" target="_blank" rel="noreferrer">${escapeHtml(character.name)}</a>
+        <div class="biligumi-character-relation">${escapeHtml(character.relation || "角色")}</div>
+        <div class="biligumi-character-cv">CV ${actorUrl ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>` : escapeHtml(actorName || "未录入")}</div>
+      </div>
+    `;
+  }
+
+  function getBestCharacterImage(character) {
+    const images = character && character.images ? character.images : {};
+    const source = images.large || images.medium || images.grid || images.small || "";
+    return getBgmCharacterCoverUrl(source) || images.large || normalizeBgmImageUrl(images.medium) || images.grid || normalizeBgmImageUrl(images.small) || "";
+  }
+
+  function getBgmCharacterCoverUrl(url) {
+    const value = normalizeBgmImageUrl(url);
+    return value
+      .replace(/\/pic\/crt\/[lgs]\//, "/pic/crt/m/")
+      .replace(/\/pic\/crt\/m\//, "/pic/crt/m/");
+  }
+
+  function normalizeBgmImageUrl(url) {
+    return String(url || "").replace(/\/r\/(?:100|200|400)\//, "/");
+  }
+
   function shouldRenderFullPanel() {
-    return isWhitelistedPage() || (isNonMainPreviewPage() && Boolean(state.subjectId));
+    return isWhitelistedPage() || isOfficialBangumiPage() || (isNonMainPreviewPage() && Boolean(state.subjectId));
+  }
+
+  function shouldAutoShowOfficialBangumiPanel() {
+    return isOfficialBangumiPage();
   }
 
   function renderSearchOrSubject() {
@@ -1518,7 +2512,10 @@
     const keyword = getInlineAutoPreviewKeyword();
     if (!keyword) return "";
     const isNonMain = isNonMainPreviewPage();
-    const rows = state.nonMainResults.slice(0, 2).map((subject) => renderNonMainCandidate(subject, true)).join("");
+    const rows = state.nonMainResults
+      .slice(0, 2)
+      .map((subject) => renderNonMainCandidate(subject, { canBind: true, canOpen: isNonMain }))
+      .join("");
     const note = isNonMain
       ? `检测到 OP / ED / PV / 预告，下面是按「${escapeHtml(keyword)}」匹配的跳转候选。`
       : `下面是按「${escapeHtml(keyword)}」自动匹配的候选。`;
@@ -1540,11 +2537,14 @@
           : '<div class="biligumi-lite-note">暂时没有匹配候选。</div>';
   }
 
-  function renderNonMainCandidate(subject, canBind = false) {
+  function renderNonMainCandidate(subject, options = {}) {
+    const canBind = typeof options === "boolean" ? options : Boolean(options.canBind);
+    const canOpen = typeof options === "boolean" ? true : options.canOpen !== false;
     const name = displaySubjectName(subject);
     const date = subject.date || "未知日期";
     const eps = subject.eps ? `${subject.eps} 话` : "话数未知";
     const bindButton = canBind ? `<button class="biligumi-lite-bind" data-action="bind" data-subject-id="${subject.id}">绑定</button>` : "";
+    const openLink = canOpen ? `<a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subject.id}" target="_blank" rel="noreferrer">打开</a>` : "";
     return `
       <div class="biligumi-lite-result">
         <div>
@@ -1552,7 +2552,7 @@
           <div class="biligumi-lite-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
         </div>
         <div class="biligumi-lite-actions">
-          <a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subject.id}" target="_blank" rel="noreferrer">打开</a>
+          ${openLink}
           ${bindButton}
         </div>
       </div>
@@ -1561,6 +2561,8 @@
 
   function renderSettingsDialog() {
     const currentHints = formatWhitelistHintCandidates();
+    const autoWatchThreshold = getAutoWatchThreshold();
+    const autoWatchScopeLabel = getAutoWatchScopeLabel();
     return `
       <div class="biligumi-settings-dialog" data-action="noop">
         <div class="biligumi-settings-title">设置</div>
@@ -1581,6 +2583,36 @@
               <span>OP / ED / PV / 预告页面无视白名单显示 2 个轻量 Bangumi 候选。</span>
             </label>
             <div class="biligumi-settings-help">如果清洗出的番名已经绑定过，会直接显示正常面板。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-character-strip" ${state.characterStripEnabled ? "checked" : ""}>
+              <span>在 Bilibili 正文评论区上方显示 Bangumi 角色 / CV 横栏。</span>
+            </label>
+            <div class="biligumi-settings-help">关闭后只隐藏正文横栏，右侧 Bangumi 面板不受影响。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-subject-info-panel" ${state.subjectInfoPanelEnabled ? "checked" : ""}>
+              <span>在 Bilibili 正文显示 Bangumi 风格条目信息栏。</span>
+            </label>
+            <div class="biligumi-settings-help">默认关闭；会显示封面和公开 infobox 字段，并尽量解析 Bangumi 页面补全制作人员链接。</div>
+            <div class="biligumi-settings-help warning">注意：此功能会对界面排版进行大量更改，并且带来一定性能开销。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-official-bangumi-layout" ${state.officialBangumiLayoutEnabled ? "checked" : ""}>
+              <span>实验兼容 Bilibili 官方番剧页右侧布局，把 PV / 相关推荐列表下移给面板让位。</span>
+            </label>
+            <div class="biligumi-settings-help">官方源不是推荐使用场景；如果页面布局异常，可以关闭这个开关。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label for="biligumi-auto-watch-threshold">自动标记本集已看</label>
+            <div class="biligumi-threshold-line">
+              <input id="biligumi-auto-watch-threshold" type="range" min="10" max="100" step="10" data-role="settings-auto-watch-threshold" value="${autoWatchThreshold}">
+              <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
+            </div>
+            <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟并越过标准线时不会触发。</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
@@ -1656,8 +2688,12 @@
         </div>
         <div class="biligumi-edit-row">
           <div class="biligumi-settings-field">
-            <label for="biligumi-edit-comment">吐槽</label>
-            <textarea id="biligumi-edit-comment" data-role="edit-comment">${escapeHtml(comment)}</textarea>
+            <label class="biligumi-comment-label" for="biligumi-edit-comment">
+              <span>吐槽</span>
+              <span class="biligumi-comment-count" data-role="edit-comment-count"></span>
+            </label>
+            <textarea id="biligumi-edit-comment" data-role="edit-comment" maxlength="${COLLECTION_COMMENT_MAX_LENGTH}">${escapeHtml(comment)}</textarea>
+            <div class="biligumi-settings-help">最多 ${COLLECTION_COMMENT_MAX_LENGTH} 字。</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
@@ -1991,6 +3027,7 @@
     state.error = "";
     state.busy = false;
     render();
+    checkAutoWatchProgress().catch(showError);
   }
 
   function ensureNonMainPreviewSearch(keyword) {
@@ -2063,6 +3100,15 @@
 
   async function bindSubject(subjectId) {
     state.subjectId = subjectId;
+    state.subjectInfoLinks = {};
+    state.characters = [];
+    state.characterError = "";
+    state.previewSubject = null;
+    state.previewCharacters = [];
+    state.previewCharacterError = "";
+    state.previewCharacterKey = "";
+    state.previewCharacterBusy = false;
+    state.previewCharacterFailedKey = "";
     for (const key of getBindingKeysForCurrentPage()) {
       state.bindings[key] = subjectId;
     }
@@ -2086,11 +3132,22 @@
     writeJsonValue(STORAGE.bindings, state.bindings);
     state.subjectId = null;
     state.subject = null;
+    state.subjectInfoLinks = {};
+    state.characters = [];
+    state.characterError = "";
+    state.previewSubject = null;
+    state.previewCharacters = [];
+    state.previewCharacterError = "";
+    state.previewCharacterKey = "";
+    state.previewCharacterBusy = false;
+    state.previewCharacterFailedKey = "";
     state.collection = null;
     state.episodes = [];
     state.episodeCollections = [];
     state.message = "已解除当前 B站页面和 Bangumi 条目的绑定。";
     state.error = "";
+    removeSubjectInfoPanel();
+    removeCharacterStrip();
     render();
   }
 
@@ -2123,35 +3180,45 @@
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot) {
     setBusy("正在读取 Bangumi 数据...");
     const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId) : "";
-    const [subject, episodes, collection, episodeCollections] = await Promise.all([
+    const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
       bgmRequest(`/v0/subjects/${subjectId}`),
       bgmRequest(`/v0/episodes?subject_id=${subjectId}&type=0&limit=200`),
+      loadSubjectCharacters(subjectId),
       collectionPath ? bgmRequest(collectionPath, { auth: true, allow404: true }) : Promise.resolve(null),
       tokenSnapshot ? bgmRequest(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
     ]);
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
+    state.subjectInfoLinks = {};
     state.episodes = episodes.data || [];
+    state.characters = charactersResult.characters;
+    state.characterError = charactersResult.error;
     state.collection = mergePendingCollection(collection);
     state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
     state.message = state.token ? "已同步 Bangumi 数据。" : "未设置 Access Token，只能查看公开条目信息。";
     state.error = "";
     state.busy = false;
     render();
+    refreshSubjectInfoLinksInBackground(subjectId);
   }
 
   async function loadSubjectBundlePreservingLocal(localCollection) {
     const optimistic = localCollection ? { ...localCollection } : null;
     if (!state.subjectId) return;
-    const collectionPath = state.token ? await getCollectionReadPath(state.subjectId) : "";
-    const [subject, episodes, collection, episodeCollections] = await Promise.all([
-      bgmRequest(`/v0/subjects/${state.subjectId}`),
-      bgmRequest(`/v0/episodes?subject_id=${state.subjectId}&type=0&limit=200`),
+    const subjectId = state.subjectId;
+    const collectionPath = state.token ? await getCollectionReadPath(subjectId) : "";
+    const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
+      bgmRequest(`/v0/subjects/${subjectId}`),
+      bgmRequest(`/v0/episodes?subject_id=${subjectId}&type=0&limit=200`),
+      loadSubjectCharacters(subjectId),
       collectionPath ? bgmRequest(collectionPath, { auth: true, allow404: true }) : Promise.resolve(null),
-      state.token ? bgmRequest(`/v0/users/-/collections/${state.subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
+      state.token ? bgmRequest(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
     ]);
     state.subject = subject;
+    state.subjectInfoLinks = {};
     state.episodes = episodes.data || [];
+    state.characters = charactersResult.characters;
+    state.characterError = charactersResult.error;
     state.collection = mergePendingCollection(collection);
     state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
     if (optimistic && (!state.collection || Number(state.collection.rate || 0) !== Number(optimistic.rate || 0))) {
@@ -2160,6 +3227,84 @@
     state.busy = false;
     state.error = "";
     render();
+    refreshSubjectInfoLinksInBackground(subjectId);
+    checkAutoWatchProgress().catch(showError);
+  }
+
+  async function loadSubjectCharacters(subjectId) {
+    try {
+      const apiResponse = await bgmRequest(`/v0/subjects/${subjectId}/characters`, { dedup: true });
+      const characters = Array.isArray(apiResponse) ? apiResponse : [];
+      return { characters: sortCharactersLikeBangumi(characters), error: "" };
+    } catch (error) {
+      return {
+        characters: [],
+        error: error && error.message ? error.message : "角色信息读取失败",
+      };
+    }
+  }
+
+  async function loadSubjectInfoLinks(subjectId) {
+    if (!state.subjectInfoPanelEnabled || !subjectId) return {};
+    const key = String(subjectId);
+    if (subjectInfoLinkCache.has(key)) return subjectInfoLinkCache.get(key);
+    if (subjectInfoLinkRequests.has(key)) return subjectInfoLinkRequests.get(key);
+    const promise = bgmWebRequest(`/subject/${encodeURIComponent(key)}`)
+      .then(parseSubjectInfoLinks)
+      .catch(() => ({}))
+      .then((links) => {
+        subjectInfoLinkCache.set(key, links);
+        return links;
+      })
+      .finally(() => subjectInfoLinkRequests.delete(key));
+    subjectInfoLinkRequests.set(key, promise);
+    return promise;
+  }
+
+  function refreshSubjectInfoLinksInBackground(subjectId) {
+    if (!state.subjectInfoPanelEnabled || !subjectId) return;
+    const expectedSubjectId = Number(subjectId);
+    loadSubjectInfoLinks(subjectId)
+      .then((links) => {
+        if (Number(state.subjectId) !== expectedSubjectId) return;
+        state.subjectInfoLinks = links || {};
+        syncSubjectInfoPanel();
+      })
+      .catch(() => {});
+  }
+
+  function parseSubjectInfoLinks(html) {
+    const links = {};
+    const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
+    const anchors = doc.querySelectorAll("#infobox a[href], .infobox a[href]");
+    anchors.forEach((anchor) => {
+      const text = normalizeSubjectInfoLinkText(anchor.textContent || "");
+      const href = getSubjectInfoHref(anchor.getAttribute("href") || "");
+      if (text && href && !links[text]) links[text] = href;
+    });
+    return links;
+  }
+
+  function sortCharactersLikeBangumi(characters) {
+    return [...characters]
+      .map((character, index) => {
+        return { character, index, rank: getCharacterRelationRank(character && character.relation) };
+      })
+      .sort((a, b) => {
+        if (a.rank !== b.rank) return a.rank - b.rank;
+        return a.index - b.index;
+      })
+      .map((entry) => entry.character);
+  }
+
+  function getCharacterRelationRank(relation) {
+    const text = String(relation || "");
+    if (text.includes("主")) return 0;
+    if (text.includes("配")) return 1;
+    if (text.includes("客串")) return 2;
+    if (text.includes("旁白")) return 3;
+    if (text.includes("闲") || text.includes("路人")) return 4;
+    return 2;
   }
 
   function mergePendingCollection(collection) {
@@ -2380,6 +3525,123 @@
     render();
   }
 
+  function bindAutoWatchProgressEvents() {
+    if (window.__biligumiAutoWatchEventsBound) return;
+    window.__biligumiAutoWatchEventsBound = true;
+    ["timeupdate", "playing", "loadedmetadata", "durationchange"].forEach((eventName) => {
+      document.addEventListener(eventName, () => {
+        checkAutoWatchProgress().catch(showError);
+      }, true);
+    });
+    document.addEventListener("seeking", (event) => {
+      const video = event.target && event.target.tagName === "VIDEO" ? event.target : null;
+      if (video) state.autoWatchSeekStartTime = Number(video.currentTime) || 0;
+    }, true);
+    document.addEventListener("seeked", (event) => {
+      const video = event.target && event.target.tagName === "VIDEO" ? event.target : null;
+      if (video) handleAutoWatchSeekEnd(video);
+      checkAutoWatchProgress().catch(showError);
+    }, true);
+    window.setInterval(() => {
+      checkAutoWatchProgress().catch(showError);
+    }, 5000);
+  }
+
+  async function checkAutoWatchProgress() {
+    if (!state.token || !state.subjectId || !hasCollection() || state.autoEpisodeSyncing) return;
+    const currentEpisode = getCurrentNormalEpisode();
+    if (!currentEpisode || getEpisodeCollectionType(currentEpisode.id) === 2) return;
+    const video = getActiveVideoElement();
+    if (!video) return;
+    const duration = Number(video.duration);
+    const currentTime = Number(video.currentTime);
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime) || currentTime <= 0) return;
+    const watchedPercent = Math.floor((currentTime / duration) * 100);
+    const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
+    updateAutoWatchJumpState(video, syncKey, watchedPercent);
+    if (watchedPercent < getAutoWatchThreshold()) return;
+    if (state.autoWatchBlockedKey === syncKey) return;
+    if (state.autoEpisodeSyncLastKey === syncKey) return;
+
+    state.autoEpisodeSyncing = true;
+    state.autoEpisodeSyncLastKey = syncKey;
+    try {
+      await patchEpisodes([Number(currentEpisode.id)], 2, "", false);
+      applySingleEpisodeProgress(Number(currentEpisode.id), 2);
+      state.busy = false;
+      state.message = `已自动标记第 ${formatEpisodeSort(Number(currentEpisode.sort))} 集看过。`;
+      state.error = "";
+      render();
+      window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+    } catch (error) {
+      state.autoEpisodeSyncLastKey = "";
+      throw error;
+    } finally {
+      state.autoEpisodeSyncing = false;
+    }
+  }
+
+  function getActiveVideoElement() {
+    return Array.from(document.querySelectorAll("video"))
+      .filter((video) => {
+        const rect = video.getBoundingClientRect();
+        return video.readyState > 0 && rect.width > 120 && rect.height > 80;
+      })
+      .sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight))[0] || null;
+  }
+
+  function handleAutoWatchSeekEnd(video) {
+    const start = Number(state.autoWatchSeekStartTime);
+    const end = Number(video.currentTime);
+    state.autoWatchSeekStartTime = null;
+    if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    const currentEpisode = getCurrentNormalEpisode();
+    if (!currentEpisode) return;
+    const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
+    const duration = Number(video.duration);
+    const threshold = getAutoWatchThreshold();
+    const watchedPercent = Number.isFinite(duration) && duration > 0 ? Math.floor((end / duration) * 100) : 0;
+    if (end - start >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS && watchedPercent >= threshold) {
+      state.autoWatchBlockedKey = syncKey;
+    }
+  }
+
+  function updateAutoWatchJumpState(video, syncKey, watchedPercent) {
+    const currentTime = Number(video.currentTime);
+    if (!Number.isFinite(currentTime)) return;
+    if (state.autoWatchLastVideoKey && state.autoWatchLastVideoKey !== syncKey) {
+      state.autoWatchBlockedKey = "";
+      state.autoWatchSeekStartTime = null;
+    }
+    const lastTime = state.autoWatchLastVideoKey === syncKey ? Number(state.autoWatchLastVideoTime) : 0;
+    const jumpedForward = lastTime > 0 && currentTime - lastTime >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS;
+    if (jumpedForward && watchedPercent >= getAutoWatchThreshold()) {
+      state.autoWatchBlockedKey = syncKey;
+    } else if (state.autoWatchBlockedKey === syncKey && watchedPercent < getAutoWatchThreshold()) {
+      state.autoWatchBlockedKey = "";
+    }
+    state.autoWatchLastVideoKey = syncKey;
+    state.autoWatchLastVideoTime = currentTime;
+  }
+
+  function getCurrentNormalEpisode() {
+    const currentNo = Number(state.currentEpisodeNo);
+    if (!Number.isFinite(currentNo)) return null;
+    return getNormalEpisodes().find((ep) => Number(ep.sort) === currentNo) || null;
+  }
+
+  function applySingleEpisodeProgress(episodeId, type) {
+    const byId = new Map(getNormalEpisodes().map((ep) => [Number(ep.id), ep]));
+    const episode = byId.get(Number(episodeId));
+    if (!episode) return;
+    const existing = state.episodeCollections.find((entry) => entry.episode && Number(entry.episode.id) === Number(episodeId));
+    if (existing) {
+      existing.type = type;
+    } else {
+      state.episodeCollections.push({ episode, type, updated_at: 0 });
+    }
+  }
+
   function openSettings() {
     state.settingsOpen = true;
     state.collectionEditorOpen = false;
@@ -2398,16 +3660,26 @@
     const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
     const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
     const nonMainPreviewInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-non-main-preview']`);
+    const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
+    const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
+    const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
+    const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
     const nextNonMainPreviewEnabled = Boolean(nonMainPreviewInput && nonMainPreviewInput.checked);
+    const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
+    const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
+    const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
+    const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     if (nextToken !== state.token) {
       state.username = "";
       pendingRequests.clear();
     }
     state.token = nextToken;
+    state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
     const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
     state.whitelist = parsedWhitelist.items;
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
+    setAutoWatchThreshold(nextAutoWatchThreshold);
     if (nextNonMainPreviewEnabled !== state.nonMainPreviewEnabled) {
       state.nonMainPreviewEnabled = nextNonMainPreviewEnabled;
       state.nonMainKeyword = "";
@@ -2417,10 +3689,22 @@
       state.nonMainSearched = false;
       state.nonMainSearchSeq += 1;
     }
+    if (nextCharacterStripEnabled !== state.characterStripEnabled) {
+      state.characterStripEnabled = nextCharacterStripEnabled;
+      if (!state.characterStripEnabled) removeCharacterStrip();
+    }
+    if (nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled) {
+      state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
+      if (!state.subjectInfoPanelEnabled) removeSubjectInfoPanel();
+    }
     writeValue(STORAGE.token, state.token);
     writeListValue(STORAGE.whitelist, state.whitelist);
     writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
     writeValue(STORAGE.nonMainPreview, state.nonMainPreviewEnabled ? "1" : "0");
+    writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
+    writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
+    writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
+    writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
     state.settingsOpen = false;
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
@@ -2450,11 +3734,15 @@
     const tagsInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-tags']`);
     const commentInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-comment']`);
     const privateInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-private']`);
+    const comment = String(commentInput && commentInput.value || "");
+    if (comment.length > COLLECTION_COMMENT_MAX_LENGTH) {
+      throw new Error(`吐槽最多 ${COLLECTION_COMMENT_MAX_LENGTH} 字，当前 ${comment.length} 字。`);
+    }
     const payload = {
       type: Number(typeInput && typeInput.value) || getCollectionType(),
       rate: Math.max(0, Math.min(10, Math.round(Number(rateInput && rateInput.value) || 0))),
       tags: parseTags(tagsInput && tagsInput.value),
-      comment: String(commentInput && commentInput.value || ""),
+      comment,
       private: Boolean(privateInput && privateInput.checked),
     };
     const hadCollection = hasCollection();
@@ -2486,23 +3774,52 @@
 
   function bindModalEvents(wrapper) {
     const editStars = wrapper.querySelector("[data-role='edit-rate-stars']");
-    if (!editStars) return;
-    editStars.addEventListener("mouseover", (event) => {
-      const star = event.target.closest("[data-action='edit-rate'][data-rate]");
-      if (star) previewEditorRate(Number(star.dataset.rate));
-    });
-    editStars.addEventListener("focusin", (event) => {
-      const star = event.target.closest("[data-action='edit-rate'][data-rate]");
-      if (star) previewEditorRate(Number(star.dataset.rate));
-    });
-    editStars.addEventListener("mouseout", (event) => {
-      if (event.relatedTarget && editStars.contains(event.relatedTarget)) return;
-      restoreEditorRatePreview();
-    });
-    editStars.addEventListener("focusout", (event) => {
-      if (event.relatedTarget && editStars.contains(event.relatedTarget)) return;
-      restoreEditorRatePreview();
-    });
+    if (editStars) {
+      editStars.addEventListener("mouseover", (event) => {
+        const star = event.target.closest("[data-action='edit-rate'][data-rate]");
+        if (star) previewEditorRate(Number(star.dataset.rate));
+      });
+      editStars.addEventListener("focusin", (event) => {
+        const star = event.target.closest("[data-action='edit-rate'][data-rate]");
+        if (star) previewEditorRate(Number(star.dataset.rate));
+      });
+      editStars.addEventListener("mouseout", (event) => {
+        if (event.relatedTarget && editStars.contains(event.relatedTarget)) return;
+        restoreEditorRatePreview();
+      });
+      editStars.addEventListener("focusout", (event) => {
+        if (event.relatedTarget && editStars.contains(event.relatedTarget)) return;
+        restoreEditorRatePreview();
+      });
+    }
+
+    const commentInput = wrapper.querySelector("[data-role='edit-comment']");
+    if (commentInput) {
+      commentInput.addEventListener("input", () => updateCollectionCommentCounter(wrapper));
+      updateCollectionCommentCounter(wrapper);
+    }
+
+    const autoWatchThresholdInput = wrapper.querySelector("[data-role='settings-auto-watch-threshold']");
+    if (autoWatchThresholdInput) {
+      autoWatchThresholdInput.addEventListener("input", () => updateAutoWatchThresholdPreview(wrapper));
+      updateAutoWatchThresholdPreview(wrapper);
+    }
+  }
+
+  function updateCollectionCommentCounter(wrapper) {
+    const commentInput = wrapper.querySelector("[data-role='edit-comment']");
+    const count = wrapper.querySelector("[data-role='edit-comment-count']");
+    if (!commentInput || !count) return;
+    const remaining = COLLECTION_COMMENT_MAX_LENGTH - String(commentInput.value || "").length;
+    count.textContent = `剩余 ${remaining}`;
+    count.classList.toggle("warning", remaining <= 20);
+  }
+
+  function updateAutoWatchThresholdPreview(wrapper) {
+    const input = wrapper.querySelector("[data-role='settings-auto-watch-threshold']");
+    const value = wrapper.querySelector("[data-role='settings-auto-watch-threshold-value']");
+    if (!input || !value) return;
+    value.textContent = `${normalizeAutoWatchThreshold(input.value)}%`;
   }
 
   function removeModal() {
@@ -2709,6 +4026,10 @@
     return match ? match[0] : url.pathname;
   }
 
+  function isOfficialBangumiPage() {
+    return /\/bangumi\/play\//i.test(location.pathname);
+  }
+
   function getStableBiliSubjectKey() {
     const initial = window.__INITIAL_STATE__ || {};
     const mediaInfo = initial.mediaInfo || initial.media_info || {};
@@ -2818,7 +4139,44 @@
 
   function getPreferredWhitelistCandidate() {
     const owner = getPageOwnerInfo();
-    return String(owner.mid || owner.uid || sanitizeWhitelistToken(owner.name) || "").trim();
+    return String(
+      owner.mid
+      || owner.uid
+      || sanitizeWhitelistToken(owner.name)
+      || getStableBiliSubjectKey()
+      || getCurrentRouteKey()
+      || ""
+    ).trim();
+  }
+
+  function getAutoWatchScopeKey() {
+    return normalizeWhitelistToken(getPreferredWhitelistCandidate())
+      || normalizeWhitelistToken(getStableBiliSubjectKey())
+      || normalizeWhitelistToken(getCurrentRouteKey())
+      || "default";
+  }
+
+  function getAutoWatchScopeLabel() {
+    const preferred = getPreferredWhitelistCandidate();
+    if (preferred) return getDisplayNameForWhitelistCandidate(preferred);
+    return getStableBiliSubjectKey() || getCurrentRouteKey() || "默认";
+  }
+
+  function getAutoWatchThreshold() {
+    return normalizeAutoWatchThreshold(state.autoWatchThresholds[getAutoWatchScopeKey()]);
+  }
+
+  function setAutoWatchThreshold(value) {
+    state.autoWatchThresholds = {
+      ...(state.autoWatchThresholds || {}),
+      [getAutoWatchScopeKey()]: normalizeAutoWatchThreshold(value),
+    };
+  }
+
+  function normalizeAutoWatchThreshold(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return 50;
+    return Math.max(10, Math.min(100, Math.round(raw / 10) * 10));
   }
 
   function getWhitelistHint() {
@@ -2831,15 +4189,15 @@
     const token = String(candidate || "").trim();
     if (!token) return "";
     const owner = getPageOwnerInfo();
-    const name = cleanOwnerName(owner.name || owner.username || getWhitelistLabel(token));
+    const name = cleanOwnerName(owner.name || owner.username || getOfficialBangumiWhitelistLabel() || getWhitelistLabel(token));
     return name && name !== token ? `${name}（${token}）` : token;
   }
 
   function updateCurrentWhitelistLabel(preferredToken = "") {
     const owner = getPageOwnerInfo();
-    const label = cleanOwnerName(owner.name || owner.username || "");
+    const label = cleanOwnerName(owner.name || owner.username || getOfficialBangumiWhitelistLabel());
     if (!label) return;
-    const ownerTokens = [owner.mid, owner.uid, preferredToken]
+    const ownerTokens = [owner.mid, owner.uid, preferredToken, getStableBiliSubjectKey(), getCurrentRouteKey()]
       .map((value) => String(value || "").trim())
       .filter(Boolean);
     if (!ownerTokens.length) return;
@@ -2858,6 +4216,11 @@
       state.whitelistLabels = pruneWhitelistLabels(nextLabels, state.whitelist);
       writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
     }
+  }
+
+  function getOfficialBangumiWhitelistLabel() {
+    if (!isOfficialBangumiPage()) return "";
+    return cleanTitle(getSeriesTitle() || getPageTitle() || document.title);
   }
 
   function getWhitelistLabel(item) {
@@ -3174,6 +4537,7 @@
   function normalizeTitleText(title) {
     return String(title || "")
       .replace(/_哔哩哔哩_bilibili.*$/i, "")
+      .replace(/\s*-\s*(?:番剧|番劇|国创|國創|动漫|動畫|动画|全集|高清|独家|獨家|在线观看|線上觀看)(?:\s*-\s*[^-]+)*\s*-\s*(?:bilibili|哔哩哔哩|嗶哩嗶哩).*$/i, "")
       .replace(/\s*-\s*哔哩哔哩.*$/i, "")
       .replace(/[~～〜－–—―|｜·・•、，,;；:：]+/g, " ")
       .replace(/\s+/g, " ")
@@ -3256,7 +4620,7 @@
   }
 
   function getInlineAutoPreviewKeyword() {
-    if (!isWhitelistedPage() || state.subjectId || state.subject) return "";
+    if (!(isWhitelistedPage() || shouldAutoShowOfficialBangumiPanel()) || state.subjectId || state.subject) return "";
     return suggestSearchKeyword();
   }
 
@@ -3303,6 +4667,7 @@
       ".episode-list .active",
       ".ep-list .active",
       ".list-box .on",
+      "[class*='eplist'][class*='active']",
       "[class*='episode'][class*='active']",
       "[class*='Episode'][class*='active']",
       "[class*='playing']",
