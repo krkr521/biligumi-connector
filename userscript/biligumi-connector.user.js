@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.3
+// @version      0.5.4
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.3";
+  const SCRIPT_VERSION = "0.5.4";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -2908,12 +2908,13 @@
           <span class="biligumi-progress-summary">${escapeHtml(progress.summary)}</span>
         </div>
         <div class="biligumi-episode-grid">
-          ${episodes.map((ep) => {
-            const sort = Number(ep.sort);
+          ${episodes.map((ep, index) => {
             const episodeId = Number(ep.id) || 0;
             const done = getEpisodeCollectionType(ep.id) === 2;
-            const current = state.currentEpisodeNo && sort === state.currentEpisodeNo;
-            return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(sort))}</button>`;
+            const localNo = index + 1;
+            const current = isCurrentEpisodeNumber(ep, localNo, episodes.length);
+            const title = getEpisodeButtonTitle(ep, localNo);
+            return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}" title="${escapeHtml(title)}">${escapeHtml(formatEpisodeSort(localNo))}</button>`;
           }).join("")}
         </div>
         <div class="biligumi-progress-edit">
@@ -3681,7 +3682,7 @@
       await patchEpisodes([Number(currentEpisode.id)], 2, "", false);
       applySingleEpisodeProgress(Number(currentEpisode.id), 2);
       state.busy = false;
-      state.message = `已自动标记第 ${formatEpisodeSort(Number(currentEpisode.sort))} 集看过。`;
+      state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeLocalNo(currentEpisode))} 集看过。`;
       state.error = "";
       render();
       window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
@@ -3739,7 +3740,8 @@
   function getCurrentNormalEpisode() {
     const currentNo = Number(state.currentEpisodeNo);
     if (!Number.isFinite(currentNo)) return null;
-    return getNormalEpisodes().find((ep) => Number(ep.sort) === currentNo) || null;
+    const episodes = getNormalEpisodes();
+    return episodes.find((ep, index) => isCurrentEpisodeNumber(ep, index + 1, episodes.length)) || null;
   }
 
   function applySingleEpisodeProgress(episodeId, type) {
@@ -4940,6 +4942,27 @@
     return state.episodes
       .filter((ep) => Number(ep.type) === 0)
       .sort((a, b) => Number(a.sort) - Number(b.sort));
+  }
+
+  function getEpisodeLocalNo(episode, episodes = getNormalEpisodes()) {
+    const index = episodes.findIndex((ep) => Number(ep.id) === Number(episode && episode.id));
+    return index >= 0 ? index + 1 : Number(episode && episode.sort) || 0;
+  }
+
+  function isCurrentEpisodeNumber(episode, localNo, total) {
+    const currentNo = Number(state.currentEpisodeNo);
+    if (!Number.isFinite(currentNo) || currentNo <= 0) return false;
+    if (currentNo <= Number(total || 0)) return Number(localNo) === currentNo;
+    return Number(episode && episode.sort) === currentNo;
+  }
+
+  function getEpisodeButtonTitle(episode, localNo) {
+    const sort = Number(episode && episode.sort);
+    const name = String(episode && (episode.name_cn || episode.name || "") || "").trim();
+    const parts = [`第 ${formatEpisodeSort(localNo)} 集`];
+    if (Number.isFinite(sort) && sort !== Number(localNo)) parts.push(`Bangumi ep.${formatEpisodeSort(sort)}`);
+    if (name) parts.push(name);
+    return parts.join(" · ");
   }
 
   function getEpisodeCollectionType(episodeId) {

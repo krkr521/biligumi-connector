@@ -2,7 +2,7 @@
 
 把 Bangumi 的收藏状态、评分、观看进度和条目补充信息嵌入 Bilibili 网页端播放页。
 
-当前脚本版本：`0.5.3`。
+当前脚本版本：`0.5.4`。
 
 这是一个非官方 Tampermonkey / Violentmonkey userscript 原型，目标先验证三件事：
 
@@ -61,6 +61,7 @@ Access Token 可以在 Bangumi 官方页面生成：
 - Bilibili 页面结构经常变化，右侧栏选择器可能需要按真实页面继续适配。
 - 合作投稿、创作团队、简介 `@` 提及等 DOM 结构比较复杂，UP 主识别已做多层兜底，但仍可能需要按真实页面继续修正。
 - Bilibili 番剧页的当前集数会优先读取页面激活选集和标题，但复杂分集命名仍可能需要人工确认。
+- 多季度番剧如果 Bangumi 章节编号使用全系列累计数，面板会按本季内序号显示和匹配当前集，同时在悬浮提示里保留 Bangumi 原始 ep 编号。
 - 章节进度走 Bangumi `/v0/users/-/collections/{subject_id}/episodes`，如果 Bangumi API 返回具体错误，面板会直接显示出来。
 - 还没有接入 Bilibili API，也没有做播放完成后自动同步。
 - 角色 / CV 横栏依赖 Bangumi 条目角色接口，官方番剧页未绑定时会额外做一次轻量搜索预览，失败时不会反复重试。
