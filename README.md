@@ -2,7 +2,7 @@
 
 把 Bangumi 的收藏状态、评分、观看进度和条目补充信息嵌入 Bilibili 网页端播放页。
 
-当前脚本版本：`0.4.5`。
+当前脚本版本：`0.5.1`。
 
 这是一个非官方 Tampermonkey / Violentmonkey userscript 原型，目标先验证三件事：
 

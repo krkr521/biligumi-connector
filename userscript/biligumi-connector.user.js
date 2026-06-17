@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.4.5
+// @version      0.5.1
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.4.5";
+  const SCRIPT_VERSION = "0.5.1";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -1796,7 +1796,8 @@
 
     panel.className = `biligumi-panel${state.panelCollapsed ? " biligumi-panel-collapsed" : ""}`;
     const progress = getProgressInfo();
-    const bangumiUrl = state.subjectId ? `${BGM_WEB_BASE}/subject/${state.subjectId}` : `${BGM_WEB_BASE}/`;
+    const safeSubjectId = Number(state.subjectId) || 0;
+    const bangumiUrl = safeSubjectId ? `${BGM_WEB_BASE}/subject/${safeSubjectId}` : `${BGM_WEB_BASE}/`;
     const subjectName = state.subject ? displaySubjectName(state.subject) : "Bangumi";
     const footerLink = state.subjectId
       ? `<a href="${bangumiUrl}" target="_blank" rel="noreferrer">打开 Bangumi</a>`
@@ -1981,7 +1982,8 @@
     const rows = getSubjectInfoRows();
     const isOfficialCompact = isOfficialBangumiPage();
     const subjectName = state.subject ? displaySubjectName(state.subject) : "Bangumi";
-    const bangumiUrl = `${BGM_WEB_BASE}/subject/${state.subjectId}`;
+    const safeSubjectId = Number(state.subjectId) || 0;
+    const bangumiUrl = `${BGM_WEB_BASE}/subject/${safeSubjectId}`;
     const image = getBestSubjectCover(state.subject);
     const body = rows.length
       ? rows.map(renderSubjectInfoRow).join("")
@@ -2334,7 +2336,8 @@
     const subject = getCharacterStripSubject();
     const subjectId = getCharacterStripSubjectId();
     const subjectName = subject ? displaySubjectName(subject) : "Bangumi";
-    const bangumiCharactersUrl = `${BGM_WEB_BASE}/subject/${subjectId}/characters`;
+    const safeSubjectId = Number(subjectId) || 0;
+    const bangumiCharactersUrl = `${BGM_WEB_BASE}/subject/${safeSubjectId}/characters`;
     const characters = getDisplayCharacters();
     const body = characters.length
       ? `<div class="biligumi-character-list">${characters.map(renderCharacterCard).join("")}</div>`
@@ -2371,17 +2374,21 @@
   function renderCharacterCard(character) {
     const actor = Array.isArray(character.actors) ? character.actors[0] : null;
     const image = getBestCharacterImage(character);
-    const characterUrl = `${BGM_WEB_BASE}/character/${character.id}`;
+    const characterId = Number(character.id) || 0;
+    const characterUrl = characterId ? `${BGM_WEB_BASE}/character/${characterId}` : "";
     const actorName = actor && actor.name ? String(actor.name) : "";
-    const actorUrl = actor && actor.id ? `${BGM_WEB_BASE}/person/${actor.id}` : "";
+    const actorId = Number(actor && actor.id) || 0;
+    const actorUrl = actorId ? `${BGM_WEB_BASE}/person/${actorId}` : "";
     return `
       <div class="biligumi-character-card" title="${escapeHtml(character.name)}">
-        <a href="${characterUrl}" target="_blank" rel="noreferrer">
+        ${characterUrl ? `<a href="${characterUrl}" target="_blank" rel="noreferrer">` : "<div>"}
           ${image
             ? `<img class="biligumi-character-cover" src="${escapeHtml(image)}" alt="${escapeHtml(character.name)}" loading="lazy">`
             : `<div class="biligumi-character-cover biligumi-character-placeholder">?</div>`}
-        </a>
-        <a class="biligumi-character-name" href="${characterUrl}" target="_blank" rel="noreferrer">${escapeHtml(character.name)}</a>
+        ${characterUrl ? "</a>" : "</div>"}
+        ${characterUrl
+          ? `<a class="biligumi-character-name" href="${characterUrl}" target="_blank" rel="noreferrer">${escapeHtml(character.name)}</a>`
+          : `<div class="biligumi-character-name">${escapeHtml(character.name)}</div>`}
         <div class="biligumi-character-relation">${escapeHtml(character.relation || "角色")}</div>
         <div class="biligumi-character-cv">CV ${actorUrl ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>` : escapeHtml(actorName || "未录入")}</div>
       </div>
@@ -2540,11 +2547,13 @@
   function renderNonMainCandidate(subject, options = {}) {
     const canBind = typeof options === "boolean" ? options : Boolean(options.canBind);
     const canOpen = typeof options === "boolean" ? true : options.canOpen !== false;
+    const subjectId = Number(subject && subject.id) || 0;
+    if (!subjectId) return "";
     const name = displaySubjectName(subject);
     const date = subject.date || "未知日期";
     const eps = subject.eps ? `${subject.eps} 话` : "话数未知";
-    const bindButton = canBind ? `<button class="biligumi-lite-bind" data-action="bind" data-subject-id="${subject.id}">绑定</button>` : "";
-    const openLink = canOpen ? `<a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subject.id}" target="_blank" rel="noreferrer">打开</a>` : "";
+    const bindButton = canBind ? `<button class="biligumi-lite-bind" data-action="bind" data-subject-id="${subjectId}">绑定</button>` : "";
+    const openLink = canOpen ? `<a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subjectId}" target="_blank" rel="noreferrer">打开</a>` : "";
     return `
       <div class="biligumi-lite-result">
         <div>
@@ -2706,6 +2715,8 @@
   }
 
   function renderSearchResult(subject) {
+    const subjectId = Number(subject && subject.id) || 0;
+    if (!subjectId) return "";
     const image = subject.images && (subject.images.grid || subject.images.small || subject.images.common);
     const name = displaySubjectName(subject);
     const date = subject.date || "未知日期";
@@ -2717,7 +2728,7 @@
           <div class="biligumi-result-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
           <div class="biligumi-result-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
         </div>
-        <button class="biligumi-button primary" data-action="bind" data-subject-id="${subject.id}">绑定</button>
+        <button class="biligumi-button primary" data-action="bind" data-subject-id="${subjectId}">绑定</button>
       </div>
     `;
   }
@@ -2843,9 +2854,10 @@
         <div class="biligumi-episode-grid">
           ${episodes.map((ep) => {
             const sort = Number(ep.sort);
+            const episodeId = Number(ep.id) || 0;
             const done = getEpisodeCollectionType(ep.id) === 2;
             const current = state.currentEpisodeNo && sort === state.currentEpisodeNo;
-            return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${ep.id}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(sort))}</button>`;
+            return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(sort))}</button>`;
           }).join("")}
         </div>
         <div class="biligumi-progress-edit">
@@ -2860,8 +2872,6 @@
   function bindPanelEvents() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
-
-    panel.addEventListener("click", handlePanelClick);
 
     const typeSelect = panel.querySelector("[data-role='subject-type']");
     if (typeSelect) {
@@ -3034,14 +3044,6 @@
     const searchKeyword = String(keyword || "").trim();
     if (!searchKeyword) return;
     if (state.nonMainKeyword === searchKeyword && (state.nonMainBusy || state.nonMainSearched || state.nonMainError)) return;
-    if (nonMainPreviewRequests.has(searchKeyword)) {
-      state.nonMainKeyword = searchKeyword;
-      state.nonMainBusy = true;
-      state.nonMainError = "";
-      render();
-      return;
-    }
-
     const seq = ++state.nonMainSearchSeq;
     state.nonMainKeyword = searchKeyword;
     state.nonMainBusy = true;
@@ -3179,13 +3181,14 @@
 
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot) {
     setBusy("正在读取 Bangumi 数据...");
-    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId) : "";
+    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
       bgmRequest(`/v0/subjects/${subjectId}`),
-      bgmRequest(`/v0/episodes?subject_id=${subjectId}&type=0&limit=200`),
+      bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }),
       loadSubjectCharacters(subjectId),
-      collectionPath ? bgmRequest(collectionPath, { auth: true, allow404: true }) : Promise.resolve(null),
-      tokenSnapshot ? bgmRequest(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
+      collectionPath ? bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }) : Promise.resolve(null),
+      tokenSnapshot ? bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }) : Promise.resolve(null),
     ]);
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
@@ -3205,15 +3208,18 @@
   async function loadSubjectBundlePreservingLocal(localCollection) {
     const optimistic = localCollection ? { ...localCollection } : null;
     if (!state.subjectId) return;
-    const subjectId = state.subjectId;
-    const collectionPath = state.token ? await getCollectionReadPath(subjectId) : "";
+    const subjectId = Number(state.subjectId);
+    const tokenSnapshot = state.token || "";
+    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
       bgmRequest(`/v0/subjects/${subjectId}`),
-      bgmRequest(`/v0/episodes?subject_id=${subjectId}&type=0&limit=200`),
+      bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }),
       loadSubjectCharacters(subjectId),
-      collectionPath ? bgmRequest(collectionPath, { auth: true, allow404: true }) : Promise.resolve(null),
-      state.token ? bgmRequest(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0&limit=1000`, { auth: true, allow404: true }) : Promise.resolve(null),
+      collectionPath ? bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }) : Promise.resolve(null),
+      tokenSnapshot ? bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }) : Promise.resolve(null),
     ]);
+    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
     state.subjectInfoLinks = {};
     state.episodes = episodes.data || [];
@@ -3321,15 +3327,16 @@
     return { ...(collection || {}), ...pending };
   }
 
-  async function getCollectionReadPath(subjectId = state.subjectId) {
-    const username = await getCurrentUsername();
+  async function getCollectionReadPath(subjectId = state.subjectId, tokenSnapshot = state.token || "") {
+    const username = await getCurrentUsername(tokenSnapshot);
     return username ? `/v0/users/${encodeURIComponent(username)}/collections/${subjectId}` : "";
   }
 
-  async function getCurrentUsername() {
-    if (!state.token) return "";
-    if (state.username) return state.username;
-    const me = await bgmRequest("/v0/me", { auth: true });
+  async function getCurrentUsername(tokenSnapshot = state.token || "") {
+    if (!tokenSnapshot) return "";
+    if (state.username && String(tokenSnapshot) === String(state.token || "")) return state.username;
+    const me = await bgmRequest("/v0/me", { auth: true, authToken: tokenSnapshot });
+    if (String(state.token || "") !== String(tokenSnapshot || "")) return "";
     state.username = me && me.username ? String(me.username) : "";
     return state.username;
   }
@@ -3875,11 +3882,12 @@
     const url = `${API_BASE}${path}`;
     const data = options.body ? JSON.stringify(options.body) : undefined;
     const shouldDedup = options.dedup === true || (options.dedup !== false && method === "GET");
-    const authKey = options.auth ? `auth:${state.token || ""}` : "public";
+    const authToken = options.authToken != null ? String(options.authToken || "") : String(state.token || "");
+    const authKey = options.auth ? `auth:${authToken}` : "public";
     const dedupKey = `${method} ${url} ${authKey} ${data || ""}`;
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
-    const promise = bgmRequestWithRetry(method, url, data, options);
+    const promise = bgmRequestWithRetry(method, url, data, { ...options, authToken });
     if (shouldDedup) {
       pendingRequests.set(dedupKey, promise);
       promise.then(() => {
@@ -3889,6 +3897,46 @@
       });
     }
     return promise;
+  }
+
+  async function bgmRequestPagedData(path, options = {}) {
+    const { pageSize = 100, ...requestOptions } = options;
+    const limit = Math.max(1, Math.min(1000, Number(pageSize) || 100));
+    let offset = 0;
+    let total = null;
+    const data = [];
+
+    for (;;) {
+      const response = await bgmRequest(appendQuery(path, { limit, offset }), requestOptions);
+      if (!response) break;
+      const pageData = Array.isArray(response.data) ? response.data : [];
+      data.push(...pageData);
+
+      const responseTotal = Number(response.total);
+      if (Number.isFinite(responseTotal)) total = responseTotal;
+      const responseLimit = Math.max(1, Number(response.limit) || limit);
+      const responseOffset = Math.max(0, Number(response.offset) || offset);
+
+      if (!pageData.length) break;
+      if (total != null && data.length >= total) break;
+      if (pageData.length < responseLimit && total == null) break;
+      offset = responseOffset + responseLimit;
+      if (offset <= responseOffset) break;
+    }
+
+    return {
+      data,
+      total: total == null ? data.length : total,
+      limit,
+      offset: 0,
+    };
+  }
+
+  function appendQuery(path, params) {
+    const query = Object.entries(params)
+      .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+      .join("&");
+    return `${path}${path.includes("?") ? "&" : "?"}${query}`;
   }
 
   async function bgmRequestWithRetry(method, url, data, options) {
@@ -3911,7 +3959,7 @@
       "Content-Type": "application/json",
       "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/local/biligumi-connector)`,
     };
-    if (options.auth) headers.Authorization = `Bearer ${state.token}`;
+    if (options.auth) headers.Authorization = `Bearer ${options.authToken != null ? options.authToken : state.token}`;
 
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
