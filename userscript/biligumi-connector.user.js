@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.1
+// @version      0.5.2
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.1";
+  const SCRIPT_VERSION = "0.5.2";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -4703,12 +4703,17 @@
   }
 
   function detectCurrentEpisodeNo(rawTitle) {
-    const activeText = getActiveEpisodeText();
-    return detectEpisodeNo(activeText) || detectEpisodeNo(rawTitle);
+    const titleEpisodeNo = detectEpisodeNo(rawTitle);
+    if (titleEpisodeNo) return titleEpisodeNo;
+    if (isNonMainEpisodeTitle(rawTitle)) return null;
+    return detectEpisodeNo(getActiveEpisodeText());
   }
 
   function getActiveEpisodeText() {
     const selectors = [
+      ".video-pod__item.active",
+      ".video-pod [class*='video-pod__item'][class*='active']",
+      ".video-pod [class*='base-item'][class*='active']",
       ".video-episode-card__info-playing",
       ".video-episode-card__info-title--active",
       ".cur-list .on",
@@ -4722,12 +4727,45 @@
     ];
     for (const selector of selectors) {
       const el = document.querySelector(selector);
-      const text = el && (el.getAttribute("title") || el.textContent || "").trim();
-      if (text && detectEpisodeNo(text)) return text;
+      const text = getActiveEpisodeNodeText(el);
+      if (text) return text;
     }
     const initial = window.__INITIAL_STATE__ || {};
     const epInfo = initial.epInfo || initial.ep_info || initial.epInfoV2 || {};
     return epInfo.long_title || epInfo.title || epInfo.share_copy || "";
+  }
+
+  function getActiveEpisodeNodeText(el) {
+    if (!el || !isVisible(el)) return "";
+    const candidates = [
+      el.getAttribute("title"),
+      el.getAttribute("aria-label"),
+    ];
+    const titleSelectors = [
+      ".title",
+      "[class*='title']",
+      "[class*='Title']",
+      "[class*='name']",
+      "[class*='Name']",
+    ];
+    for (const selector of titleSelectors) {
+      const nodes = Array.from(el.querySelectorAll(selector)).filter(isVisible).slice(0, 4);
+      for (const node of nodes) {
+        candidates.push(node.getAttribute("title"), node.getAttribute("aria-label"), node.textContent);
+      }
+    }
+    const rawText = el.textContent || "";
+    candidates.push(rawText, stripTrailingDurationText(rawText));
+    return candidates
+      .map((text) => String(text || "").replace(/\s+/g, " ").trim())
+      .find((text) => text && detectEpisodeNo(text)) || "";
+  }
+
+  function stripTrailingDurationText(text) {
+    return String(text || "")
+      .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
   }
 
   function displaySubjectName(subject) {
