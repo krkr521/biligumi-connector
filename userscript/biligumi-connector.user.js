@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.2
+// @version      0.5.3
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.2";
+  const SCRIPT_VERSION = "0.5.3";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -99,6 +99,7 @@
     subjectId: null,
     subject: null,
     subjectInfoLinks: {},
+    subjectInfoWebRows: [],
     characters: [],
     characterError: "",
     previewSubject: null,
@@ -639,6 +640,25 @@
     .biligumi-search-results {
       display: grid;
       gap: 6px;
+    }
+    .biligumi-search-results-head,
+    .biligumi-search-results-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .biligumi-search-results-head {
+      justify-content: space-between;
+      color: var(--bgm-muted);
+      font-size: 12px;
+    }
+    .biligumi-search-results-actions {
+      justify-content: flex-end;
+    }
+    .biligumi-search-results-actions .biligumi-button {
+      min-height: 26px;
+      padding: 2px 8px;
+      font-size: 12px;
     }
     .biligumi-result {
       display: grid;
@@ -1482,6 +1502,7 @@
     state.subjectId = getCurrentBinding();
     state.subject = null;
     state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
@@ -2032,9 +2053,29 @@
     const rows = infobox
       .filter((item) => item && item.key && item.value != null)
       .map((item) => ({ key: String(item.key), value: item.value }));
-    if (!isOfficialBangumiPage()) return rows;
-    const startIndex = rows.findIndex((item) => isDirectorInfoKey(item.key));
-    return startIndex >= 0 ? rows.slice(startIndex) : rows;
+    const mergedRows = mergeSubjectInfoRows(rows, state.subjectInfoWebRows || []);
+    if (!isOfficialBangumiPage()) return mergedRows;
+    const startIndex = mergedRows.findIndex((item) => isDirectorInfoKey(item.key));
+    return startIndex >= 0 ? mergedRows.slice(startIndex) : mergedRows;
+  }
+
+  function mergeSubjectInfoRows(apiRows, webRows) {
+    const rows = Array.isArray(apiRows) ? [...apiRows] : [];
+    const seenKeys = new Set(rows.map((item) => normalizeSubjectInfoKey(item && item.key)));
+    (Array.isArray(webRows) ? webRows : []).forEach((item) => {
+      const key = normalizeSubjectInfoKey(item && item.key);
+      if (!key || seenKeys.has(key) || item.value == null) return;
+      rows.push({ key: String(item.key), value: item.value });
+      seenKeys.add(key);
+    });
+    return rows;
+  }
+
+  function normalizeSubjectInfoKey(key) {
+    return String(key || "")
+      .replace(/[：:]\s*$/, "")
+      .replace(/\s+/g, "")
+      .trim();
   }
 
   function isDirectorInfoKey(key) {
@@ -2433,7 +2474,7 @@
             </div>
           </div>
           ${renderInlineAutoPreview()}
-          ${state.searchResults.length ? `<div class="biligumi-row biligumi-search-results">${state.searchResults.map(renderSearchResult).join("")}</div>` : ""}
+          ${renderSearchResults()}
           ${state.subjectId ? `<div class="biligumi-row"><button class="biligumi-button" data-action="unbind">解绑当前页面</button></div>` : ""}
         </div>
       `;
@@ -2714,6 +2755,21 @@
     `;
   }
 
+  function renderSearchResults() {
+    if (!state.searchResults.length) return "";
+    return `
+      <div class="biligumi-row biligumi-search-results">
+        <div class="biligumi-search-results-head">
+          <span>搜索结果</span>
+        </div>
+        ${state.searchResults.map(renderSearchResult).join("")}
+        <div class="biligumi-search-results-actions">
+          <button class="biligumi-button" data-action="clear-search">取消</button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderSearchResult(subject) {
     const subjectId = Number(subject && subject.id) || 0;
     if (!subjectId) return "";
@@ -2921,6 +2977,7 @@
     if (action === "refresh") loadSubjectBundle().catch(showError);
     if (action === "refresh-non-main") retryNonMainPreviewSearch();
     if (action === "search") searchSubjects().catch(showError);
+    if (action === "clear-search") clearSearchResults();
     if (action === "bind") bindSubject(Number(target.dataset.subjectId)).catch(showError);
     if (action === "unbind") unbindSubject();
     if (action === "edit-collection") openCollectionEditor();
@@ -3040,6 +3097,14 @@
     checkAutoWatchProgress().catch(showError);
   }
 
+  function clearSearchResults() {
+    state.searchResults = [];
+    state.message = "";
+    state.error = "";
+    state.busy = false;
+    render();
+  }
+
   function ensureNonMainPreviewSearch(keyword) {
     const searchKeyword = String(keyword || "").trim();
     if (!searchKeyword) return;
@@ -3103,6 +3168,7 @@
   async function bindSubject(subjectId) {
     state.subjectId = subjectId;
     state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
@@ -3135,6 +3201,7 @@
     state.subjectId = null;
     state.subject = null;
     state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
@@ -3193,6 +3260,7 @@
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
     state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
     state.characters = charactersResult.characters;
     state.characterError = charactersResult.error;
@@ -3222,6 +3290,7 @@
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
     state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
     state.characters = charactersResult.characters;
     state.characterError = charactersResult.error;
@@ -3250,17 +3319,17 @@
     }
   }
 
-  async function loadSubjectInfoLinks(subjectId) {
-    if (!state.subjectInfoPanelEnabled || !subjectId) return {};
+  async function loadSubjectInfoSupplement(subjectId) {
+    if (!state.subjectInfoPanelEnabled || !subjectId) return { links: {}, rows: [] };
     const key = String(subjectId);
     if (subjectInfoLinkCache.has(key)) return subjectInfoLinkCache.get(key);
     if (subjectInfoLinkRequests.has(key)) return subjectInfoLinkRequests.get(key);
     const promise = bgmWebRequest(`/subject/${encodeURIComponent(key)}`)
-      .then(parseSubjectInfoLinks)
-      .catch(() => ({}))
-      .then((links) => {
-        subjectInfoLinkCache.set(key, links);
-        return links;
+      .then(parseSubjectInfoSupplement)
+      .catch(() => ({ links: {}, rows: [] }))
+      .then((supplement) => {
+        subjectInfoLinkCache.set(key, supplement);
+        return supplement;
       })
       .finally(() => subjectInfoLinkRequests.delete(key));
     subjectInfoLinkRequests.set(key, promise);
@@ -3270,16 +3339,17 @@
   function refreshSubjectInfoLinksInBackground(subjectId) {
     if (!state.subjectInfoPanelEnabled || !subjectId) return;
     const expectedSubjectId = Number(subjectId);
-    loadSubjectInfoLinks(subjectId)
-      .then((links) => {
+    loadSubjectInfoSupplement(subjectId)
+      .then((supplement) => {
         if (Number(state.subjectId) !== expectedSubjectId) return;
-        state.subjectInfoLinks = links || {};
+        state.subjectInfoLinks = supplement && supplement.links ? supplement.links : {};
+        state.subjectInfoWebRows = supplement && Array.isArray(supplement.rows) ? supplement.rows : [];
         syncSubjectInfoPanel();
       })
       .catch(() => {});
   }
 
-  function parseSubjectInfoLinks(html) {
+  function parseSubjectInfoSupplement(html) {
     const links = {};
     const doc = new DOMParser().parseFromString(String(html || ""), "text/html");
     const anchors = doc.querySelectorAll("#infobox a[href], .infobox a[href]");
@@ -3288,7 +3358,42 @@
       const href = getSubjectInfoHref(anchor.getAttribute("href") || "");
       if (text && href && !links[text]) links[text] = href;
     });
-    return links;
+    return {
+      links,
+      rows: parseSubjectInfoWebRows(doc),
+    };
+  }
+
+  function parseSubjectInfoWebRows(doc) {
+    return Array.from(doc.querySelectorAll("#infobox li, .infobox li"))
+      .map(parseSubjectInfoWebRow)
+      .filter(Boolean);
+  }
+
+  function parseSubjectInfoWebRow(row) {
+    const tip = row.querySelector(".tip");
+    if (!tip) return null;
+    const key = String(tip.textContent || "").replace(/[：:]\s*$/, "").trim();
+    if (!key) return null;
+    const valueNode = row.cloneNode(true);
+    const valueTip = valueNode.querySelector(".tip");
+    if (valueTip) valueTip.remove();
+    const value = parseSubjectInfoWebValue(valueNode);
+    if (value == null || (Array.isArray(value) && !value.length)) return null;
+    return { key, value };
+  }
+
+  function parseSubjectInfoWebValue(valueNode) {
+    const anchors = Array.from(valueNode.querySelectorAll("a[href]"))
+      .map((anchor) => {
+        const text = normalizeSubjectInfoLinkText(anchor.textContent || "");
+        const href = getSubjectInfoHref(anchor.getAttribute("href") || "");
+        return text ? { v: text, href } : null;
+      })
+      .filter(Boolean);
+    if (anchors.length) return anchors;
+    const text = normalizeSubjectInfoLinkText(valueNode.textContent || "");
+    return text || null;
   }
 
   function sortCharactersLikeBangumi(characters) {
