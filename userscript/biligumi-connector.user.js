@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.6
+// @version      0.5.7
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.6";
+  const SCRIPT_VERSION = "0.5.7";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -36,6 +36,7 @@
     officialBangumiLayout: "biligumi.officialBangumiLayout",
     autoWatchThresholds: "biligumi.autoWatchThresholds",
     opedSkips: "biligumi.opedSkips",
+    opedSkipHotkey: "biligumi.opedSkipHotkey",
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
   };
@@ -88,6 +89,7 @@
   const REQUEST_RETRY_BASE_MS = 800;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
+  const DEFAULT_OPED_SKIP_HOTKEY = "Ctrl+Alt+ArrowRight";
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
 
   const state = {
@@ -127,6 +129,7 @@
     officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
     autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
     opedSkips: readJsonValue(STORAGE.opedSkips, {}),
+    opedSkipHotkey: normalizeHotkey(readValue(STORAGE.opedSkipHotkey, DEFAULT_OPED_SKIP_HOTKEY)),
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     nonMainResults: [],
@@ -2718,7 +2721,12 @@
               <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${opedSkipConfig.seconds}" ${state.subjectId ? "" : "disabled"}>
               <span class="biligumi-threshold-value">秒</span>
             </div>
+            <div class="biligumi-field">
+              <input id="biligumi-oped-skip-hotkey" data-role="settings-oped-skip-hotkey" value="${escapeHtml(formatHotkey(state.opedSkipHotkey))}" readonly placeholder="点击后按下快捷键">
+              <button class="biligumi-button" data-action="clear-oped-skip-hotkey">清空</button>
+            </div>
             <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
+            <div class="biligumi-settings-help">快捷键为全局设置，默认 Ctrl+Alt+→；点击输入框后直接按组合键录入。</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
@@ -3028,6 +3036,7 @@
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-save") saveSettings();
+    if (action === "clear-oped-skip-hotkey") clearOpedSkipHotkeyInput();
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
     if (action === "add-edit-tag") addEditorTag(target.dataset.tag || "");
     if (action === "add-whitelist") addCurrentPageToWhitelist();
@@ -3775,6 +3784,7 @@
     ["loadedmetadata", "durationchange", "playing"].forEach((eventName) => {
       document.addEventListener(eventName, scheduleRefresh, true);
     });
+    document.addEventListener("keydown", handleOpedSkipHotkey, true);
     window.setInterval(refreshOpedSkipButton, 2000);
     refreshOpedSkipButton();
   }
@@ -3842,6 +3852,17 @@
   function handleOpedSkipButtonKeydown(event) {
     if (event.key !== "Enter" && event.key !== " ") return;
     handleOpedSkipButtonClick(event);
+  }
+
+  function handleOpedSkipHotkey(event) {
+    if (event.repeat) return;
+    if (isCapturingOpedSkipHotkey(event.target) || isEditableTarget(event.target)) return;
+    const hotkey = getKeyboardEventHotkey(event);
+    if (!hotkey || hotkey !== state.opedSkipHotkey || !shouldShowOpedSkipButton()) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    skipOpedForActiveVideo();
   }
 
   function skipOpedForActiveVideo() {
@@ -3996,6 +4017,7 @@
     const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
     const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
     const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
+    const opedSkipHotkeyInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-hotkey']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
     const nextNonMainPreviewEnabled = Boolean(nonMainPreviewInput && nonMainPreviewInput.checked);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
@@ -4004,6 +4026,7 @@
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
     const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
+    const nextOpedSkipHotkey = normalizeHotkey(opedSkipHotkeyInput && opedSkipHotkeyInput.dataset.hotkey || opedSkipHotkeyInput && opedSkipHotkeyInput.value);
     if (nextToken !== state.token) {
       state.username = "";
       pendingRequests.clear();
@@ -4015,6 +4038,7 @@
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
     setAutoWatchThreshold(nextAutoWatchThreshold);
     if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
+    state.opedSkipHotkey = nextOpedSkipHotkey;
     if (nextNonMainPreviewEnabled !== state.nonMainPreviewEnabled) {
       state.nonMainPreviewEnabled = nextNonMainPreviewEnabled;
       state.nonMainKeyword = "";
@@ -4041,6 +4065,7 @@
     writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
     writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
     writeJsonValue(STORAGE.opedSkips, state.opedSkips);
+    writeValue(STORAGE.opedSkipHotkey, state.opedSkipHotkey);
     state.settingsOpen = false;
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
@@ -4140,6 +4165,18 @@
     if (autoWatchThresholdInput) {
       autoWatchThresholdInput.addEventListener("input", () => updateAutoWatchThresholdPreview(wrapper));
       updateAutoWatchThresholdPreview(wrapper);
+    }
+
+    const opedSkipHotkeyInput = wrapper.querySelector("[data-role='settings-oped-skip-hotkey']");
+    if (opedSkipHotkeyInput) {
+      opedSkipHotkeyInput.dataset.hotkey = state.opedSkipHotkey;
+      opedSkipHotkeyInput.addEventListener("focus", () => {
+        opedSkipHotkeyInput.placeholder = "请按下快捷键";
+      });
+      opedSkipHotkeyInput.addEventListener("blur", () => {
+        opedSkipHotkeyInput.placeholder = "点击后按下快捷键";
+      });
+      opedSkipHotkeyInput.addEventListener("keydown", captureOpedSkipHotkeyInput, true);
     }
   }
 
@@ -4582,6 +4619,118 @@
     const raw = Number(value);
     if (!Number.isFinite(raw)) return DEFAULT_OPED_SKIP_SECONDS;
     return Math.max(1, Math.min(600, Math.round(raw)));
+  }
+
+  function captureOpedSkipHotkeyInput(event) {
+    if (event.isComposing) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    const input = event.currentTarget;
+    if (event.key === "Backspace" || event.key === "Delete" || event.key === "Escape") {
+      setOpedSkipHotkeyInputValue(input, "");
+      return;
+    }
+    const hotkey = getKeyboardEventHotkey(event);
+    if (!hotkey || isModifierOnlyKey(event.key)) return;
+    setOpedSkipHotkeyInputValue(input, hotkey);
+  }
+
+  function clearOpedSkipHotkeyInput() {
+    const input = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-hotkey']`);
+    if (input) setOpedSkipHotkeyInputValue(input, "");
+  }
+
+  function setOpedSkipHotkeyInputValue(input, hotkey) {
+    const normalized = normalizeHotkey(hotkey);
+    input.dataset.hotkey = normalized;
+    input.value = formatHotkey(normalized);
+  }
+
+  function getKeyboardEventHotkey(event) {
+    if (!event || isModifierOnlyKey(event.key)) return "";
+    const key = normalizeHotkeyKey(event.key);
+    if (!key) return "";
+    const parts = [];
+    if (event.ctrlKey) parts.push("Ctrl");
+    if (event.altKey) parts.push("Alt");
+    if (event.shiftKey) parts.push("Shift");
+    if (event.metaKey) parts.push("Meta");
+    parts.push(key);
+    return normalizeHotkey(parts.join("+"));
+  }
+
+  function normalizeHotkey(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    const parts = text.split("+").map((part) => part.trim()).filter(Boolean);
+    const modifiers = [];
+    let key = "";
+    for (const part of parts) {
+      const normalizedPart = normalizeHotkeyKey(part);
+      if (!normalizedPart) continue;
+      if (["Ctrl", "Alt", "Shift", "Meta"].includes(normalizedPart)) {
+        if (!modifiers.includes(normalizedPart)) modifiers.push(normalizedPart);
+      } else {
+        key = normalizedPart;
+      }
+    }
+    if (!key) return "";
+    const orderedModifiers = ["Ctrl", "Alt", "Shift", "Meta"].filter((modifier) => modifiers.includes(modifier));
+    return [...orderedModifiers, key].join("+");
+  }
+
+  function normalizeHotkeyKey(value) {
+    const key = String(value || "").trim();
+    if (!key) return "";
+    const lower = key.toLowerCase();
+    const aliases = {
+      control: "Ctrl",
+      ctrl: "Ctrl",
+      alt: "Alt",
+      option: "Alt",
+      shift: "Shift",
+      meta: "Meta",
+      cmd: "Meta",
+      command: "Meta",
+      win: "Meta",
+      arrowright: "ArrowRight",
+      right: "ArrowRight",
+      "→": "ArrowRight",
+      arrowleft: "ArrowLeft",
+      left: "ArrowLeft",
+      "←": "ArrowLeft",
+      arrowup: "ArrowUp",
+      up: "ArrowUp",
+      "↑": "ArrowUp",
+      arrowdown: "ArrowDown",
+      down: "ArrowDown",
+      "↓": "ArrowDown",
+      spacebar: "Space",
+      " ": "Space",
+      esc: "Escape",
+    };
+    if (aliases[lower]) return aliases[lower];
+    if (/^f(?:[1-9]|1\d|2[0-4])$/i.test(key)) return key.toUpperCase();
+    if (key.length === 1) return key.toUpperCase();
+    return key;
+  }
+
+  function formatHotkey(value) {
+    return normalizeHotkey(value).replace("ArrowRight", "→").replace("ArrowLeft", "←").replace("ArrowUp", "↑").replace("ArrowDown", "↓");
+  }
+
+  function isModifierOnlyKey(key) {
+    return ["Control", "Ctrl", "Alt", "Shift", "Meta"].includes(String(key || ""));
+  }
+
+  function isCapturingOpedSkipHotkey(target) {
+    return Boolean(target && target.closest && target.closest(`#${SETTINGS_ID} [data-role='settings-oped-skip-hotkey']`));
+  }
+
+  function isEditableTarget(target) {
+    const node = target && target.closest && target.closest("input, textarea, select, [contenteditable]");
+    return Boolean(node);
   }
 
   function getWhitelistHint() {
