@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Biligumi Connector 插件版</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+    }
+
+    body {
+      margin: 0;
+      background: Canvas;
+      color: CanvasText;
+    }
+
+    main {
+      width: min(720px, calc(100vw - 32px));
+      margin: 32px auto;
+    }
+
+    h1 {
+      margin: 0 0 20px;
+      font-size: 24px;
+      font-weight: 650;
+    }
+
+    .hint {
+      margin: 8px 0 0;
+      color: color-mix(in srgb, CanvasText 68%, transparent);
+      font-size: 13px;
+    }
+
+    section {
+      border-top: 1px solid color-mix(in srgb, CanvasText 18%, transparent);
+      padding: 18px 0;
+    }
+
+    section:first-of-type {
+      border-top: 0;
+    }
+
+    h2 {
+      margin: 0 0 8px;
+      font-size: 16px;
+      font-weight: 650;
+    }
+
+    ul {
+      margin: 8px 0 0;
+      padding-left: 22px;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Biligumi Connector 插件版</h1>
+    <section>
+      <h2>页面内设置</h2>
+      <p class="hint">打开 Bilibili 视频页或番剧播放页后，Biligumi 面板会提供 Token、白名单、绑定、同步、角色横栏、条目信息栏、自动标记已看和 OP/ED 跳过设置。</p>
+    </section>
+    <section>
+      <h2>浏览器快捷键</h2>
+      <p class="hint">默认快捷键：<strong>Alt+Shift+Right</strong>。当前浏览器分配：<strong id="shortcut">读取中...</strong>。</p>
+      <p class="hint">Chrome 打开 <code>chrome://extensions/shortcuts</code> 修改；Edge 打开 <code>edge://extensions/shortcuts</code> 修改。</p>
+    </section>
+    <section>
+      <h2>安装后检查</h2>
+      <ul class="hint">
+        <li>扩展需要允许访问 Bilibili、Bangumi API 和 bgm.tv。</li>
+        <li>油猴版和插件版建议二选一启用，避免重复面板。</li>
+        <li>插件版数据保存在 <code>chrome.storage.local</code>，不会自动读取油猴管理器里的旧数据。</li>
+      </ul>
+    </section>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

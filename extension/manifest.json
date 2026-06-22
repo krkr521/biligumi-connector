@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Biligumi Connector",
+  "version": "0.1.0",
+  "description": "Embed Bangumi collection, rating, episode progress and OP/ED skip controls into Bilibili watch pages.",
+  "permissions": [
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://www.bilibili.com/video/*",
+    "https://www.bilibili.com/bangumi/play/*",
+    "https://api.bgm.tv/*",
+    "https://bgm.tv/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.bilibili.com/video/*",
+        "https://www.bilibili.com/bangumi/play/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "commands": {
+    "skip-oped": {
+      "suggested_key": {
+        "default": "Alt+Shift+Right"
+      },
+      "description": "Skip OP/ED on the active or recent Bilibili video tab"
+    }
+  }
+}

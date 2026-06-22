@@ -4,7 +4,14 @@
 
 当前脚本版本：`0.5.7`。
 
-这是一个非官方 Tampermonkey / Violentmonkey userscript 原型，目标先验证三件事：
+这是一个非官方 Biligumi Connector 原型，现在提供两种安装形态：
+
+- **油猴版**：使用 Tampermonkey / Violentmonkey 安装 [`userscript/biligumi-connector.user.js`](./userscript/biligumi-connector.user.js)，适合继续使用已有脚本管理器。
+- **浏览器插件版**：使用 Chrome / Edge 加载 [`extension/`](./extension/) 已解压扩展，功能目标与油猴版一致，并额外支持浏览器级 commands 快捷键，尽量在画中画或页面非焦点时触发 OP/ED 跳过。
+
+油猴版和插件版可以二选一使用；如果同时启用，页面上可能出现重复面板或重复事件处理。
+
+当前原型目标先验证三件事：
 
 - 能稳定插入到 Bilibili 播放页右侧栏。
 - 能搜索并绑定 Bangumi 动画条目。
@@ -12,7 +19,7 @@
 
 本项目由人工需求驱动，并通过 Codex vibe coding 协作实现和整理。
 
-## 安装
+## 安装油猴版
 
 1. 安装 Tampermonkey 或 Violentmonkey。
 2. 新建脚本，把 [`userscript/biligumi-connector.user.js`](./userscript/biligumi-connector.user.js) 的内容粘进去。
@@ -27,11 +34,23 @@ Access Token 可以在 Bangumi 官方页面生成：
 
 <https://next.bgm.tv/demo/access-token>
 
+## 安装浏览器插件版
+
+1. 打开 Chrome 的 `chrome://extensions/` 或 Edge 的 `edge://extensions/`。
+2. 开启“开发者模式”。
+3. 点击“加载已解压的扩展程序”。
+4. 选择本仓库的 [`extension/`](./extension/) 目录。
+5. 打开 Bilibili 番剧或视频播放页：
+   - `https://www.bilibili.com/bangumi/play/*`
+   - `https://www.bilibili.com/video/*`
+
+插件版的核心设置仍在 Bilibili 页面内的 Biligumi 面板里。扩展详情页的“扩展程序选项”主要用于说明安装状态和浏览器快捷键入口。默认 OP/ED 跳过命令快捷键为 `Alt+Shift+Right`；可在 Chrome 的 `chrome://extensions/shortcuts` 或 Edge 的 `edge://extensions/shortcuts` 修改。Chrome/Edge 扩展默认快捷键不接受 `Ctrl+Alt` 组合；油猴版页面内快捷键仍可使用 `Ctrl+Alt+→`。
+
 ## 当前能力
 
 - 在 Bilibili 右侧栏顶部插入 Bangumi 面板。
 - 根据当前页面标题搜索 Bangumi 动画条目。
-- 把当前 Bilibili 页面和 Bangumi subject id 绑定到本地 userscript 存储。
+- 把当前 Bilibili 页面和 Bangumi subject id 绑定到本地存储。
 - 读取 Bangumi 条目公开评分、排名、投票数。
 - 读取当前用户对该条目的收藏状态和评分。
 - 读取普通章节列表与当前用户章节收藏状态。
@@ -42,7 +61,8 @@ Access Token 可以在 Bangumi 官方页面生成：
 - 按总进度把前 N 集批量标为看过。
 - 单集切换：看过 / 未收藏。
 - 播放器进度达到标准线后自动把当前集标为看过；标准线默认 50%，可在设置里按当前 UP / 页面来源以 10% 步长调整。单次向前跳转超过 5 分钟并越过标准线时不会自动标记，避免拖进度条误触发。
-- 可在设置里为当前绑定的 Bangumi 条目开启播放器下边栏“一键跳过 OP/ED”按钮，并按番剧保存跳过秒数，默认 85 秒；支持录入全局快捷键，默认 `Ctrl+Alt+→`。
+- 可在设置里为当前绑定的 Bangumi 条目开启播放器下边栏“一键跳过 OP/ED”按钮，并按番剧保存跳过秒数，默认 85 秒。
+- 油猴版支持页面内快捷键录入，默认 `Ctrl+Alt+→`；插件版额外支持浏览器级 commands 快捷键，默认 `Alt+Shift+Right`。
 - 可在评论区上方显示 Bangumi 角色 / CV 横栏，CV 名称会尽量链接到对应 Bangumi 人物页。
 - 可选显示 Bangumi 风格条目信息栏；普通视频页会尝试做左侧信息栏布局，官方番剧页会显示精简紧凑版。
 - 支持类似 `bilibili2bangumi` 的 Bilibili 白名单；不匹配白名单的页面只显示折叠栏，不展开面板。
