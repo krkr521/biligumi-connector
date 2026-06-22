@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.7
+// @version      0.5.8
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.7";
+  const SCRIPT_VERSION = "0.5.8";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -1240,6 +1240,89 @@
       resize: vertical;
       padding: 8px 9px;
       line-height: 1.35;
+    }
+    #${SETTINGS_ID} .biligumi-settings-field textarea.biligumi-whitelist-store {
+      display: none;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-list {
+      display: grid;
+      gap: 5px;
+      max-height: 142px;
+      overflow: auto;
+      padding-right: 2px;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) max-content max-content;
+      gap: 6px;
+      align-items: center;
+      min-height: 33px;
+      padding: 4px 5px 4px 8px;
+      border: 1px solid #dfe3e8;
+      border-radius: 7px;
+      background: #f7f8fa;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-main {
+      min-width: 0;
+      overflow: hidden;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-name {
+      overflow: hidden;
+      color: #4f6072;
+      font-weight: 600;
+      line-height: 1.25;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-token {
+      overflow: hidden;
+      color: #8a96a3;
+      font-size: 11px;
+      line-height: 1.2;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-empty {
+      padding: 8px 9px;
+      border: 1px solid #dfe3e8;
+      border-radius: 7px;
+      background: #f7f8fa;
+      color: #8a96a3;
+      font-size: 12px;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-open,
+    #${SETTINGS_ID} .biligumi-whitelist-delete {
+      min-height: 25px;
+      padding: 2px 8px;
+      border: 1px solid #dfe3e8;
+      border-radius: 6px;
+      background: #fff;
+      color: #5a6d82;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1.45;
+      white-space: nowrap;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-open {
+      border-color: #f0a5b5;
+      background: #f07f95;
+      color: #fff;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-open:hover {
+      border-color: #e56a83;
+      background: #e56a83;
+      color: #fff;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-delete:hover {
+      border-color: #d96363;
+      color: #d03030;
+    }
+    #${SETTINGS_ID} .biligumi-whitelist-open:disabled {
+      border-color: #dfe3e8;
+      background: #fff;
+      color: #a3adba;
+      cursor: not-allowed;
     }
     #${SETTINGS_ID} .biligumi-settings-help {
       margin-top: 6px;
@@ -2711,7 +2794,8 @@
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
-            <textarea id="biligumi-whitelist-input" data-role="settings-whitelist" placeholder="每行一个 UP 主 UID/名称、BV、页面 key 或 URL 片段">${escapeHtml(formatWhitelistForSettings())}</textarea>
+            <textarea class="biligumi-whitelist-store" id="biligumi-whitelist-input" data-role="settings-whitelist">${escapeHtml(formatWhitelistForSettings())}</textarea>
+            ${renderWhitelistSettingsList()}
             <div class="biligumi-settings-help compact">当前页面候选：${escapeHtml(currentHints || "无")}</div>
           </div>
           <div class="biligumi-settings-field">
@@ -2792,6 +2876,30 @@
         return label ? `${item} # ${label}` : item;
       })
       .join("\n");
+  }
+
+  function renderWhitelistSettingsList() {
+    if (!state.whitelist.length) {
+      return '<div class="biligumi-whitelist-empty" data-role="settings-whitelist-empty">白名单为空。</div>';
+    }
+    const rows = state.whitelist
+      .map((item) => {
+        const label = getWhitelistLabel(item);
+        const value = label ? `${item} # ${label}` : item;
+        const spaceUrl = getBilibiliSpaceUrlForWhitelistItem(item);
+        return `
+          <div class="biligumi-whitelist-row" data-role="settings-whitelist-row" data-value="${escapeHtml(value)}">
+            <div class="biligumi-whitelist-main" title="${escapeHtml(value)}">
+              <div class="biligumi-whitelist-name">${escapeHtml(label || item)}</div>
+              ${label ? `<div class="biligumi-whitelist-token">${escapeHtml(item)}</div>` : ""}
+            </div>
+            <button class="biligumi-whitelist-open" data-action="open-whitelist-space" data-url="${escapeHtml(spaceUrl)}" ${spaceUrl ? "" : "disabled"} title="${spaceUrl ? "打开 Bilibili 空间" : "此项不是可识别的空间 UID"}">打开</button>
+            <button class="biligumi-whitelist-delete" data-action="delete-whitelist-item" title="从白名单删除">删除</button>
+          </div>
+        `;
+      })
+      .join("");
+    return `<div class="biligumi-whitelist-list" data-role="settings-whitelist-list">${rows}</div>`;
   }
 
   function renderCollectionEditorDialog() {
@@ -3075,6 +3183,8 @@
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-save") saveSettings();
+    if (action === "open-whitelist-space") openWhitelistSpace(target);
+    if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
     if (action === "clear-oped-skip-hotkey") clearOpedSkipHotkeyInput();
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
     if (action === "add-edit-tag") addEditorTag(target.dataset.tag || "");
@@ -4114,6 +4224,54 @@
     if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
   }
 
+  function openWhitelistSpace(target) {
+    const url = target && target.dataset ? String(target.dataset.url || "") : "";
+    if (!url) return;
+    window.open(url, "_blank", "noopener,noreferrer");
+  }
+
+  function deleteWhitelistSettingItem(target) {
+    const settings = document.getElementById(SETTINGS_ID);
+    const row = target && target.closest ? target.closest("[data-role='settings-whitelist-row']") : null;
+    if (!settings || !row) return;
+    const value = String(row.dataset.value || "").trim();
+    const label = value || "这条白名单";
+    if (!window.confirm(`确定删除白名单「${label}」吗？`)) return;
+    row.remove();
+    syncSettingsWhitelistInput(settings);
+    const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
+    const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
+    state.whitelist = parsedWhitelist.items;
+    state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
+    writeListValue(STORAGE.whitelist, state.whitelist);
+    writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
+    const list = settings.querySelector("[data-role='settings-whitelist-list']");
+    if (list && !list.querySelector("[data-role='settings-whitelist-row']")) {
+      list.replaceWith(createWhitelistEmptyNode());
+    }
+    state.message = `已删除白名单。当前共 ${state.whitelist.length} 项。`;
+    state.error = "";
+    render();
+  }
+
+  function syncSettingsWhitelistInput(settings) {
+    const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
+    if (!whitelistInput) return;
+    const rows = Array.from(settings.querySelectorAll("[data-role='settings-whitelist-row']"));
+    whitelistInput.value = rows
+      .map((row) => String(row.dataset.value || "").trim())
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  function createWhitelistEmptyNode() {
+    const node = document.createElement("div");
+    node.className = "biligumi-whitelist-empty";
+    node.dataset.role = "settings-whitelist-empty";
+    node.textContent = "白名单为空。";
+    return node;
+  }
+
   function openCollectionEditor() {
     state.collectionEditorOpen = true;
     state.settingsOpen = false;
@@ -4822,6 +4980,13 @@
     const normalized = normalizeWhitelistToken(item);
     const matchedKey = Object.keys(state.whitelistLabels || {}).find((key) => normalizeWhitelistToken(key) === normalized);
     return matchedKey ? state.whitelistLabels[matchedKey] : "";
+  }
+
+  function getBilibiliSpaceUrlForWhitelistItem(item) {
+    const token = stripWhitelistComment(item);
+    const directMatch = token.match(/(?:space\.bilibili\.com\/|\/space\/)(\d+)/i);
+    const mid = directMatch ? directMatch[1] : (/^\d{2,20}$/.test(token) ? token : "");
+    return mid ? `https://space.bilibili.com/${mid}` : "";
   }
 
   function pruneWhitelistLabels(labels, whitelist) {
