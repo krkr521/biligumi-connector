@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.4
+// @version      0.5.6
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.4";
+  const SCRIPT_VERSION = "0.5.6";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -35,6 +35,7 @@
     nonMainPreview: "biligumi.nonMainPreview",
     officialBangumiLayout: "biligumi.officialBangumiLayout",
     autoWatchThresholds: "biligumi.autoWatchThresholds",
+    opedSkips: "biligumi.opedSkips",
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
   };
@@ -86,6 +87,8 @@
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
+  const DEFAULT_OPED_SKIP_SECONDS = 85;
+  const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
 
   const state = {
     pageKey: "",
@@ -123,6 +126,7 @@
     nonMainPreviewEnabled: readValue(STORAGE.nonMainPreview, "1") !== "0",
     officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
     autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
+    opedSkips: readJsonValue(STORAGE.opedSkips, {}),
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     nonMainResults: [],
@@ -1435,6 +1439,37 @@
       color: #7b8794;
       font-size: 12px;
     }
+    .${OPED_SKIP_BUTTON_CLASS} {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      min-width: 0;
+      height: 1.55em;
+      min-height: 0;
+      margin: 0 0 0 .5em;
+      padding: 0 .4em;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: #fff;
+      font: inherit;
+      line-height: 1;
+      white-space: nowrap;
+      cursor: pointer;
+      opacity: .88;
+      user-select: none;
+      transition: background .16s, opacity .16s, color .16s;
+      vertical-align: middle;
+    }
+    .${OPED_SKIP_BUTTON_CLASS}:hover {
+      background: rgba(255, 255, 255, .16);
+      opacity: 1;
+    }
+    .${OPED_SKIP_BUTTON_CLASS}[aria-disabled="true"] {
+      cursor: not-allowed;
+      opacity: .45;
+    }
   `);
 
   init();
@@ -1447,6 +1482,7 @@
     observeRouteChanges();
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
+    bindOpedSkipButtonEvents();
   }
 
   function observeRouteChanges() {
@@ -1518,6 +1554,7 @@
     state.autoEpisodeSyncing = false;
     state.autoEpisodeSyncLastKey = "";
     state.autoWatchBlockedKey = "";
+    refreshOpedSkipButton();
     injectWhenReady(true);
   }
 
@@ -1796,6 +1833,7 @@
         bindPanelEvents();
         layoutPanelWithoutOwningBiliDom();
         ensureNonMainPreviewSearch(nonMainKeyword);
+        refreshOpedSkipButton();
         return;
       }
 
@@ -1812,6 +1850,7 @@
       `;
       bindPanelEvents();
       layoutPanelWithoutOwningBiliDom();
+      refreshOpedSkipButton();
       return;
     }
 
@@ -1841,6 +1880,7 @@
       layoutPanelWithoutOwningBiliDom();
       syncSubjectInfoPanel();
       syncCharacterStrip();
+      refreshOpedSkipButton();
       return;
     }
 
@@ -1859,6 +1899,7 @@
     layoutPanelWithoutOwningBiliDom();
     syncSubjectInfoPanel();
     syncCharacterStrip();
+    refreshOpedSkipButton();
     const inlineAutoKeyword = getInlineAutoPreviewKeyword();
     if (inlineAutoKeyword) ensureNonMainPreviewSearch(inlineAutoKeyword);
   }
@@ -2613,6 +2654,10 @@
     const currentHints = formatWhitelistHintCandidates();
     const autoWatchThreshold = getAutoWatchThreshold();
     const autoWatchScopeLabel = getAutoWatchScopeLabel();
+    const opedSkipConfig = getOpedSkipConfig();
+    const opedSkipSubjectLabel = state.subjectId
+      ? (state.subject ? displaySubjectName(state.subject) : `subject ${state.subjectId}`)
+      : "";
     return `
       <div class="biligumi-settings-dialog" data-action="noop">
         <div class="biligumi-settings-title">设置</div>
@@ -2663,6 +2708,17 @@
               <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
             </div>
             <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟并越过标准线时不会触发。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-oped-skip-enabled" ${opedSkipConfig.enabled ? "checked" : ""} ${state.subjectId ? "" : "disabled"}>
+              <span>在播放器下边栏显示一键跳过 OP/ED 按钮。</span>
+            </label>
+            <div class="biligumi-threshold-line">
+              <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${opedSkipConfig.seconds}" ${state.subjectId ? "" : "disabled"}>
+              <span class="biligumi-threshold-value">秒</span>
+            </div>
+            <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
@@ -3703,6 +3759,166 @@
       .sort((a, b) => (b.clientWidth * b.clientHeight) - (a.clientWidth * a.clientHeight))[0] || null;
   }
 
+  function bindOpedSkipButtonEvents() {
+    if (window.__biligumiOpedSkipEventsBound) return;
+    window.__biligumiOpedSkipEventsBound = true;
+    let refreshTimer = 0;
+    const scheduleRefresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = 0;
+        refreshOpedSkipButton();
+      }, 250);
+    };
+    const observer = new MutationObserver(scheduleRefresh);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    ["loadedmetadata", "durationchange", "playing"].forEach((eventName) => {
+      document.addEventListener(eventName, scheduleRefresh, true);
+    });
+    window.setInterval(refreshOpedSkipButton, 2000);
+    refreshOpedSkipButton();
+  }
+
+  function refreshOpedSkipButton() {
+    const placement = shouldShowOpedSkipButton() ? findOpedSkipButtonPlacement() : null;
+    const host = placement && placement.host;
+    const existingButtons = Array.from(document.querySelectorAll(`.${OPED_SKIP_BUTTON_CLASS}`));
+    if (!host) {
+      existingButtons.forEach((button) => button.remove());
+      return;
+    }
+
+    existingButtons.forEach((button) => {
+      if (!host.contains(button)) button.remove();
+    });
+
+    let button = host.querySelector(`.${OPED_SKIP_BUTTON_CLASS}`);
+    const config = getOpedSkipConfig();
+    if (!button) {
+      button = document.createElement("span");
+      button.setAttribute("role", "button");
+      button.tabIndex = 0;
+      button.className = OPED_SKIP_BUTTON_CLASS;
+      button.addEventListener("click", handleOpedSkipButtonClick, true);
+      button.addEventListener("keydown", handleOpedSkipButtonKeydown, true);
+    }
+    if (placement.after && placement.after.parentElement === host && button.previousElementSibling !== placement.after) {
+      placement.after.insertAdjacentElement("afterend", button);
+    } else if (!button.parentElement) {
+      host.appendChild(button);
+    }
+    button.textContent = "跳OP/ED";
+    button.title = `向后跳过 ${config.seconds} 秒`;
+    const disabled = !getActiveVideoElement();
+    button.setAttribute("aria-disabled", disabled ? "true" : "false");
+    alignOpedSkipButtonToTime(button, placement.after);
+  }
+
+  function alignOpedSkipButtonToTime(button, timeNode) {
+    if (!button || !timeNode) return;
+    const timeStyle = window.getComputedStyle(timeNode);
+    button.style.fontFamily = timeStyle.fontFamily;
+    button.style.fontSize = timeStyle.fontSize;
+    button.style.fontWeight = timeStyle.fontWeight;
+    button.style.lineHeight = timeStyle.lineHeight;
+    button.style.height = `${Math.max(1, timeNode.getBoundingClientRect().height)}px`;
+    button.style.transform = "";
+
+    const timeRect = timeNode.getBoundingClientRect();
+    const buttonRect = button.getBoundingClientRect();
+    if (!timeRect.height || !buttonRect.height) return;
+    const offset = (timeRect.top + timeRect.height / 2) - (buttonRect.top + buttonRect.height / 2);
+    button.style.transform = `translateY(${offset.toFixed(2)}px)`;
+  }
+
+  function handleOpedSkipButtonClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+    if (event.currentTarget && event.currentTarget.getAttribute("aria-disabled") === "true") return;
+    skipOpedForActiveVideo();
+  }
+
+  function handleOpedSkipButtonKeydown(event) {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    handleOpedSkipButtonClick(event);
+  }
+
+  function skipOpedForActiveVideo() {
+    const config = getOpedSkipConfig();
+    if (!config.enabled) return;
+    const video = getActiveVideoElement();
+    if (!video) return;
+    const currentTime = Number(video.currentTime) || 0;
+    const duration = Number(video.duration);
+    const target = Number.isFinite(duration) && duration > 0
+      ? Math.min(duration, currentTime + config.seconds)
+      : currentTime + config.seconds;
+    try {
+      video.currentTime = target;
+      state.autoWatchLastVideoTime = target;
+      state.message = `已跳过 ${config.seconds} 秒。`;
+      state.error = "";
+      render();
+    } catch (error) {
+      showError(error);
+    }
+  }
+
+  function shouldShowOpedSkipButton() {
+    return Boolean(state.subjectId && getOpedSkipConfig().enabled);
+  }
+
+  function findOpedSkipButtonPlacement() {
+    const timeNode = findOpedSkipTimeNode();
+    if (timeNode && timeNode.parentElement && isVisible(timeNode.parentElement)) {
+      return { host: timeNode.parentElement, after: timeNode };
+    }
+
+    const hostSelectors = [
+      ".bpx-player-control-bottom-left",
+      ".bpx-player-control-wrap .bpx-player-control-bottom-left",
+      ".bpx-player-control-wrap [class*='control-bottom-left']",
+      ".bpx-player-control-bottom [class*='left']",
+    ];
+    for (const selector of hostSelectors) {
+      const node = document.querySelector(selector);
+      if (node && isVisible(node)) return { host: node, after: null };
+    }
+    return null;
+  }
+
+  function findOpedSkipTimeNode() {
+    const selectors = [
+      ".bpx-player-control-wrap .bpx-player-ctrl-time",
+      ".bpx-player-control-wrap [class*='ctrl-time']",
+      ".bpx-player-control-wrap [class*='control-time']",
+      ".bpx-player-control-wrap [class*='ControlTime']",
+      ".bpx-player-control-wrap [class*='time']",
+    ];
+    const nodes = selectors
+      .flatMap((selector) => Array.from(document.querySelectorAll(selector)))
+      .filter((node, index, list) => list.indexOf(node) === index)
+      .filter((node) => isVisible(node) && isOpedSkipTimeText(node.textContent));
+    return nodes[0] || findOpedSkipTimeNodeByText();
+  }
+
+  function findOpedSkipTimeNodeByText() {
+    const controlWrap = document.querySelector(".bpx-player-control-wrap");
+    if (!controlWrap) return null;
+    const nodes = Array.from(controlWrap.querySelectorAll("*"))
+      .filter((node) => isVisible(node) && isOpedSkipTimeText(node.textContent));
+    return nodes.sort((a, b) => {
+      const aArea = a.clientWidth * a.clientHeight;
+      const bArea = b.clientWidth * b.clientHeight;
+      return aArea - bArea;
+    })[0] || null;
+  }
+
+  function isOpedSkipTimeText(value) {
+    return /^\s*\d{1,2}:\d{2}(?::\d{2})?\s*\/\s*\d{1,2}:\d{2}(?::\d{2})?(?:\s*跳OP\/ED)?\s*$/.test(String(value || ""));
+  }
+
   function handleAutoWatchSeekEnd(video) {
     const start = Number(state.autoWatchSeekStartTime);
     const end = Number(video.currentTime);
@@ -3778,12 +3994,16 @@
     const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
     const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
     const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
+    const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
+    const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
     const nextNonMainPreviewEnabled = Boolean(nonMainPreviewInput && nonMainPreviewInput.checked);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
+    const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
+    const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
     if (nextToken !== state.token) {
       state.username = "";
       pendingRequests.clear();
@@ -3794,6 +4014,7 @@
     state.whitelist = parsedWhitelist.items;
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
     setAutoWatchThreshold(nextAutoWatchThreshold);
+    if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
     if (nextNonMainPreviewEnabled !== state.nonMainPreviewEnabled) {
       state.nonMainPreviewEnabled = nextNonMainPreviewEnabled;
       state.nonMainKeyword = "";
@@ -3819,11 +4040,13 @@
     writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
     writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
     writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
+    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
     state.settingsOpen = false;
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
     state.error = "";
     render();
+    refreshOpedSkipButton();
     if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
   }
 
@@ -4332,6 +4555,33 @@
     const raw = Number(value);
     if (!Number.isFinite(raw)) return 50;
     return Math.max(10, Math.min(100, Math.round(raw / 10) * 10));
+  }
+
+  function getOpedSkipConfig(subjectId = state.subjectId) {
+    const key = String(Number(subjectId) || "");
+    const raw = key && state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
+    return {
+      enabled: raw && Object.prototype.hasOwnProperty.call(raw, "enabled") ? Boolean(raw.enabled) : true,
+      seconds: normalizeOpedSkipSeconds(raw && raw.seconds),
+    };
+  }
+
+  function setOpedSkipConfig(enabled, seconds, subjectId = state.subjectId) {
+    const key = String(Number(subjectId) || "");
+    if (!key) return;
+    state.opedSkips = {
+      ...(state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips : {}),
+      [key]: {
+        enabled: Boolean(enabled),
+        seconds: normalizeOpedSkipSeconds(seconds),
+      },
+    };
+  }
+
+  function normalizeOpedSkipSeconds(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return DEFAULT_OPED_SKIP_SECONDS;
+    return Math.max(1, Math.min(600, Math.round(raw)));
   }
 
   function getWhitelistHint() {
