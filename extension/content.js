@@ -3083,7 +3083,7 @@
 
   function getScoreLabel(score) {
     const value = Number(score) || 0;
-    return value ? getRateLevel(Math.round(value)) : "";
+    return value ? getRateLevel(Math.round(value), false) : "";
   }
 
   function formatPublicScore(score) {
@@ -5517,7 +5517,7 @@
     return safeScore ? `${safeScore} ${getRateLevel(safeScore)}` : "未评价";
   }
 
-  function getRateLevel(score) {
+  function getRateLevel(score, showCaution = true) {
     const labels = {
       1: "不忍直视",
       2: "很差",
@@ -5531,7 +5531,7 @@
       10: "超神作",
     };
     const value = Math.max(1, Math.min(10, Math.round(Number(score) || 0)));
-    const suffix = value === 1 || value === 10 ? "（请谨慎评价）" : "";
+    const suffix = showCaution && (value === 1 || value === 10) ? "（请谨慎评价）" : "";
     return labels[value] ? `${labels[value]}${suffix}` : "未评价";
   }
 
