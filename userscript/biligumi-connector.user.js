@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.9
+// @version      0.5.14
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.8";
+  const SCRIPT_VERSION = "0.5.14";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -3124,7 +3124,7 @@
             const done = getEpisodeCollectionType(ep.id) === 2;
             const localNo = index + 1;
             const current = isCurrentEpisodeNumber(ep, localNo, episodes.length);
-            const title = getEpisodeButtonTitle(ep, localNo);
+            const title = `${getEpisodeButtonTitle(ep, localNo)} · 左键${done ? "取消看过" : "标记看过"}${episodeId ? " · 右键打开本集讨论" : ""}`;
             return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}" title="${escapeHtml(title)}">${escapeHtml(formatEpisodeSort(localNo))}</button>`;
           }).join("")}
         </div>
@@ -3161,6 +3161,7 @@
   }
 
   document.addEventListener("click", handlePanelClick, true);
+  document.addEventListener("contextmenu", handlePanelContextMenu, true);
 
   function handlePanelClick(event) {
     const panel = document.getElementById(PANEL_ID);
@@ -3205,6 +3206,24 @@
     if (action === "rate-clear") rateSubject(0).catch(showError);
     if (action === "save-progress") saveProgressFromInput().catch(showError);
     if (action === "toggle-episode") toggleEpisode(Number(target.dataset.episodeId), target.dataset.done === "1").catch(showError);
+  }
+
+  function handlePanelContextMenu(event) {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel || !panel.contains(event.target)) return;
+
+    const target = event.target.closest("[data-action='toggle-episode']");
+    if (!target || !panel.contains(target)) return;
+
+    const discussionUrl = getEpisodeDiscussionUrl(target.dataset.episodeId);
+    if (!discussionUrl) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+
+    const opened = window.open(discussionUrl, "_blank", "noopener,noreferrer");
+    if (opened) opened.opener = null;
   }
 
   function handleRatePreviewEvent(event) {
@@ -5147,10 +5166,21 @@
     ];
     for (const selector of titleSelectors) {
       const el = document.querySelector(selector);
-      const text = el && (el.getAttribute("title") || el.textContent || "").trim();
+      const text = el && getElementTitleText(el);
       if (text) return text;
     }
     return document.title;
+  }
+
+  function getElementTitleText(element) {
+    const attrTitleRaw = String(element && element.getAttribute("title") || "").replace(/\s+/g, " ").trim();
+    const visibleTitleRaw = String(element && element.textContent || "").replace(/\s+/g, " ").trim();
+    const attrTitle = normalizeTitleText(attrTitleRaw);
+    const visibleTitle = normalizeTitleText(visibleTitleRaw);
+    if (!visibleTitle) return attrTitle;
+    if (!attrTitle) return visibleTitle;
+    if (isTitleMetaTag(attrTitle) && !isTitleMetaTag(visibleTitle)) return visibleTitleRaw;
+    return visibleTitle.length > attrTitle.length + 4 ? visibleTitleRaw : attrTitleRaw;
   }
 
   function getSeriesTitle() {
@@ -5338,7 +5368,11 @@
   }
 
   function isSeasonMarker(value) {
-    return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(String(value || "").trim());
+    const text = String(value || "").trim();
+    return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(text)
+      || /^第\s*[一二两兩三四五六七八九十\d]{1,3}\s*季$/i.test(text)
+      || /^\d{1,3}(?:st|nd|rd|th)\s*season$/i.test(text)
+      || /^season\s*\d{1,3}$/i.test(text);
   }
 
   function isCommonResolutionNumber(value) {
@@ -5394,9 +5428,11 @@
   function detectEpisodeNo(text) {
     const title = String(text || "");
     if (isNonMainEpisodeTitle(title)) return null;
+    if (hasEpisodeRangeMarker(title)) return null;
     for (const pattern of EPISODE_PATTERNS) {
       const match = title.match(pattern);
       if (!match) continue;
+      if (isEpisodeRangeMatch(match)) continue;
       if (isTotalEpisodeCountMatch(title, match)) continue;
       const value = Number(match[1]);
       if (!Number.isFinite(value) || value <= 0) continue;
@@ -5412,9 +5448,21 @@
     return /全\s*$/.test(String(title || "").slice(0, index));
   }
 
+  function isEpisodeRangeMatch(match) {
+    return /[0-9]+(?:\.[0-9]+)?\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?/.test(String(match && match[0] || ""));
+  }
+
+  function hasEpisodeRangeMarker(text) {
+    const title = String(text || "");
+    return /第\s*[0-9]+(?:\.[0-9]+)?\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?\s*[话話集]/i.test(title)
+      || /第\s*[0-9]+(?:\.[0-9]+)?\s+[0-9]+(?:\.[0-9]+)?\s*[话話集]/i.test(title)
+      || /(?:^|[\s#\[])[0-9]+(?:\.[0-9]+)?\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?\s*(?:话|話|集|]|$)/i.test(title);
+  }
+
   function detectCurrentEpisodeNo(rawTitle) {
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
+    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentPartNoFromUrl();
     if (isNonMainEpisodeTitle(rawTitle)) return null;
     return detectEpisodeNo(getActiveEpisodeText()) || getCurrentPartNoFromUrl();
   }
@@ -5580,6 +5628,11 @@
     if (Number.isFinite(sort) && sort !== Number(localNo)) parts.push(`Bangumi ep.${formatEpisodeSort(sort)}`);
     if (name) parts.push(name);
     return parts.join(" · ");
+  }
+
+  function getEpisodeDiscussionUrl(episodeId) {
+    const id = Number(episodeId);
+    return Number.isFinite(id) && id > 0 ? `${BGM_WEB_BASE}/ep/${id}` : "";
   }
 
   function getEpisodeCollectionType(episodeId) {
