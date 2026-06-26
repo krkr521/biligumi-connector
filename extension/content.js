@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.18";
+  const SCRIPT_VERSION = "0.5.19";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -2844,7 +2844,7 @@
               <input id="biligumi-auto-watch-threshold" type="range" min="10" max="100" step="10" data-role="settings-auto-watch-threshold" value="${autoWatchThreshold}">
               <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
             </div>
-            <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟并越过标准线时不会触发。</div>
+            <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟或打开页面时已在标准线之后，不会触发。</div>
           </div>
           <div class="biligumi-settings-field">
             <label class="biligumi-settings-check">
@@ -4140,8 +4140,9 @@
       state.autoWatchSeekStartTime = null;
     }
     const lastTime = state.autoWatchLastVideoKey === syncKey ? Number(state.autoWatchLastVideoTime) : 0;
+    const firstObservationAtOrPastThreshold = !lastTime && watchedPercent >= getAutoWatchThreshold();
     const jumpedForward = lastTime > 0 && currentTime - lastTime >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS;
-    if (jumpedForward && watchedPercent >= getAutoWatchThreshold()) {
+    if (firstObservationAtOrPastThreshold || (jumpedForward && watchedPercent >= getAutoWatchThreshold())) {
       state.autoWatchBlockedKey = syncKey;
     } else if (state.autoWatchBlockedKey === syncKey && watchedPercent < getAutoWatchThreshold()) {
       state.autoWatchBlockedKey = "";
