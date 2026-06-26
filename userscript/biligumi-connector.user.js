@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.5.14
+// @version      0.5.18
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.14";
+  const SCRIPT_VERSION = "0.5.18";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -1597,6 +1597,12 @@
     }
   `);
 
+  let routeRefreshSeq = 0;
+  let episodeContextRefreshSeq = 0;
+  let episodeContextRefreshTimer = 0;
+  let episodeContextObserver = null;
+  let episodeContextObserverStopTimer = 0;
+
   init();
 
   function init() {
@@ -1620,8 +1626,6 @@
     });
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
-
-  let routeRefreshSeq = 0;
 
   function hookHistoryNavigation() {
     ["pushState", "replaceState"].forEach((method) => {
@@ -1753,6 +1757,7 @@
     render();
     schedulePanelReposition();
     bindViewportLayoutEvents();
+    scheduleEpisodeContextRefresh();
 
     if (shouldRenderFullPanel() && state.subjectId) {
       loadSubjectBundle().catch(showError);
@@ -5467,6 +5472,46 @@
     return detectEpisodeNo(getActiveEpisodeText()) || getCurrentPartNoFromUrl();
   }
 
+  function scheduleEpisodeContextRefresh() {
+    const seq = ++episodeContextRefreshSeq;
+    [250, 800, 1600, 3000, 5000].forEach((delay) => {
+      window.setTimeout(() => refreshEpisodeContextIfChanged(seq), delay);
+    });
+    observeEpisodeContextUntilSettled(seq);
+  }
+
+  function observeEpisodeContextUntilSettled(seq) {
+    if (!isOfficialBangumiPage()) return;
+    if (episodeContextObserver) episodeContextObserver.disconnect();
+    if (episodeContextObserverStopTimer) window.clearTimeout(episodeContextObserverStopTimer);
+    episodeContextObserver = new MutationObserver(() => {
+      if (seq !== episodeContextRefreshSeq || episodeContextRefreshTimer) return;
+      episodeContextRefreshTimer = window.setTimeout(() => {
+        episodeContextRefreshTimer = 0;
+        refreshEpisodeContextIfChanged(seq);
+      }, 160);
+    });
+    episodeContextObserver.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    episodeContextObserverStopTimer = window.setTimeout(() => {
+      if (seq === episodeContextRefreshSeq && episodeContextObserver) {
+        episodeContextObserver.disconnect();
+        episodeContextObserver = null;
+      }
+    }, 8000);
+  }
+
+  function refreshEpisodeContextIfChanged(seq) {
+    if (seq !== episodeContextRefreshSeq) return;
+    const rawTitle = getPageTitle();
+    const nextEpisodeNo = detectCurrentEpisodeNo(rawTitle);
+    const safeNextEpisodeNo = Number(nextEpisodeNo);
+    if (!Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo <= 0) return;
+    if (Number(state.currentEpisodeNo) === safeNextEpisodeNo) return;
+    state.rawTitle = rawTitle;
+    state.currentEpisodeNo = safeNextEpisodeNo;
+    render();
+  }
+
   function getActiveEpisodeText() {
     const selectors = [
       ".video-pod__item.active",
@@ -5493,9 +5538,50 @@
       const text = getActiveEpisodeNodeText(el);
       if (text) return text;
     }
+    const officialProgressNo = getOfficialBangumiProgressEpisodeNo();
+    if (officialProgressNo) return `第${officialProgressNo}话`;
+
+    const hiddenPlayerSelectors = [
+      ".bpx-player-ctrl-eplist-menu-item.bpx-state-active",
+      "[class*='bpx-player-ctrl-eplist-menu-item'][class*='bpx-state-active']",
+      "[class*='eplist'][class*='active']",
+    ];
+    for (const selector of hiddenPlayerSelectors) {
+      const el = document.querySelector(selector);
+      const text = getActiveEpisodeNodeText(el, false);
+      if (text) return text;
+    }
     const initial = window.__INITIAL_STATE__ || {};
     const epInfo = initial.epInfo || initial.ep_info || initial.epInfoV2 || {};
     return epInfo.long_title || epInfo.title || epInfo.share_copy || "";
+  }
+
+  function getOfficialBangumiProgressEpisodeNo() {
+    if (!isOfficialBangumiPage()) return null;
+    const selectors = [
+      "#eplist_module [class*='eplist_ep_list_progress']",
+      "[class*='eplist_ep_list_progress']",
+      "#eplist_module [class*='eplist_list_title']",
+      "[class*='eplist_list_title']",
+    ];
+    for (const selector of selectors) {
+      const nodes = Array.from(document.querySelectorAll(selector)).filter(isVisible).slice(0, 6);
+      for (const node of nodes) {
+        const value = parseOfficialBangumiProgressEpisodeNo(node.textContent);
+        if (value) return value;
+      }
+    }
+    return null;
+  }
+
+  function parseOfficialBangumiProgressEpisodeNo(text) {
+    const match = String(text || "").match(/[（(]\s*0*([0-9]{1,3}(?:\.[0-9]+)?)\s*\/\s*0*([0-9]{1,3}(?:\.[0-9]+)?)\s*[）)]/);
+    if (!match) return null;
+    const current = Number(match[1]);
+    const total = Number(match[2]);
+    if (!Number.isFinite(current) || !Number.isFinite(total)) return null;
+    if (current <= 0 || total <= 0 || current > total) return null;
+    return current;
   }
 
   function getCurrentPartNoFromUrl() {
@@ -5507,8 +5593,8 @@
     }
   }
 
-  function getActiveEpisodeNodeText(el) {
-    if (!el || !isVisible(el)) return "";
+  function getActiveEpisodeNodeText(el, requireVisible = true) {
+    if (!el || (requireVisible && !isVisible(el))) return "";
     const candidates = [
       el.getAttribute("title"),
       el.getAttribute("aria-label"),
@@ -5521,7 +5607,7 @@
       "[class*='Name']",
     ];
     for (const selector of titleSelectors) {
-      const nodes = Array.from(el.querySelectorAll(selector)).filter(isVisible).slice(0, 4);
+      const nodes = Array.from(el.querySelectorAll(selector)).filter((node) => !requireVisible || isVisible(node)).slice(0, 4);
       for (const node of nodes) {
         candidates.push(node.getAttribute("title"), node.getAttribute("aria-label"), node.textContent);
       }
