@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.5.19";
+  const SCRIPT_VERSION = "0.5.20";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -44,6 +44,7 @@
     opedSkipHotkey: "biligumi.opedSkipHotkey",
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
+    danmakuFavorites: "biligumi.danmakuFavorites",
   };
 
   const SUBJECT_TYPES = {
@@ -97,6 +98,13 @@
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Alt+Shift+ArrowRight";
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
+  const DANMAKU_FAVORITE_BUTTON_CLASS = "biligumi-danmaku-fav-btn";
+  const DANMAKU_HOVER_BAR_CLASS = "biligumi-danmaku-hover-bar";
+  const DANMAKU_OFFICIAL_ACTION_CLASS = "biligumi-danmaku-official-action";
+  const DANMAKU_FAVORITES_OVERLAY_ID = "biligumi-danmaku-favorites";
+  const DANMAKU_TOAST_CLASS = "biligumi-danmaku-toast";
+  let currentDanmakuHoverText = "";
+  let danmakuHoverHideTimer = 0;
 
   const state = {
     pageKey: "",
@@ -138,6 +146,7 @@
     opedSkipHotkey: normalizeHotkey(readValue(STORAGE.opedSkipHotkey, DEFAULT_OPED_SKIP_HOTKEY)),
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
+    danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
     nonMainResults: [],
     nonMainKeyword: "",
     nonMainBusy: false,
@@ -1600,6 +1609,281 @@
       cursor: not-allowed;
       opacity: .45;
     }
+    .${DANMAKU_FAVORITE_BUTTON_CLASS} {
+      flex: 0 0 auto;
+      box-sizing: border-box;
+      min-width: 44px;
+      height: 28px;
+      margin: 0 6px 0 4px;
+      padding: 0 9px;
+      border: 1px solid transparent;
+      border-radius: 4px;
+      background: transparent;
+      color: #61666d;
+      font-size: 12px;
+      line-height: 26px;
+      text-align: center;
+      white-space: nowrap;
+      cursor: pointer;
+      user-select: none;
+      transition: background .16s, border-color .16s, color .16s;
+    }
+    .${DANMAKU_FAVORITE_BUTTON_CLASS}:hover,
+    .${DANMAKU_FAVORITE_BUTTON_CLASS}:focus-visible {
+      border-color: transparent;
+      background: #e3e5e7;
+      color: #18191c;
+      outline: none;
+    }
+    .bpx-player-container.bpx-state-fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS},
+    .bpx-player-container.bpx-state-webscreen .${DANMAKU_FAVORITE_BUTTON_CLASS},
+    .bpx-player-container:fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS} {
+      border-color: transparent;
+      background: transparent;
+      color: rgba(255, 255, 255, .92);
+      backdrop-filter: none;
+    }
+    .bpx-player-container.bpx-state-fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:hover,
+    .bpx-player-container.bpx-state-fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:focus-visible,
+    .bpx-player-container.bpx-state-webscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:hover,
+    .bpx-player-container.bpx-state-webscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:focus-visible,
+    .bpx-player-container:fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:hover,
+    .bpx-player-container:fullscreen .${DANMAKU_FAVORITE_BUTTON_CLASS}:focus-visible {
+      border-color: transparent;
+      background: rgba(255, 255, 255, .16);
+      color: #fff;
+    }
+    .${DANMAKU_HOVER_BAR_CLASS} {
+      position: fixed;
+      z-index: 2147483646;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 5px;
+      border: 1px solid rgba(15, 23, 42, .1);
+      border-radius: 6px;
+      background: rgba(255, 255, 255, .96);
+      box-shadow: 0 8px 24px rgba(15, 23, 42, .18);
+      color: #18191c;
+      font-size: 12px;
+      line-height: 1;
+      pointer-events: auto;
+    }
+    .${DANMAKU_HOVER_BAR_CLASS}[hidden] {
+      display: none;
+    }
+    .${DANMAKU_HOVER_BAR_CLASS} button {
+      height: 24px;
+      min-width: 34px;
+      border: 0;
+      border-radius: 4px;
+      padding: 0 8px;
+      background: transparent;
+      color: #61666d;
+      cursor: pointer;
+      font: inherit;
+    }
+    .${DANMAKU_HOVER_BAR_CLASS} button:hover,
+    .${DANMAKU_HOVER_BAR_CLASS} button:focus-visible {
+      background: #eaf7ff;
+      color: #008ac5;
+      outline: none;
+    }
+    .${DANMAKU_OFFICIAL_ACTION_CLASS} {
+      display: inline-flex !important;
+      align-items: center;
+      justify-content: center;
+      box-sizing: border-box;
+      height: 24px;
+      min-width: 30px;
+      margin-left: 4px;
+      padding: 0 8px;
+      border: 0;
+      border-radius: 4px;
+      background: transparent;
+      color: inherit;
+      cursor: pointer;
+      font: inherit;
+      font-size: 12px;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .${DANMAKU_OFFICIAL_ACTION_CLASS}:hover,
+    .${DANMAKU_OFFICIAL_ACTION_CLASS}:focus-visible {
+      background: rgba(0, 174, 236, .12);
+      color: #00aeec;
+      outline: none;
+    }
+    .bpx-player-dm-tip:has(.${DANMAKU_OFFICIAL_ACTION_CLASS}) {
+      width: 252px !important;
+    }
+    .bpx-player-dm-tip:has(.${DANMAKU_OFFICIAL_ACTION_CLASS}) .bpx-player-dm-tip-svgm,
+    .bpx-player-dm-tip:has(.${DANMAKU_OFFICIAL_ACTION_CLASS}) .bpx-player-dm-tip-svgl {
+      display: none !important;
+    }
+    .bpx-player-dm-tip:has(.${DANMAKU_OFFICIAL_ACTION_CLASS})::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 7px;
+      z-index: 1;
+      width: 252px;
+      height: 41px;
+      box-sizing: border-box;
+      border: 1px solid rgba(255, 255, 255, .9);
+      border-radius: 20.5px;
+      background: rgba(21, 21, 21, .78);
+      pointer-events: none;
+    }
+    .bpx-player-dm-tip:has(.${DANMAKU_OFFICIAL_ACTION_CLASS})::after {
+      content: "";
+      position: absolute;
+      left: 108px;
+      top: 2px;
+      z-index: 2;
+      width: 10px;
+      height: 10px;
+      box-sizing: border-box;
+      border-left: 1px solid rgba(255, 255, 255, .9);
+      border-top: 1px solid rgba(255, 255, 255, .9);
+      background: rgba(21, 21, 21, .78);
+      transform: rotate(45deg);
+      pointer-events: none;
+    }
+    .bpx-player-dm-tip .${DANMAKU_OFFICIAL_ACTION_CLASS} {
+      position: absolute !important;
+      top: 10px;
+      z-index: 3;
+      width: 32px;
+      height: 32px;
+      margin: 0;
+      padding: 0;
+      background: transparent;
+      color: #fff;
+      font-weight: 600;
+      pointer-events: auto;
+      border-radius: 4px;
+    }
+    .bpx-player-dm-tip .${DANMAKU_OFFICIAL_ACTION_CLASS}:hover,
+    .bpx-player-dm-tip .${DANMAKU_OFFICIAL_ACTION_CLASS}:focus-visible {
+      background: rgba(47, 50, 56, .898);
+      color: #fff;
+    }
+    .bpx-player-dm-tip .${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action="danmaku-repeat"] {
+      left: 166px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .bpx-player-dm-tip .${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action="danmaku-favorite"] {
+      left: 212px;
+      font-size: 18px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} {
+      position: fixed;
+      inset: 0;
+      z-index: 2147483645;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, .35);
+      box-sizing: border-box;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-dialog {
+      width: min(520px, 100%);
+      max-height: min(620px, calc(100vh - 36px));
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      overflow: hidden;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 18px 48px rgba(15, 23, 42, .25);
+      color: #18191c;
+      font-size: 13px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-head,
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-tools {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px;
+      border-bottom: 1px solid #edf0f5;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-title {
+      flex: 1;
+      min-width: 0;
+      font-weight: 700;
+      font-size: 14px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-tools input {
+      flex: 1;
+      min-width: 0;
+      height: 30px;
+      border: 1px solid #d8dee8;
+      border-radius: 5px;
+      padding: 0 9px;
+      font-size: 13px;
+      outline: none;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-list {
+      overflow: auto;
+      padding: 8px 12px 12px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorites-empty {
+      padding: 28px 8px;
+      color: #7b8794;
+      text-align: center;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorite-row {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 9px 0;
+      border-bottom: 1px solid #f0f2f5;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorite-text {
+      min-width: 0;
+      overflow: hidden;
+      color: #18191c;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} .biligumi-danmaku-favorite-actions {
+      display: inline-flex;
+      gap: 5px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} button {
+      height: 28px;
+      border: 1px solid #d8dee8;
+      border-radius: 5px;
+      padding: 0 9px;
+      background: #fff;
+      color: #61666d;
+      cursor: pointer;
+      font-size: 12px;
+    }
+    #${DANMAKU_FAVORITES_OVERLAY_ID} button:hover,
+    #${DANMAKU_FAVORITES_OVERLAY_ID} button:focus-visible {
+      border-color: #00aeec;
+      color: #008ac5;
+      outline: none;
+    }
+    .${DANMAKU_TOAST_CLASS} {
+      position: fixed;
+      left: 50%;
+      bottom: 86px;
+      z-index: 2147483647;
+      transform: translateX(-50%);
+      max-width: min(420px, calc(100vw - 32px));
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: rgba(24, 25, 28, .9);
+      color: #fff;
+      font-size: 13px;
+      line-height: 1.4;
+      box-shadow: 0 8px 22px rgba(15, 23, 42, .22);
+      pointer-events: none;
+    }
   `);
 
   let routeRefreshSeq = 0;
@@ -1620,6 +1904,7 @@
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
     bindOpedSkipButtonEvents();
+    bindDanmakuEnhancementEvents();
   }
 
   function observeRouteChanges() {
@@ -1690,6 +1975,7 @@
     state.autoEpisodeSyncLastKey = "";
     state.autoWatchBlockedKey = "";
     refreshOpedSkipButton();
+    refreshDanmakuFavoriteButtons();
     injectWhenReady(true);
   }
 
@@ -4015,6 +4301,584 @@
     if (!timeRect.height || !buttonRect.height) return;
     const offset = (timeRect.top + timeRect.height / 2) - (buttonRect.top + buttonRect.height / 2);
     button.style.transform = `translateY(${offset.toFixed(2)}px)`;
+  }
+
+  function bindDanmakuEnhancementEvents() {
+    if (window.__biligumiDanmakuEnhancementEventsBound) return;
+    window.__biligumiDanmakuEnhancementEventsBound = true;
+    let refreshTimer = 0;
+    const scheduleRefresh = () => {
+      if (refreshTimer) return;
+      refreshTimer = window.setTimeout(() => {
+        refreshTimer = 0;
+        refreshDanmakuFavoriteButtons();
+        refreshOfficialDanmakuActionButtons();
+      }, 250);
+    };
+    const observer = new MutationObserver(scheduleRefresh);
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+    document.addEventListener("pointerover", handleDanmakuPointerOver, true);
+    document.addEventListener("pointermove", handleDanmakuPointerMove, true);
+    document.addEventListener("pointerout", handleDanmakuPointerOut, true);
+    document.addEventListener("keydown", handleDanmakuEnhancementKeydown, true);
+    document.addEventListener("pointerdown", handleDanmakuEnhancementPointerDown, true);
+    document.addEventListener("click", handleDanmakuEnhancementClick, true);
+    window.addEventListener("scroll", () => hideDanmakuHoverBarSoon(), true);
+    window.addEventListener("resize", () => hideDanmakuHoverBar(), true);
+    window.setInterval(refreshDanmakuFavoriteButtons, 2000);
+    refreshDanmakuFavoriteButtons();
+  }
+
+  function refreshDanmakuFavoriteButtons() {
+    const roots = Array.from(document.querySelectorAll(".bpx-player-dm-root"));
+    const activeRoots = new Set();
+    roots.forEach((root) => {
+      const hint = root.querySelector(".bpx-player-dm-hint");
+      if (!hint || !isVisible(root) || !isVisible(hint)) return;
+      activeRoots.add(root);
+      let button = root.querySelector(`.${DANMAKU_FAVORITE_BUTTON_CLASS}`);
+      if (!button) {
+        button = document.createElement("button");
+        button.type = "button";
+        button.className = DANMAKU_FAVORITE_BUTTON_CLASS;
+        button.dataset.action = "open-danmaku-favorites";
+        button.textContent = "收藏";
+      }
+      button.title = `打开弹幕收藏（${state.danmakuFavorites.length}）`;
+      if (button.nextElementSibling !== hint) {
+        hint.insertAdjacentElement("beforebegin", button);
+      }
+    });
+
+    Array.from(document.querySelectorAll(`.${DANMAKU_FAVORITE_BUTTON_CLASS}`)).forEach((button) => {
+      const root = button.closest(".bpx-player-dm-root");
+      if (!root || !activeRoots.has(root)) button.remove();
+    });
+  }
+
+  function handleDanmakuPointerOver(event) {
+    const node = getDanmakuCommentNode(event.target);
+    if (!node) return;
+    const text = normalizeDanmakuText(node.textContent);
+    if (!text) return;
+    showDanmakuHoverBar(node, text);
+  }
+
+  function handleDanmakuPointerMove(event) {
+    if (event.target && event.target.closest && event.target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`)) return;
+    const node = findDanmakuCommentNodeAtPoint(event.clientX, event.clientY);
+    if (node) {
+      const text = normalizeDanmakuText(node.textContent);
+      if (text) showDanmakuHoverBar(node, text);
+      return;
+    }
+    if (!isPointInsideDanmakuArea(event.clientX, event.clientY)) hideDanmakuHoverBarSoon();
+  }
+
+  function handleDanmakuPointerOut(event) {
+    const node = getDanmakuCommentNode(event.target);
+    if (!node) return;
+    const related = event.relatedTarget;
+    const hoverBar = getDanmakuHoverBar(false);
+    if (node.contains(related) || (hoverBar && hoverBar.contains(related))) return;
+    hideDanmakuHoverBarSoon();
+  }
+
+  function handleDanmakuEnhancementKeydown(event) {
+    if (event.key !== "Escape") return;
+    if (document.getElementById(DANMAKU_FAVORITES_OVERLAY_ID)) {
+      event.preventDefault();
+      event.stopPropagation();
+      closeDanmakuFavoritesDialog();
+      return;
+    }
+    hideDanmakuHoverBar();
+  }
+
+  function handleDanmakuEnhancementPointerDown(event) {
+    const target = event.target && event.target.closest ? event.target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action]`) : null;
+    if (!target) return;
+    target.dataset.biligumiPointerActionAt = String(Date.now());
+    runDanmakuEnhancementAction(event, target);
+  }
+
+  function handleDanmakuEnhancementClick(event) {
+    const target = event.target && event.target.closest ? event.target.closest("[data-action]") : null;
+    if (!target) return;
+    const handledAt = Number(target.dataset && target.dataset.biligumiPointerActionAt) || 0;
+    if (handledAt && Date.now() - handledAt < 1200) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      return;
+    }
+    runDanmakuEnhancementAction(event, target);
+  }
+
+  function runDanmakuEnhancementAction(event, target) {
+    const action = target.dataset.action;
+    if (!action || (!action.startsWith("danmaku-") && action !== "open-danmaku-favorites")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+
+    const text = getDanmakuActionText(target, action);
+    try {
+      if (action === "open-danmaku-favorites") {
+        openDanmakuFavoritesDialog();
+      } else if (action === "danmaku-repeat") {
+        sendBilibiliDanmaku(text);
+      } else if (action === "danmaku-favorite") {
+        addDanmakuFavorite(text);
+      } else if (action === "danmaku-send-favorite") {
+        sendBilibiliDanmaku(text);
+      } else if (action === "danmaku-fill-favorite") {
+        setBilibiliDanmakuInputText(text);
+        showDanmakuToast("已填入弹幕输入框。");
+      } else if (action === "danmaku-delete-favorite") {
+        deleteDanmakuFavorite(target.dataset.favoriteId);
+      } else if (action === "danmaku-add-current") {
+        addCurrentDanmakuInputToFavorites();
+      } else if (action === "danmaku-close-favorites") {
+        closeDanmakuFavoritesDialog();
+      }
+    } catch (error) {
+      showDanmakuToast(error && error.message ? error.message : String(error));
+    }
+  }
+
+  function getDanmakuCommentNode(target) {
+    const node = target && target.closest ? target.closest(".bili-danmaku-x-dm[role='comment'], .bili-danmaku-x-dm") : null;
+    if (!node || !isVisible(node) || node.closest(`.${DANMAKU_HOVER_BAR_CLASS}, .${DANMAKU_OFFICIAL_ACTION_CLASS}`)) return null;
+    return node;
+  }
+
+  function findDanmakuCommentNodeAtPoint(x, y) {
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    const nodes = Array.from(document.querySelectorAll(".bili-danmaku-x-dm[role='comment'], .bili-danmaku-x-dm"))
+      .filter((node) => {
+        if (!isVisible(node) || !normalizeDanmakuText(node.textContent)) return false;
+        const rect = node.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0
+          && x >= rect.left && x <= rect.right
+          && y >= rect.top && y <= rect.bottom;
+      });
+    return nodes.sort((a, b) => {
+      const aRect = a.getBoundingClientRect();
+      const bRect = b.getBoundingClientRect();
+      return (aRect.width * aRect.height) - (bRect.width * bRect.height);
+    })[0] || null;
+  }
+
+  function isPointInsideDanmakuArea(x, y) {
+    return Array.from(document.querySelectorAll(".bpx-player-video-area, .bpx-player-row-dm-wrap, .bpx-player-dm-mask-wrap"))
+      .filter(isVisible)
+      .some((node) => {
+        const rect = node.getBoundingClientRect();
+        return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+      });
+  }
+
+  function showDanmakuHoverBar(anchor, text) {
+    void anchor;
+    currentDanmakuHoverText = normalizeDanmakuText(text);
+    window.clearTimeout(danmakuHoverHideTimer);
+    removeLegacyDanmakuHoverBar();
+    [0, 80, 180, 360].forEach((delay) => {
+      window.setTimeout(() => refreshOfficialDanmakuActionButtons(), delay);
+    });
+  }
+
+  function refreshOfficialDanmakuActionButtons() {
+    const text = normalizeDanmakuText(currentDanmakuHoverText);
+    if (!text) {
+      removeOfficialDanmakuActionButtons();
+      return false;
+    }
+    const bar = findOfficialDanmakuActionBar();
+    if (!bar) {
+      removeOfficialDanmakuActionButtons();
+      return false;
+    }
+    const host = getOfficialDanmakuActionHost(bar);
+    if (!host) return false;
+    removeLegacyDanmakuHoverBar();
+    removeOfficialDanmakuActionButtons();
+    host.dataset.biligumiDanmakuText = text;
+    createOfficialDanmakuActionButton(host, "danmaku-repeat", "+1", "用当前弹幕设置发送同样内容", text);
+    createOfficialDanmakuActionButton(host, "danmaku-favorite", "★", "收藏这条弹幕", text);
+    return true;
+  }
+
+  function createOfficialDanmakuActionButton(host, action, label, title, text) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = DANMAKU_OFFICIAL_ACTION_CLASS;
+    button.dataset.action = action;
+    button.dataset.danmakuText = text;
+    button.textContent = label;
+    button.title = title;
+    button.setAttribute("aria-label", title);
+    host.appendChild(button);
+  }
+
+  function findOfficialDanmakuActionBar() {
+    const officialTip = Array.from(document.querySelectorAll(".bpx-player-dm-tip.bpx-player-showB, .bpx-player-dm-tip"))
+      .find((node) => isVisible(node) && node.querySelector(".bpx-player-dm-tip-copy, .bpx-player-dm-tip-back"));
+    if (officialTip) return officialTip;
+    const selectors = [
+      ".bpx-player-dm-tip.bpx-player-showB",
+      ".bpx-player-dm-tip",
+      "[class*='danmaku'][class*='menu']",
+      "[class*='danmaku'][class*='bar']",
+      "[class*='danmaku'][class*='tip']",
+      "[class*='danmaku'][class*='panel']",
+      "[class*='dm'][class*='menu']",
+      "[class*='dm'][class*='bar']",
+      "[class*='dm'][class*='tip']",
+      "[class*='bpx'][class*='menu']",
+      "[class*='bpx'][class*='tip']",
+      "[class*='bpx'][class*='popup']",
+      "[class*='tooltip']",
+      "[class*='popover']",
+      "[class*='contextmenu']",
+      "[role='tooltip']",
+    ];
+    const nodes = new Set();
+    selectors.forEach((selector) => {
+      document.querySelectorAll(selector).forEach((node) => nodes.add(node));
+    });
+    const actionPattern = /复制|举报|copy|report/i;
+    return Array.from(nodes)
+      .filter((node) => {
+        if (!isVisible(node) || node.closest(`#${DANMAKU_FAVORITES_OVERLAY_ID}, .${DANMAKU_HOVER_BAR_CLASS}`)) return false;
+        const rect = node.getBoundingClientRect();
+        if (rect.width < 24 || rect.height < 12 || rect.width > 720 || rect.height > 160) return false;
+        if (!isNodeNearPlayerArea(node)) return false;
+        return actionPattern.test(getOfficialDanmakuActionSearchText(node));
+      })
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return (aRect.width * aRect.height) - (bRect.width * bRect.height);
+      })[0] || null;
+  }
+
+  function getOfficialDanmakuActionHost(bar) {
+    const host = bar && bar.closest ? bar.closest(".bpx-player-dm-tip") || bar : bar;
+    if (!host || !host.appendChild) return null;
+    return host;
+  }
+
+  function getOfficialDanmakuActionSearchText(node) {
+    const parts = [
+      node.innerText || node.textContent || "",
+      String(node.className || ""),
+      node.getAttribute && node.getAttribute("title") || "",
+      node.getAttribute && node.getAttribute("aria-label") || "",
+    ];
+    if (node.querySelectorAll) {
+      node.querySelectorAll("[title], [aria-label]").forEach((item) => {
+        parts.push(item.getAttribute("title") || "", item.getAttribute("aria-label") || "");
+      });
+      node.querySelectorAll("[class]").forEach((item) => {
+        parts.push(String(item.className || ""));
+      });
+    }
+    return parts.join(" ").slice(0, 1200);
+  }
+
+  function isNodeNearPlayerArea(node) {
+    const player = Array.from(document.querySelectorAll(".bpx-player-video-area, .bpx-player-container, .bpx-player-primary-area"))
+      .filter(isVisible)
+      .sort((a, b) => {
+        const aRect = a.getBoundingClientRect();
+        const bRect = b.getBoundingClientRect();
+        return (bRect.width * bRect.height) - (aRect.width * aRect.height);
+      })[0];
+    if (!player) return true;
+    const rect = node.getBoundingClientRect();
+    const playerRect = player.getBoundingClientRect();
+    const expand = 56;
+    return rect.right >= playerRect.left - expand
+      && rect.left <= playerRect.right + expand
+      && rect.bottom >= playerRect.top - expand
+      && rect.top <= playerRect.bottom + expand;
+  }
+
+  function removeOfficialDanmakuActionButtons() {
+    document.querySelectorAll(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`).forEach((button) => button.remove());
+    document.querySelectorAll(".bpx-player-dm-tip[data-biligumi-danmaku-text]").forEach((host) => {
+      delete host.dataset.biligumiDanmakuText;
+    });
+  }
+
+  function removeLegacyDanmakuHoverBar() {
+    const hoverBar = getDanmakuHoverBar(false);
+    if (hoverBar) hoverBar.remove();
+  }
+
+  function getDanmakuHoverBar(create) {
+    let hoverBar = document.querySelector(`.${DANMAKU_HOVER_BAR_CLASS}`);
+    const host = getDanmakuOverlayHost();
+    if (hoverBar && create && hoverBar.parentElement !== host) host.appendChild(hoverBar);
+    if (!hoverBar && create) {
+      hoverBar = document.createElement("div");
+      hoverBar.className = DANMAKU_HOVER_BAR_CLASS;
+      hoverBar.hidden = true;
+      hoverBar.addEventListener("pointerenter", () => {
+        window.clearTimeout(Number(hoverBar.dataset.hideTimer) || 0);
+      });
+      hoverBar.addEventListener("pointerleave", () => hideDanmakuHoverBarSoon());
+      host.appendChild(hoverBar);
+    }
+    return hoverBar;
+  }
+
+  function positionDanmakuHoverBar(hoverBar, anchor) {
+    const rect = anchor.getBoundingClientRect();
+    const width = Math.max(88, hoverBar.offsetWidth || 88);
+    const height = Math.max(34, hoverBar.offsetHeight || 34);
+    const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.left + rect.width / 2 - width / 2));
+    const topCandidate = rect.bottom + 6;
+    const top = topCandidate + height + 8 <= window.innerHeight ? topCandidate : Math.max(8, rect.top - height - 6);
+    hoverBar.style.left = `${Math.round(left)}px`;
+    hoverBar.style.top = `${Math.round(top)}px`;
+  }
+
+  function hideDanmakuHoverBarSoon() {
+    window.clearTimeout(danmakuHoverHideTimer);
+    danmakuHoverHideTimer = window.setTimeout(hideDanmakuHoverBar, 160);
+    const hoverBar = getDanmakuHoverBar(false);
+    if (!hoverBar) return;
+    window.clearTimeout(Number(hoverBar.dataset.hideTimer) || 0);
+    hoverBar.dataset.hideTimer = String(window.setTimeout(hideDanmakuHoverBar, 160));
+  }
+
+  function hideDanmakuHoverBar() {
+    window.clearTimeout(danmakuHoverHideTimer);
+    danmakuHoverHideTimer = 0;
+    currentDanmakuHoverText = "";
+    removeOfficialDanmakuActionButtons();
+    const hoverBar = getDanmakuHoverBar(false);
+    if (!hoverBar) return;
+    window.clearTimeout(Number(hoverBar.dataset.hideTimer) || 0);
+    hoverBar.remove();
+  }
+
+  function sendBilibiliDanmaku(text) {
+    setBilibiliDanmakuInputText(text);
+    const sendButton = findVisibleElement([
+      ".bpx-player-dm-btn-send",
+      ".bpx-player-dm-root [class*='btn-send']",
+      ".bpx-player-sending-area [class*='send']",
+    ]);
+    if (!sendButton) throw new Error("没有找到 B 站弹幕发送按钮。");
+    sendButton.click();
+    hideDanmakuHoverBar();
+  }
+
+  function setBilibiliDanmakuInputText(text) {
+    const value = normalizeDanmakuText(text);
+    if (!value) throw new Error("弹幕内容为空。");
+    const input = findVisibleElement([
+      ".bpx-player-dm-input",
+      ".bpx-player-dm-root input",
+      ".bpx-player-sending-area input",
+      ".bpx-player-sending-area textarea",
+    ]);
+    if (!input) throw new Error("没有找到 B 站弹幕输入框。");
+    setNativeInputValue(input, value);
+    input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    if (typeof input.focus === "function") input.focus();
+    return input;
+  }
+
+  function setNativeInputValue(input, value) {
+    const proto = input.tagName === "TEXTAREA" ? window.HTMLTextAreaElement.prototype : window.HTMLInputElement.prototype;
+    const descriptor = Object.getOwnPropertyDescriptor(proto, "value");
+    if (descriptor && descriptor.set) {
+      descriptor.set.call(input, value);
+    } else {
+      input.value = value;
+    }
+  }
+
+  function findVisibleElement(selectors) {
+    for (const selector of selectors) {
+      const node = Array.from(document.querySelectorAll(selector)).find((item) => isVisible(item));
+      if (node) return node;
+    }
+    return null;
+  }
+
+  function openDanmakuFavoritesDialog() {
+    state.danmakuFavorites = normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, []));
+    closeDanmakuFavoritesDialog();
+    const overlay = document.createElement("div");
+    overlay.id = DANMAKU_FAVORITES_OVERLAY_ID;
+    overlay.innerHTML = `
+      <div class="biligumi-danmaku-favorites-dialog" role="dialog" aria-modal="true" aria-label="弹幕收藏">
+        <div class="biligumi-danmaku-favorites-head">
+          <div class="biligumi-danmaku-favorites-title">弹幕收藏</div>
+          <button type="button" data-action="danmaku-add-current">收藏当前输入</button>
+          <button type="button" data-action="danmaku-close-favorites" title="关闭">关闭</button>
+        </div>
+        <div class="biligumi-danmaku-favorites-tools">
+          <input type="search" data-role="danmaku-favorites-search" placeholder="搜索收藏弹幕" autocomplete="off">
+        </div>
+        <div class="biligumi-danmaku-favorites-list" data-role="danmaku-favorites-list"></div>
+      </div>
+    `;
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) closeDanmakuFavoritesDialog();
+    });
+    const search = overlay.querySelector("[data-role='danmaku-favorites-search']");
+    if (search) search.addEventListener("input", () => renderDanmakuFavoritesList());
+    getDanmakuOverlayHost().appendChild(overlay);
+    renderDanmakuFavoritesList();
+    if (search) search.focus();
+  }
+
+  function closeDanmakuFavoritesDialog() {
+    const overlay = document.getElementById(DANMAKU_FAVORITES_OVERLAY_ID);
+    if (overlay) overlay.remove();
+  }
+
+  function renderDanmakuFavoritesList() {
+    const overlay = document.getElementById(DANMAKU_FAVORITES_OVERLAY_ID);
+    if (!overlay) return;
+    const list = overlay.querySelector("[data-role='danmaku-favorites-list']");
+    if (!list) return;
+    const searchInput = overlay.querySelector("[data-role='danmaku-favorites-search']");
+    const search = normalizeDanmakuText(searchInput && searchInput.value);
+    const items = state.danmakuFavorites.filter((item) => !search || item.text.includes(search));
+    if (!items.length) {
+      list.innerHTML = `<div class="biligumi-danmaku-favorites-empty">${state.danmakuFavorites.length ? "没有匹配的收藏弹幕。" : "还没有收藏弹幕。"}</div>`;
+      refreshDanmakuFavoriteButtons();
+      return;
+    }
+    list.innerHTML = items.map((item) => `
+      <div class="biligumi-danmaku-favorite-row" data-favorite-id="${escapeHtml(item.id)}">
+        <div class="biligumi-danmaku-favorite-text" title="${escapeHtml(item.text)}">${escapeHtml(item.text)}</div>
+        <div class="biligumi-danmaku-favorite-actions">
+          <button type="button" data-action="danmaku-send-favorite" data-favorite-id="${escapeHtml(item.id)}">发送</button>
+          <button type="button" data-action="danmaku-fill-favorite" data-favorite-id="${escapeHtml(item.id)}">填入</button>
+          <button type="button" data-action="danmaku-delete-favorite" data-favorite-id="${escapeHtml(item.id)}">删除</button>
+        </div>
+      </div>
+    `).join("");
+    refreshDanmakuFavoriteButtons();
+  }
+
+  function addCurrentDanmakuInputToFavorites() {
+    const input = findVisibleElement([".bpx-player-dm-input", ".bpx-player-dm-root input", ".bpx-player-sending-area input", ".bpx-player-sending-area textarea"]);
+    const text = normalizeDanmakuText(input && (input.value || input.textContent));
+    if (!text) throw new Error("当前弹幕输入框为空。");
+    addDanmakuFavorite(text);
+    renderDanmakuFavoritesList();
+  }
+
+  function addDanmakuFavorite(text) {
+    const value = normalizeDanmakuText(text);
+    if (!value) throw new Error("弹幕内容为空。");
+    const next = normalizeDanmakuFavorites(state.danmakuFavorites).filter((item) => item.text !== value);
+    next.unshift({
+      id: String(Date.now()),
+      text: value,
+      title: state.rawTitle || document.title || "",
+      url: location.href,
+      createdAt: Date.now(),
+    });
+    state.danmakuFavorites = next.slice(0, 300);
+    writeJsonValue(STORAGE.danmakuFavorites, state.danmakuFavorites);
+    renderDanmakuFavoritesList();
+    showDanmakuToast("已收藏弹幕。");
+  }
+
+  function deleteDanmakuFavorite(id) {
+    const before = state.danmakuFavorites.length;
+    state.danmakuFavorites = normalizeDanmakuFavorites(state.danmakuFavorites).filter((item) => item.id !== String(id || ""));
+    if (state.danmakuFavorites.length === before) return;
+    writeJsonValue(STORAGE.danmakuFavorites, state.danmakuFavorites);
+    renderDanmakuFavoritesList();
+    showDanmakuToast("已删除收藏。");
+  }
+
+  function getDanmakuActionRowText(target) {
+    const id = target && target.dataset ? target.dataset.favoriteId : "";
+    const item = state.danmakuFavorites.find((entry) => entry.id === id);
+    return item ? item.text : "";
+  }
+
+  function getDanmakuActionText(target, action) {
+    const officialHost = target && target.closest ? target.closest(".bpx-player-dm-tip") : null;
+    if (target && target.classList && target.classList.contains(DANMAKU_OFFICIAL_ACTION_CLASS)) {
+      return cleanOfficialDanmakuActionText(
+        target.dataset.danmakuText
+        || officialHost && officialHost.dataset.biligumiDanmakuText
+        || currentDanmakuHoverText
+      );
+    }
+    if (action === "danmaku-repeat" || action === "danmaku-favorite") {
+      return normalizeDanmakuText(target && target.dataset ? target.dataset.danmakuText : "");
+    }
+    return normalizeDanmakuText(target && target.dataset && target.dataset.danmakuText || getDanmakuActionRowText(target));
+  }
+
+  function cleanOfficialDanmakuActionText(value) {
+    const text = normalizeDanmakuText(value);
+    const hoverText = normalizeDanmakuText(currentDanmakuHoverText);
+    if (hoverText && text !== hoverText && text.endsWith(hoverText)) return hoverText;
+    return text.replace(/^(?:(?:\+1|★|收藏)\s+)+/, "").trim();
+  }
+
+  function normalizeDanmakuFavorites(value) {
+    const list = Array.isArray(value) ? value : [];
+    const seen = new Set();
+    return list
+      .map((item, index) => {
+        const rawText = typeof item === "string" ? item : item && item.text;
+        const text = normalizeStoredDanmakuFavoriteText(rawText);
+        if (!text || seen.has(text)) return null;
+        seen.add(text);
+        const createdAt = Number(item && item.createdAt) || Date.now();
+        return {
+          id: String(item && item.id || `${createdAt}-${index}`),
+          text,
+          title: String(item && item.title || ""),
+          url: String(item && item.url || ""),
+          createdAt,
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 300);
+  }
+
+  function normalizeDanmakuText(value) {
+    return String(value == null ? "" : value).replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeStoredDanmakuFavoriteText(value) {
+    return normalizeDanmakuText(value).replace(/^(?:(?:\+1|★|收藏)\s+)+/, "").trim();
+  }
+
+  function getDanmakuOverlayHost() {
+    return document.fullscreenElement || document.body || document.documentElement;
+  }
+
+  function showDanmakuToast(message) {
+    const host = getDanmakuOverlayHost();
+    let toast = host.querySelector(`.${DANMAKU_TOAST_CLASS}`);
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.className = DANMAKU_TOAST_CLASS;
+      host.appendChild(toast);
+    }
+    toast.textContent = String(message || "");
+    window.clearTimeout(Number(toast.dataset.hideTimer) || 0);
+    toast.dataset.hideTimer = String(window.setTimeout(() => toast.remove(), 1800));
   }
 
   function handleOpedSkipButtonClick(event) {
