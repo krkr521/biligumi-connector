@@ -3452,6 +3452,7 @@
   }
 
   document.addEventListener("click", handlePanelClick, true);
+  document.addEventListener("keydown", handlePanelKeydown, true);
   document.addEventListener("contextmenu", handlePanelContextMenu, true);
 
   function handlePanelClick(event) {
@@ -3497,6 +3498,22 @@
     if (action === "rate-clear") rateSubject(0).catch(showError);
     if (action === "save-progress") saveProgressFromInput().catch(showError);
     if (action === "toggle-episode") toggleEpisode(Number(target.dataset.episodeId), target.dataset.done === "1").catch(showError);
+  }
+
+  function handlePanelKeydown(event) {
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel || !panel.contains(event.target)) return;
+
+    const input = event.target.closest("[data-role='search-keyword']");
+    if (!input || !panel.contains(input)) return;
+
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+
+    searchSubjects().catch(showError);
   }
 
   function handlePanelContextMenu(event) {
