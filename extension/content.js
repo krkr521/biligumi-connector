@@ -4504,7 +4504,7 @@
     const target = event.target && event.target.closest ? event.target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action]`) : null;
     if (!target) return;
     target.dataset.biligumiPointerActionAt = String(Date.now());
-    runDanmakuEnhancementAction(event, target);
+    void runDanmakuEnhancementAction(event, target);
   }
 
   function handleDanmakuEnhancementClick(event) {
@@ -4517,27 +4517,30 @@
       if (event.stopImmediatePropagation) event.stopImmediatePropagation();
       return;
     }
-    runDanmakuEnhancementAction(event, target);
+    void runDanmakuEnhancementAction(event, target);
   }
 
-  function runDanmakuEnhancementAction(event, target) {
+  async function runDanmakuEnhancementAction(event, target) {
     const action = target.dataset.action;
     if (!action || (!action.startsWith("danmaku-") && action !== "open-danmaku-favorites")) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
-    const text = getDanmakuActionText(target, action);
     try {
       if (action === "open-danmaku-favorites") {
         openDanmakuFavoritesDialog();
       } else if (action === "danmaku-repeat") {
+        const text = await getDanmakuActionText(target, action);
         sendBilibiliDanmaku(text);
       } else if (action === "danmaku-favorite") {
+        const text = await getDanmakuActionText(target, action);
         addDanmakuFavorite(text);
       } else if (action === "danmaku-send-favorite") {
+        const text = await getDanmakuActionText(target, action);
         sendBilibiliDanmaku(text);
       } else if (action === "danmaku-fill-favorite") {
+        const text = await getDanmakuActionText(target, action);
         setBilibiliDanmakuInputText(text);
         showDanmakuToast("已填入弹幕输入框。");
       } else if (action === "danmaku-delete-favorite") {
@@ -4805,7 +4808,7 @@
   }
 
   function sendBilibiliDanmaku(text) {
-    setBilibiliDanmakuInputText(text);
+    setBilibiliDanmakuInputText(text, { focus: false });
     const sendButton = findVisibleElement([
       ".bpx-player-dm-btn-send",
       ".bpx-player-dm-root [class*='btn-send']",
@@ -4813,10 +4816,9 @@
     ]);
     if (!sendButton) throw new Error("没有找到 B 站弹幕发送按钮。");
     sendButton.click();
-    hideDanmakuHoverBar();
   }
 
-  function setBilibiliDanmakuInputText(text) {
+  function setBilibiliDanmakuInputText(text, options = {}) {
     const value = normalizeDanmakuText(text);
     if (!value) throw new Error("弹幕内容为空。");
     const input = findVisibleElement([
@@ -4829,7 +4831,7 @@
     setNativeInputValue(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    if (typeof input.focus === "function") input.focus();
+    if (options.focus !== false && typeof input.focus === "function") input.focus();
     return input;
   }
 
@@ -4950,11 +4952,12 @@
     return item ? item.text : "";
   }
 
-  function getDanmakuActionText(target, action) {
+  async function getDanmakuActionText(target, action) {
     const officialHost = target && target.closest ? target.closest(".bpx-player-dm-tip") : null;
     if (target && target.classList && target.classList.contains(DANMAKU_OFFICIAL_ACTION_CLASS)) {
       return cleanOfficialDanmakuActionText(
-        target.dataset.danmakuText
+        await getOfficialCopiedDanmakuText(target)
+        || target.dataset.danmakuText
         || officialHost && officialHost.dataset.biligumiDanmakuText
         || currentDanmakuHoverText
       );
@@ -4963,6 +4966,42 @@
       return normalizeDanmakuText(target && target.dataset ? target.dataset.danmakuText : "");
     }
     return normalizeDanmakuText(target && target.dataset && target.dataset.danmakuText || getDanmakuActionRowText(target));
+  }
+
+  async function getOfficialCopiedDanmakuText(target) {
+    const host = target && target.closest ? target.closest(".bpx-player-dm-tip") : null;
+    const copyButton = host && host.querySelector ? host.querySelector(".bpx-player-dm-tip-copy") : null;
+    if (!copyButton || typeof copyButton.click !== "function") return "";
+    let copiedByEvent = "";
+    const captureCopy = (event) => {
+      const clipboardText = event && event.clipboardData && event.clipboardData.getData
+        ? event.clipboardData.getData("text/plain")
+        : "";
+      copiedByEvent = normalizeDanmakuText(clipboardText || String(document.getSelection && document.getSelection() || ""));
+    };
+    document.addEventListener("copy", captureCopy, true);
+    try {
+      copyButton.click();
+      await wait(60);
+    } finally {
+      document.removeEventListener("copy", captureCopy, true);
+    }
+    if (copiedByEvent) return copiedByEvent;
+    const after = await readClipboardTextSafely();
+    return after.ok ? normalizeDanmakuText(after.text) : "";
+  }
+
+  async function readClipboardTextSafely() {
+    try {
+      if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") return { ok: false, text: "" };
+      return { ok: true, text: await navigator.clipboard.readText() };
+    } catch (_) {
+      return { ok: false, text: "" };
+    }
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
   function cleanOfficialDanmakuActionText(value) {
