@@ -105,6 +105,7 @@
   const DANMAKU_FAVORITES_OVERLAY_ID = "biligumi-danmaku-favorites";
   const DANMAKU_TOAST_CLASS = "biligumi-danmaku-toast";
   let currentDanmakuHoverText = "";
+  let currentDanmakuHoverAnchor = null;
   let danmakuHoverHideTimer = 0;
 
   const state = {
@@ -4462,7 +4463,14 @@
   }
 
   function handleDanmakuPointerMove(event) {
-    if (event.target && event.target.closest && event.target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`)) return;
+    if (isDanmakuActionSurface(event.target)) return;
+    const directNode = getDanmakuCommentNode(event.target);
+    if (directNode) {
+      const text = normalizeDanmakuText(directNode.textContent);
+      if (text) showDanmakuHoverBar(directNode, text);
+      return;
+    }
+    if (currentDanmakuHoverText && findOfficialDanmakuActionBar()) return;
     const node = findDanmakuCommentNodeAtPoint(event.clientX, event.clientY);
     if (node) {
       const text = normalizeDanmakuText(node.textContent);
@@ -4577,7 +4585,7 @@
   }
 
   function showDanmakuHoverBar(anchor, text) {
-    void anchor;
+    currentDanmakuHoverAnchor = anchor || null;
     currentDanmakuHoverText = normalizeDanmakuText(text);
     window.clearTimeout(danmakuHoverHideTimer);
     removeLegacyDanmakuHoverBar();
@@ -4599,16 +4607,26 @@
     }
     const host = getOfficialDanmakuActionHost(bar);
     if (!host) return false;
+    if (!isOfficialDanmakuActionBarNearAnchor(bar, currentDanmakuHoverAnchor)) {
+      return Boolean(host.querySelector(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`));
+    }
     removeLegacyDanmakuHoverBar();
-    removeOfficialDanmakuActionButtons();
+    removeOfficialDanmakuActionButtons(host);
     host.dataset.biligumiDanmakuText = text;
-    createOfficialDanmakuActionButton(host, "danmaku-repeat", "+1", "用当前弹幕设置发送同样内容", text);
-    createOfficialDanmakuActionButton(host, "danmaku-favorite", "★", "收藏这条弹幕", text);
+    upsertOfficialDanmakuActionButton(host, "danmaku-repeat", "+1", "用当前弹幕设置发送同样内容", text);
+    upsertOfficialDanmakuActionButton(host, "danmaku-favorite", "★", "收藏这条弹幕", text);
     return true;
   }
 
-  function createOfficialDanmakuActionButton(host, action, label, title, text) {
-    const button = document.createElement("button");
+  function upsertOfficialDanmakuActionButton(host, action, label, title, text) {
+    let button = host.querySelector(`.${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action="${action}"]`);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = DANMAKU_OFFICIAL_ACTION_CLASS;
+      button.dataset.action = action;
+      host.appendChild(button);
+    }
     button.type = "button";
     button.className = DANMAKU_OFFICIAL_ACTION_CLASS;
     button.dataset.action = action;
@@ -4616,7 +4634,6 @@
     button.textContent = label;
     button.title = title;
     button.setAttribute("aria-label", title);
-    host.appendChild(button);
   }
 
   function findOfficialDanmakuActionBar() {
@@ -4667,6 +4684,25 @@
     return host;
   }
 
+  function isDanmakuActionSurface(target) {
+    if (!target || !target.closest) return false;
+    return Boolean(target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}, .bpx-player-dm-tip`));
+  }
+
+  function isOfficialDanmakuActionBarNearAnchor(bar, anchor) {
+    if (!bar || !anchor || !anchor.isConnected || !isVisible(anchor)) return true;
+    const barRect = bar.getBoundingClientRect();
+    const anchorRect = anchor.getBoundingClientRect();
+    if (!barRect.width || !barRect.height || !anchorRect.width || !anchorRect.height) return true;
+    const horizontalOverlap = barRect.right >= anchorRect.left - 16 && barRect.left <= anchorRect.right + 16;
+    const verticalGap = Math.min(
+      Math.abs(barRect.top - anchorRect.bottom),
+      Math.abs(anchorRect.top - barRect.bottom),
+      Math.abs((barRect.top + barRect.height / 2) - (anchorRect.top + anchorRect.height / 2))
+    );
+    return horizontalOverlap && verticalGap <= 56;
+  }
+
   function getOfficialDanmakuActionSearchText(node) {
     const parts = [
       node.innerText || node.textContent || "",
@@ -4703,9 +4739,13 @@
       && rect.top <= playerRect.bottom + expand;
   }
 
-  function removeOfficialDanmakuActionButtons() {
-    document.querySelectorAll(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`).forEach((button) => button.remove());
+  function removeOfficialDanmakuActionButtons(exceptHost) {
+    document.querySelectorAll(`.${DANMAKU_OFFICIAL_ACTION_CLASS}`).forEach((button) => {
+      if (exceptHost && exceptHost.contains(button)) return;
+      button.remove();
+    });
     document.querySelectorAll(".bpx-player-dm-tip[data-biligumi-danmaku-text]").forEach((host) => {
+      if (exceptHost && host === exceptHost) return;
       delete host.dataset.biligumiDanmakuText;
     });
   }
@@ -4756,6 +4796,7 @@
     window.clearTimeout(danmakuHoverHideTimer);
     danmakuHoverHideTimer = 0;
     currentDanmakuHoverText = "";
+    currentDanmakuHoverAnchor = null;
     removeOfficialDanmakuActionButtons();
     const hoverBar = getDanmakuHoverBar(false);
     if (!hoverBar) return;
