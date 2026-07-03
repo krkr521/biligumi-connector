@@ -4987,17 +4987,7 @@
       document.removeEventListener("copy", captureCopy, true);
     }
     if (copiedByEvent) return copiedByEvent;
-    const after = await readClipboardTextSafely();
-    return after.ok ? normalizeDanmakuText(after.text) : "";
-  }
-
-  async function readClipboardTextSafely() {
-    try {
-      if (!navigator.clipboard || typeof navigator.clipboard.readText !== "function") return { ok: false, text: "" };
-      return { ok: true, text: await navigator.clipboard.readText() };
-    } catch (_) {
-      return { ok: false, text: "" };
-    }
+    return "";
   }
 
   function wait(ms) {
