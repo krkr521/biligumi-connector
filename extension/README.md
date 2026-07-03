@@ -2,6 +2,8 @@
 
 这是 Biligumi Connector 的 Chrome/Edge Manifest V3 插件版。它尽量复用油猴版 userscript 的完整页面功能，并额外通过浏览器级 `commands` 快捷键触发 OP/ED 跳过，因此页面非焦点或画中画时，也会尽量把命令发给当前或最近的 Bilibili 视频页。
 
+**注意：目前我没有实际使用插件版，因此插件版尚未做完整功能测试，不能保证行为和油猴脚本完全一致；如遇问题请提交 issue。**
+
 ## 功能
 
 - 注入 `https://www.bilibili.com/video/*` 和 `https://www.bilibili.com/bangumi/play/*`。

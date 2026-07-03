@@ -17,7 +17,7 @@
 - 能搜索并绑定 Bangumi 动画条目。
 - 能读取和更新 Bangumi 收藏状态、评分、章节看过状态。
 
-本项目由人工需求驱动，并通过 Codex vibe coding 协作实现和整理。
+**请注意：本项目由人工需求驱动，并通过 Codex vibe coding 协作实现和整理。** 如果介意 AI 辅助生成的代码，请在使用、引用或继续开发前自行审阅。
 
 ## 安装油猴版
 
@@ -35,6 +35,8 @@ Access Token 可以在 Bangumi 官方页面生成：
 <https://next.bgm.tv/demo/access-token>
 
 ## 安装浏览器插件版
+
+**注意：目前我没有实际使用插件版，因此插件版尚未做完整功能测试，不能保证行为和油猴脚本完全一致；如遇问题请提交 issue。**
 
 1. 打开 Chrome 的 `chrome://extensions/` 或 Edge 的 `edge://extensions/`。
 2. 开启“开发者模式”。
