@@ -4953,14 +4953,10 @@
   }
 
   async function getDanmakuActionText(target, action) {
-    const officialHost = target && target.closest ? target.closest(".bpx-player-dm-tip") : null;
     if (target && target.classList && target.classList.contains(DANMAKU_OFFICIAL_ACTION_CLASS)) {
-      return cleanOfficialDanmakuActionText(
-        await getOfficialCopiedDanmakuText(target)
-        || target.dataset.danmakuText
-        || officialHost && officialHost.dataset.biligumiDanmakuText
-        || currentDanmakuHoverText
-      );
+      const text = cleanOfficialDanmakuActionText(await getOfficialCopiedDanmakuText(target));
+      if (!text) throw new Error("无法确认当前弹幕，请重新悬停后再试。");
+      return text;
     }
     if (action === "danmaku-repeat" || action === "danmaku-favorite") {
       return normalizeDanmakuText(target && target.dataset ? target.dataset.danmakuText : "");
@@ -4978,6 +4974,9 @@
         ? event.clipboardData.getData("text/plain")
         : "";
       copiedByEvent = normalizeDanmakuText(clipboardText || String(document.getSelection && document.getSelection() || ""));
+      if (event && event.preventDefault) event.preventDefault();
+      if (event && event.stopPropagation) event.stopPropagation();
+      if (event && event.stopImmediatePropagation) event.stopImmediatePropagation();
     };
     document.addEventListener("copy", captureCopy, true);
     try {
