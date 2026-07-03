@@ -5,7 +5,7 @@
 ## 功能
 
 - 注入 `https://www.bilibili.com/video/*` 和 `https://www.bilibili.com/bangumi/play/*`。
-- 复用 userscript 主体逻辑：Bangumi 面板、Token 设置、白名单、绑定、搜索、收藏/评分/章节同步、角色/CV 横栏、条目信息栏、自动标记已看、OP/ED 跳过按钮等。
+- 复用 userscript 主体逻辑：Bangumi 面板、Token 设置、白名单、绑定、搜索、PV / 预告轻量候选、收藏/评分/章节同步、角色/CV 横栏、条目信息栏、自动标记已看、OP/ED 跳过按钮等。
 - 使用 `chrome.storage.local` 保存原 userscript 的本地设置与绑定数据。
 - 使用 background service worker 代理 Bangumi API / Bangumi 网页请求，替代 `GM_xmlhttpRequest`。
 - 默认命令快捷键为 `Alt+Shift+Right`。
@@ -35,7 +35,7 @@
 
 - Bangumi Access Token。
 - 白名单。
-- 条目绑定、搜索候选、收藏状态、评分、章节状态。
+- 条目绑定、Bangumi 站内搜索、PV / 预告搜索候选、收藏状态、评分、章节状态。
 - 角色/CV 横栏、条目信息栏、官方番剧页布局兼容。
 - 自动标记已看阈值。
 - 当前条目的 OP/ED 跳过开关和秒数。

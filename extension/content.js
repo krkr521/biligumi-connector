@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.1";
+  const SCRIPT_VERSION = "0.6.2";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -83,6 +83,7 @@
   ];
   const NON_MAIN_EPISODE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》&＆])(?:(?:正式|主|第\s*\d+\s*(?:[弹彈]|话|話|集)|先导|先導|定档|定檔|特报|特報|预告|預告)\s*)?(?:PV|CM|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|特典|告知|情报|情報|回顾|回顧|映像|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/;
   const NON_MAIN_KEYWORD_PATTERN = /(?:^|[^A-Za-z])(?:(?:PV|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED)\s*\d*(?:\.\d+)?|(?:第\s*\d+\s*(?:话|話|集)\s*)?(?:番宣|预告|預告|预告片|預告片|特报|特報|告知|情报|情報|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾)|无字幕OP|无字幕ED)/;
+  const AUTO_PREVIEW_TITLE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》._&＆+＋-])(?:(?:正式|主|先导|先導|定档|定檔|特报|特報|超|第\s*\d+\s*(?:[弹彈]|话|話|集))\s*)?(?:PV\d*|PV|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|告知|情报|情報)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/i;
   const WHITELIST_NEWS_NON_MAIN_PATTERN = /(?:TV\s*)?(?:动画化|動畫化|アニメ化|anime化)\s*(?:决定|決定|确定|確定|企划|企劃|制作决定|制作決定|发表|發表|公布)|(?:剧场|劇場)?上映\s*(?:决定|決定|确定|確定)/i;
 
   const pendingRequests = new Map();
@@ -139,7 +140,7 @@
     message: "",
     error: "",
     searchResults: [],
-    nonMainPreviewEnabled: readValue(STORAGE.nonMainPreview, "1") !== "0",
+    nonMainPreviewEnabled: true,
     officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
     autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
     opedSkips: readJsonValue(STORAGE.opedSkips, {}),
@@ -153,6 +154,7 @@
     nonMainError: "",
     nonMainSearched: false,
     nonMainSearchSeq: 0,
+    standaloneSearchExpanded: false,
     syncHistory: readJsonValue(STORAGE.syncHistory, {}),
     autoEpisodeSyncing: false,
     autoEpisodeSyncLastKey: "",
@@ -735,7 +737,7 @@
     }
     .biligumi-lite-result {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) max-content;
+      grid-template-columns: 38px minmax(0, 1fr) max-content;
       gap: 8px;
       align-items: center;
       padding: 6px 7px;
@@ -743,6 +745,21 @@
       border-radius: 6px;
       background: var(--bgm-soft);
       min-width: 0;
+    }
+    .biligumi-lite-cover {
+      width: 38px;
+      height: 50px;
+      border-radius: 5px;
+      background: #e8ebf0;
+      object-fit: cover;
+      overflow: hidden;
+    }
+    .biligumi-lite-cover-placeholder {
+      display: grid;
+      place-items: center;
+      color: #9aa7b5;
+      font-size: 16px;
+      font-weight: 700;
     }
     .biligumi-lite-name {
       min-width: 0;
@@ -1148,6 +1165,23 @@
       background: linear-gradient(#e890a9, #d96f8d);
       color: #fff;
     }
+    #${PANEL_ID} .biligumi-search-actions {
+      display: flex;
+      justify-content: flex-end;
+      align-items: center;
+      gap: 6px;
+    }
+    #${PANEL_ID} .biligumi-search-web-button {
+      border-color: #bfd0e4;
+      background: #fff;
+      color: #4a789d;
+      font-weight: 600;
+    }
+    #${PANEL_ID} .biligumi-search-web-button:hover {
+      border-color: #86add7;
+      background: #edf5ff;
+      color: #2274b8;
+    }
     #${PANEL_ID} .biligumi-search-help {
       min-width: 0;
       color: #7b8794;
@@ -1169,6 +1203,12 @@
       background: #fff;
     }
     #${PANEL_ID}.biligumi-panel-collapsed .biligumi-head {
+      border-bottom: 0;
+    }
+    #${PANEL_ID}.biligumi-free-search-panel .biligumi-head {
+      border-bottom: 1px solid #e2e5e8;
+    }
+    #${PANEL_ID}.biligumi-free-search-panel.biligumi-panel-collapsed .biligumi-head {
       border-bottom: 0;
     }
     #${SETTINGS_ID} {
@@ -1561,22 +1601,15 @@
         grid-template-columns: 1fr;
       }
     }
-    #${PANEL_ID}.biligumi-collapsed {
-      border-radius: 10px;
-      background: rgba(234, 244, 255, .96);
-      box-shadow: 0 4px 14px rgba(92, 126, 164, .15);
-    }
-    #${PANEL_ID}.biligumi-collapsed .biligumi-head {
-      padding: 9px 12px;
-      border-bottom: 0;
-    }
-    #${PANEL_ID}.biligumi-collapsed .biligumi-title {
-      font-size: 13px;
-    }
     #${PANEL_ID} .biligumi-collapsed-note {
       padding: 0 12px 10px;
       color: #7b8794;
       font-size: 12px;
+    }
+    #${PANEL_ID}.biligumi-free-search-panel .biligumi-collapsed-note {
+      padding-top: 8px;
+      border-top: 1px solid rgba(210, 216, 224, .62);
+      background: #fff;
     }
     .${OPED_SKIP_BUTTON_CLASS} {
       display: inline-flex;
@@ -1971,6 +2004,7 @@
     state.episodeCollections = [];
     state.busy = false;
     state.message = "";
+    state.standaloneSearchExpanded = false;
     state.autoEpisodeSyncing = false;
     state.autoEpisodeSyncLastKey = "";
     state.autoWatchBlockedKey = "";
@@ -2249,29 +2283,12 @@
       removeSubjectInfoPanel();
       removeCharacterStrip();
       const nonMainKeyword = getNonMainPreviewKeyword();
-      if (nonMainKeyword) {
-        panel.className = "biligumi-panel";
-        panel.innerHTML = renderNonMainPreview(nonMainKeyword);
-        bindPanelEvents();
-        layoutPanelWithoutOwningBiliDom();
-        ensureNonMainPreviewSearch(nonMainKeyword);
-        refreshOpedSkipButton();
-        return;
-      }
-
-      panel.className = "biligumi-panel biligumi-collapsed";
-      panel.innerHTML = `
-        <div class="biligumi-head">
-          <div class="biligumi-title">Bangumi 未在白名单</div>
-          <div class="biligumi-actions">
-            <button class="biligumi-icon-btn" data-action="add-whitelist" title="加入白名单">＋</button>
-            <button class="biligumi-icon-btn" data-action="settings" title="设置 Access Token / 白名单">⚙</button>
-          </div>
-        </div>
-        <div class="biligumi-collapsed-note">${escapeHtml(getWhitelistHint())}</div>
-      `;
+      const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded;
+      panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}`;
+      panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
       layoutPanelWithoutOwningBiliDom();
+      if (nonMainKeyword) ensureNonMainPreviewSearch(nonMainKeyword);
       refreshOpedSkipButton();
       return;
     }
@@ -2929,12 +2946,11 @@
       return `
         <div class="biligumi-search-pane">
           <div class="biligumi-row">
-            <div class="biligumi-label">绑定 Bangumi 条目</div>
-            <div class="biligumi-search-field">
-              <input data-role="search-keyword" value="${escapeHtml(suggestSearchKeyword())}" placeholder="输入番名或 Bangumi subject ID">
-              <div class="biligumi-search-help">也可以直接粘贴 Bangumi 链接，例如 bgm.tv/subject/576351。</div>
-              <button class="biligumi-search-button" data-action="search">搜索</button>
-            </div>
+            ${renderSearchForm({
+              label: "绑定 Bangumi 条目",
+              help: "也可以直接粘贴 Bangumi 链接，例如 bgm.tv/subject/576351。",
+              showWebButton: true,
+            })}
           </div>
           ${renderInlineAutoPreview()}
           ${renderSearchResults()}
@@ -2948,6 +2964,68 @@
         ${renderCollectionSection()}
         <div class="biligumi-row">
           ${renderScoreBox()}
+        </div>
+      </div>
+    `;
+  }
+
+  function renderStandaloneSearchPanel(nonMainKeyword = "") {
+    const title = nonMainKeyword || "Bangumi";
+    const searchForm = state.standaloneSearchExpanded
+      ? `
+        <div class="biligumi-row">
+          ${renderSearchForm({
+            label: "Bangumi 搜索",
+            help: "点击搜索会直接打开 Bangumi 站内搜索。",
+            placeholder: "请输入想在 Bangumi 搜索的内容",
+            value: "",
+            searchAction: "open-bangumi-search",
+          })}
+        </div>
+      `
+      : "";
+    const body = state.standaloneSearchExpanded || nonMainKeyword
+      ? `
+        <div class="biligumi-search-pane">
+          ${searchForm}
+          ${nonMainKeyword ? renderInlineAutoPreview(nonMainKeyword) : ""}
+        </div>
+        <div class="biligumi-foot">
+          <span>${state.busy ? "处理中..." : "可直接搜索 Bangumi"} · v${SCRIPT_VERSION}</span>
+          <a href="${BGM_WEB_BASE}/" target="_blank" rel="noreferrer">Bangumi</a>
+        </div>
+      `
+      : "";
+    return `
+      <div class="biligumi-head" data-action="toggle-standalone-search" title="${state.standaloneSearchExpanded ? "折叠 Bangumi 搜索" : "展开 Bangumi 搜索"}">
+        <div class="biligumi-title" title="${escapeHtml(title)}">${escapeHtml(title)}</div>
+        <div class="biligumi-actions" data-action="noop">
+          <button class="biligumi-icon-btn" data-action="add-whitelist" title="加入白名单">＋</button>
+          <button class="biligumi-icon-btn" data-action="settings" title="设置 Access Token / 白名单">⚙</button>
+        </div>
+      </div>
+      <div class="biligumi-collapsed-note">${escapeHtml(getWhitelistHint())}</div>
+      ${body}
+    `;
+  }
+
+  function renderSearchForm(options = {}) {
+    const label = options.label || "绑定 Bangumi 条目";
+    const value = options.value != null ? options.value : suggestSearchKeyword();
+    const help = options.help || "也可以直接粘贴 Bangumi 链接，例如 bgm.tv/subject/576351。";
+    const placeholder = options.placeholder || "输入番名或 Bangumi subject ID";
+    const searchAction = options.searchAction || "search";
+    const webButton = options.showWebButton
+      ? '<button class="biligumi-search-button biligumi-search-web-button" data-action="open-bangumi-search">Bangumi</button>'
+      : "";
+    return `
+      <div class="biligumi-label">${escapeHtml(label)}</div>
+      <div class="biligumi-search-field">
+        <input data-role="search-keyword" value="${escapeHtml(value)}" placeholder="${escapeHtml(placeholder)}">
+        <div class="biligumi-search-help">${escapeHtml(help)}</div>
+        <div class="biligumi-search-actions">
+          ${webButton}
+          <button class="biligumi-search-button" data-action="${escapeHtml(searchAction)}">搜索</button>
         </div>
       </div>
     `;
@@ -2999,36 +3077,16 @@
     `;
   }
 
-  function renderNonMainPreview(keyword) {
-    const rows = state.nonMainResults.slice(0, 2).map((subject) => renderNonMainCandidate(subject)).join("");
-    const status = renderNonMainPreviewStatus(rows);
-    return `
-      <div class="biligumi-head">
-        <div class="biligumi-title" title="${escapeHtml(keyword)}">${escapeHtml(keyword)}</div>
-        <div class="biligumi-actions">
-          ${isWhitelistedPage() ? "" : '<button class="biligumi-icon-btn" data-action="add-whitelist" title="加入白名单">＋</button>'}
-          <button class="biligumi-icon-btn" data-action="settings" title="设置 Access Token / 白名单">⚙</button>
-        </div>
-      </div>
-      <div class="biligumi-lite-note">检测到 OP / ED / PV / 预告，仅显示前 2 个 Bangumi 候选。</div>
-      ${status}
-      <div class="biligumi-foot">
-        <span>轻量匹配 · v${SCRIPT_VERSION}</span>
-        <a href="${BGM_WEB_BASE}/" target="_blank" rel="noreferrer">Bangumi</a>
-      </div>
-    `;
-  }
-
-  function renderInlineAutoPreview() {
-    const keyword = getInlineAutoPreviewKeyword();
+  function renderInlineAutoPreview(keywordOverride = "") {
+    const keyword = String(keywordOverride || "").trim() || getInlineAutoPreviewKeyword();
     if (!keyword) return "";
-    const isNonMain = isNonMainPreviewPage();
+    const isNonMain = Boolean(keywordOverride) || isNonMainPreviewPage();
     const rows = state.nonMainResults
       .slice(0, 2)
       .map((subject) => renderNonMainCandidate(subject, { canBind: true, canOpen: isNonMain }))
       .join("");
     const note = isNonMain
-      ? `检测到 OP / ED / PV / 预告，下面是按「${escapeHtml(keyword)}」匹配的跳转候选。`
+      ? `检测到 PV / 预告，下面是按「${escapeHtml(keyword)}」匹配的跳转候选。`
       : `下面是按「${escapeHtml(keyword)}」自动匹配的候选。`;
     return `
       <div class="biligumi-row">
@@ -3056,10 +3114,15 @@
     const name = displaySubjectName(subject);
     const date = subject.date || "未知日期";
     const eps = subject.eps ? `${subject.eps} 话` : "话数未知";
+    const image = getBestSubjectCover(subject);
+    const cover = image
+      ? `<img class="biligumi-lite-cover" src="${escapeHtml(image)}" alt="${escapeHtml(name)}" loading="lazy">`
+      : '<div class="biligumi-lite-cover biligumi-lite-cover-placeholder">?</div>';
     const bindButton = canBind ? `<button class="biligumi-lite-bind" data-action="bind" data-subject-id="${subjectId}">绑定</button>` : "";
     const openLink = canOpen ? `<a class="biligumi-lite-open" href="${BGM_WEB_BASE}/subject/${subjectId}" target="_blank" rel="noreferrer">打开</a>` : "";
     return `
       <div class="biligumi-lite-result">
+        ${cover}
         <div>
           <div class="biligumi-lite-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
           <div class="biligumi-lite-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
@@ -3094,13 +3157,6 @@
             <textarea class="biligumi-whitelist-store" id="biligumi-whitelist-input" data-role="settings-whitelist">${escapeHtml(formatWhitelistForSettings())}</textarea>
             ${renderWhitelistSettingsList()}
             <div class="biligumi-settings-help compact">当前页面候选：${escapeHtml(currentHints || "无")}</div>
-          </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-non-main-preview" ${state.nonMainPreviewEnabled ? "checked" : ""}>
-              <span>OP / ED / PV / 预告页面无视白名单显示 2 个轻量 Bangumi 候选。</span>
-            </label>
-            <div class="biligumi-settings-help">如果清洗出的番名已经绑定过，会直接显示正常面板。</div>
           </div>
           <div class="biligumi-settings-field">
             <label class="biligumi-settings-check">
@@ -3278,22 +3334,7 @@
   }
 
   function renderSearchResult(subject) {
-    const subjectId = Number(subject && subject.id) || 0;
-    if (!subjectId) return "";
-    const image = subject.images && (subject.images.grid || subject.images.small || subject.images.common);
-    const name = displaySubjectName(subject);
-    const date = subject.date || "未知日期";
-    const eps = subject.eps ? `${subject.eps} 话` : "话数未知";
-    return `
-      <div class="biligumi-result">
-        ${image ? `<img src="${escapeHtml(image)}" alt="">` : "<div></div>"}
-        <div class="biligumi-result-body">
-          <div class="biligumi-result-name" title="${escapeHtml(name)}">${escapeHtml(name)}</div>
-          <div class="biligumi-result-sub">${escapeHtml(date)} · ${escapeHtml(eps)}</div>
-        </div>
-        <button class="biligumi-button primary" data-action="bind" data-subject-id="${subjectId}">绑定</button>
-      </div>
-    `;
+    return renderNonMainCandidate(subject, { canBind: true, canOpen: true });
   }
 
   function renderScoreBox() {
@@ -3478,6 +3519,7 @@
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
     if (action === "toggle-panel") togglePanelCollapsed();
+    if (action === "toggle-standalone-search") toggleStandaloneSearchExpanded();
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-save") saveSettings();
@@ -3489,6 +3531,7 @@
     if (action === "refresh") loadSubjectBundle().catch(showError);
     if (action === "refresh-non-main") retryNonMainPreviewSearch();
     if (action === "search") searchSubjects().catch(showError);
+    if (action === "open-bangumi-search") openBangumiSearchFromInput();
     if (action === "clear-search") clearSearchResults();
     if (action === "bind") bindSubject(Number(target.dataset.subjectId)).catch(showError);
     if (action === "unbind") unbindSubject();
@@ -3517,6 +3560,10 @@
     event.stopPropagation();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
+    if (input.closest(".biligumi-free-search-panel")) {
+      openBangumiSearchFromInput();
+      return;
+    }
     searchSubjects().catch(showError);
   }
 
@@ -3611,6 +3658,11 @@
     render();
   }
 
+  function toggleStandaloneSearchExpanded() {
+    state.standaloneSearchExpanded = !state.standaloneSearchExpanded;
+    render();
+  }
+
   async function cycleCollectionType() {
     const order = [3, 2, 1, 4, 5];
     const current = getCollectionType();
@@ -3618,10 +3670,10 @@
     await updateCollection({ type: next });
   }
 
-  async function searchSubjects() {
-    const input = document.querySelector(`#${PANEL_ID} [data-role='search-keyword']`);
-    const keyword = (input && input.value.trim()) || suggestSearchKeyword();
+  async function searchSubjects(options = {}) {
+    const keyword = getSearchKeywordFromInput({ allowFallback: options.allowFallback !== false });
     if (!keyword) throw new Error("请输入番名再搜索");
+    if (options.openWeb) openBangumiSearch(keyword);
 
     const directSubjectId = parseBangumiSubjectId(keyword);
     if (directSubjectId) {
@@ -3649,6 +3701,34 @@
     state.error = "";
     state.busy = false;
     render();
+  }
+
+  function getSearchKeywordFromInput(options = {}) {
+    const input = document.querySelector(`#${PANEL_ID} [data-role='search-keyword']`);
+    const typed = input && input.value.trim();
+    if (typed) return typed;
+    return options.allowFallback === false ? "" : suggestSearchKeyword();
+  }
+
+  function openBangumiSearchFromInput() {
+    const keyword = getSearchKeywordFromInput({ allowFallback: false });
+    if (!keyword) {
+      showError(new Error("请输入番名再打开 Bangumi 搜索"));
+      return;
+    }
+    openBangumiSearch(keyword);
+  }
+
+  function openBangumiSearch(keyword) {
+    const url = getBangumiSearchUrl(keyword);
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (opened) opened.opener = null;
+  }
+
+  function getBangumiSearchUrl(keyword) {
+    const directSubjectId = parseBangumiSubjectId(keyword);
+    if (directSubjectId) return `${BGM_WEB_BASE}/subject/${directSubjectId}`;
+    return `${BGM_WEB_BASE}/subject_search/${encodeURIComponent(String(keyword || "").trim())}?cat=all`;
   }
 
   function ensureNonMainPreviewSearch(keyword) {
@@ -5068,7 +5148,6 @@
   function saveSettings() {
     const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
     const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
-    const nonMainPreviewInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-non-main-preview']`);
     const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
     const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
     const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
@@ -5076,7 +5155,6 @@
     const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
     const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
     const nextToken = String(tokenInput && tokenInput.value || "").trim();
-    const nextNonMainPreviewEnabled = Boolean(nonMainPreviewInput && nonMainPreviewInput.checked);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -5094,15 +5172,6 @@
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
     setAutoWatchThreshold(nextAutoWatchThreshold);
     if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
-    if (nextNonMainPreviewEnabled !== state.nonMainPreviewEnabled) {
-      state.nonMainPreviewEnabled = nextNonMainPreviewEnabled;
-      state.nonMainKeyword = "";
-      state.nonMainResults = [];
-      state.nonMainError = "";
-      state.nonMainBusy = false;
-      state.nonMainSearched = false;
-      state.nonMainSearchSeq += 1;
-    }
     if (nextCharacterStripEnabled !== state.characterStripEnabled) {
       state.characterStripEnabled = nextCharacterStripEnabled;
       if (!state.characterStripEnabled) removeCharacterStrip();
@@ -5114,7 +5183,6 @@
     writeValue(STORAGE.token, state.token);
     writeListValue(STORAGE.whitelist, state.whitelist);
     writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
-    writeValue(STORAGE.nonMainPreview, state.nonMainPreviewEnabled ? "1" : "0");
     writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
     writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
     writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
@@ -5827,7 +5895,9 @@
   function getWhitelistHint() {
     const preferred = getPreferredWhitelistCandidate();
     const label = getDisplayNameForWhitelistCandidate(preferred);
-    return preferred ? `当前页面标识：${label}。点 + 加入白名单后展开。` : "点齿轮设置白名单后展开。";
+    return preferred
+      ? `当前页面标识：${label}。可直接搜索；点 + 仍可加入白名单显示完整面板。`
+      : "可直接搜索；点齿轮仍可管理白名单。";
   }
 
   function getDisplayNameForWhitelistCandidate(candidate) {
@@ -6268,6 +6338,10 @@
     return NON_MAIN_KEYWORD_PATTERN.test(title) || NON_MAIN_EPISODE_PATTERN.test(title);
   }
 
+  function isAutoPreviewTitle(value) {
+    return AUTO_PREVIEW_TITLE_PATTERN.test(normalizeTitleText(value));
+  }
+
   function isWhitelistNewsNonMainTitle(value) {
     return WHITELIST_NEWS_NON_MAIN_PATTERN.test(normalizeTitleText(value));
   }
@@ -6282,8 +6356,9 @@
   }
 
   function getNonMainPreviewKeyword() {
-    if (!isNonMainPreviewPage()) return "";
-    return cleanTitle(state.rawTitle || getPageTitle());
+    const rawTitle = state.rawTitle || getPageTitle();
+    if (!isNonMainPreviewPage() || !isAutoPreviewTitle(rawTitle)) return "";
+    return cleanTitle(rawTitle);
   }
 
   function getInlineAutoPreviewKeyword() {
