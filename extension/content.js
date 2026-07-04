@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.2";
+  const SCRIPT_VERSION = "0.6.3";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -860,6 +860,7 @@
       color: #5f6f80;
       box-shadow: 0 8px 20px rgba(52, 64, 84, .12);
       font-family: Arial, "Microsoft YaHei", sans-serif;
+      z-index: 0;
     }
     #${PANEL_ID} .biligumi-head {
       margin: 0;
