@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.6.4
+// @version      0.6.5
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -100,9 +100,13 @@
   const DANMAKU_OFFICIAL_ACTION_CLASS = "biligumi-danmaku-official-action";
   const DANMAKU_FAVORITES_OVERLAY_ID = "biligumi-danmaku-favorites";
   const DANMAKU_TOAST_CLASS = "biligumi-danmaku-toast";
+  const DANMAKU_REPEAT_COOLDOWN_MS = 1800;
   let currentDanmakuHoverText = "";
   let currentDanmakuHoverAnchor = null;
   let danmakuHoverHideTimer = 0;
+  let danmakuRepeatBusy = false;
+  let danmakuRepeatUnlockTimer = 0;
+  let lastDanmakuRepeatActionAt = 0;
 
   const state = {
     pageKey: "",
@@ -4644,14 +4648,21 @@
       if (action === "open-danmaku-favorites") {
         openDanmakuFavoritesDialog();
       } else if (action === "danmaku-repeat") {
-        const text = await getDanmakuActionText(target, action);
-        sendBilibiliDanmaku(text);
+        if (!beginDanmakuRepeatAction()) return;
+        let shouldKeepCooldown = false;
+        try {
+          const text = await getDanmakuActionText(target, action);
+          shouldKeepCooldown = true;
+          await sendBilibiliDanmaku(text, { restoreOnBlocked: true });
+        } finally {
+          finishDanmakuRepeatAction(shouldKeepCooldown);
+        }
       } else if (action === "danmaku-favorite") {
         const text = await getDanmakuActionText(target, action);
         addDanmakuFavorite(text);
       } else if (action === "danmaku-send-favorite") {
         const text = await getDanmakuActionText(target, action);
-        sendBilibiliDanmaku(text);
+        await sendBilibiliDanmaku(text);
       } else if (action === "danmaku-fill-favorite") {
         const text = await getDanmakuActionText(target, action);
         setBilibiliDanmakuInputText(text);
@@ -4920,32 +4931,83 @@
     hoverBar.remove();
   }
 
-  function sendBilibiliDanmaku(text) {
-    setBilibiliDanmakuInputText(text, { focus: false });
+  function beginDanmakuRepeatAction() {
+    const now = Date.now();
+    if (danmakuRepeatBusy || now - lastDanmakuRepeatActionAt < DANMAKU_REPEAT_COOLDOWN_MS) {
+      showDanmakuToast("操作太快，等一下再试。");
+      return false;
+    }
+    window.clearTimeout(danmakuRepeatUnlockTimer);
+    danmakuRepeatBusy = true;
+    return true;
+  }
+
+  function finishDanmakuRepeatAction(keepCooldown) {
+    window.clearTimeout(danmakuRepeatUnlockTimer);
+    if (!keepCooldown) {
+      danmakuRepeatBusy = false;
+      return;
+    }
+    lastDanmakuRepeatActionAt = Date.now();
+    danmakuRepeatUnlockTimer = window.setTimeout(() => {
+      danmakuRepeatBusy = false;
+      danmakuRepeatUnlockTimer = 0;
+    }, DANMAKU_REPEAT_COOLDOWN_MS);
+  }
+
+  async function sendBilibiliDanmaku(text, options = {}) {
+    const value = normalizeDanmakuText(text);
+    if (!value) throw new Error("弹幕内容为空。");
+    const input = findBilibiliDanmakuInput();
+    if (!input) throw new Error("没有找到 B 站弹幕输入框。");
+    const previousValue = getBilibiliDanmakuInputText(input);
     const sendButton = findVisibleElement([
       ".bpx-player-dm-btn-send",
       ".bpx-player-dm-root [class*='btn-send']",
       ".bpx-player-sending-area [class*='send']",
     ]);
     if (!sendButton) throw new Error("没有找到 B 站弹幕发送按钮。");
+    if (isBilibiliDanmakuSendDisabled(sendButton)) throw new Error("B 站弹幕发送冷却中，等一下再试。");
+    setBilibiliDanmakuInputText(value, { focus: false, input });
     sendButton.click();
+    if (!options.restoreOnBlocked) return;
+    await wait(320);
+    if (normalizeDanmakuText(getBilibiliDanmakuInputText(input)) !== value) return;
+    setBilibiliDanmakuInputText(previousValue, { allowEmpty: true, focus: false, input });
+    throw new Error("B 站弹幕发送冷却中，等一下再试。");
   }
 
   function setBilibiliDanmakuInputText(text, options = {}) {
     const value = normalizeDanmakuText(text);
-    if (!value) throw new Error("弹幕内容为空。");
-    const input = findVisibleElement([
-      ".bpx-player-dm-input",
-      ".bpx-player-dm-root input",
-      ".bpx-player-sending-area input",
-      ".bpx-player-sending-area textarea",
-    ]);
+    if (!value && !options.allowEmpty) throw new Error("弹幕内容为空。");
+    const input = options.input || findBilibiliDanmakuInput();
     if (!input) throw new Error("没有找到 B 站弹幕输入框。");
     setNativeInputValue(input, value);
     input.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
     input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     if (options.focus !== false && typeof input.focus === "function") input.focus();
     return input;
+  }
+
+  function findBilibiliDanmakuInput() {
+    return findVisibleElement([
+      ".bpx-player-dm-input",
+      ".bpx-player-dm-root input",
+      ".bpx-player-sending-area input",
+      ".bpx-player-sending-area textarea",
+    ]);
+  }
+
+  function getBilibiliDanmakuInputText(input) {
+    if (!input) return "";
+    if ("value" in input) return String(input.value || "");
+    return String(input.textContent || "");
+  }
+
+  function isBilibiliDanmakuSendDisabled(button) {
+    if (!button) return true;
+    const className = String(button.className || "");
+    return Boolean(button.disabled || button.getAttribute("aria-disabled") === "true" || /\bdisabled\b/.test(className));
   }
 
   function setNativeInputValue(input, value) {
