@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.6.3
+// @version      0.6.4
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,13 +24,14 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.3";
+  const SCRIPT_VERSION = "0.6.4";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
     whitelist: "biligumi.whitelist",
     whitelistLabels: "biligumi.whitelistLabels",
     panelCollapsed: "biligumi.panelCollapsed",
+    scoreDetailMode: "biligumi.scoreDetailMode",
     syncHistory: "biligumi.syncHistory",
     nonMainPreview: "biligumi.nonMainPreview",
     officialBangumiLayout: "biligumi.officialBangumiLayout",
@@ -129,6 +130,7 @@
     episodeCollections: [],
     currentEpisodeNo: null,
     busy: false,
+    scoreDetailMode: normalizeScoreDetailMode(readValue(STORAGE.scoreDetailMode, "simple")),
     panelCollapsed: readValue(STORAGE.panelCollapsed, "0") === "1",
     settingsOpen: false,
     collectionEditorOpen: false,
@@ -888,6 +890,9 @@
       padding: 10px 14px 14px;
       background: #fff;
     }
+    #${PANEL_ID} .biligumi-card-body.biligumi-score-simple {
+      padding-bottom: 8px;
+    }
     #${PANEL_ID} .biligumi-row {
       margin-top: 0;
       padding: 9px 0;
@@ -896,6 +901,9 @@
     #${PANEL_ID} .biligumi-row:first-child {
       border-top: 0;
       padding-top: 0;
+    }
+    #${PANEL_ID} .biligumi-row.biligumi-score-row.simple {
+      padding-bottom: 2px;
     }
     #${PANEL_ID} .biligumi-label {
       margin-bottom: 5px;
@@ -1054,6 +1062,18 @@
       gap: 8px;
       align-items: start;
     }
+    #${PANEL_ID} .biligumi-score-content {
+      min-width: 0;
+    }
+    #${PANEL_ID} .biligumi-score-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: start;
+    }
+    #${PANEL_ID} .biligumi-score-summary {
+      min-width: 0;
+    }
     #${PANEL_ID} .biligumi-score-icon {
       width: 45px;
       height: 38px;
@@ -1078,6 +1098,47 @@
       margin-top: 2px;
       color: #7f8792;
       font-size: 12px;
+    }
+    #${PANEL_ID} .biligumi-score-mode {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      width: 104px;
+      height: 26px;
+      padding: 2px;
+      border: 1px solid #dfe6ef;
+      border-radius: 999px;
+      background: #f7f8fa;
+      box-shadow: inset 0 1px 2px rgba(48, 62, 77, .08);
+    }
+    #${PANEL_ID} .biligumi-score-mode::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 2px;
+      width: calc(50% - 2px);
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(48, 62, 77, .18);
+      transition: transform .18s ease;
+    }
+    #${PANEL_ID} .biligumi-score-mode.complex::before {
+      transform: translateX(100%);
+    }
+    #${PANEL_ID} .biligumi-score-mode-btn {
+      position: relative;
+      z-index: 1;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: #7f8792;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #${PANEL_ID} .biligumi-score-mode-btn.active {
+      color: #f0189b;
     }
     #${PANEL_ID} .biligumi-histogram {
       display: grid;
@@ -2955,10 +3016,11 @@
       `;
     }
 
+    const scoreMode = normalizeScoreDetailMode(state.scoreDetailMode);
     return `
-      <div class="biligumi-card-body">
+      <div class="biligumi-card-body ${scoreMode === "simple" ? "biligumi-score-simple" : ""}">
         ${renderCollectionSection()}
-        <div class="biligumi-row">
+        <div class="biligumi-row biligumi-score-row ${scoreMode}">
           ${renderScoreBox()}
         </div>
       </div>
@@ -3336,25 +3398,44 @@
 
   function renderScoreBox() {
     const rating = state.subject && state.subject.rating ? state.subject.rating : {};
-    const score = Number(rating.score) || 0;
-    const total = Number(rating.total) || getRatingTotal();
+    const mode = normalizeScoreDetailMode(state.scoreDetailMode);
+    const complex = mode === "complex";
+    const score = getPublicScoreValue(rating, mode);
+    const total = getRatingTotal() || Number(rating.total) || 0;
     const rank = Number(rating.rank) || 0;
     return `
       <div class="biligumi-score-box">
         <div class="biligumi-score-icon">BGM</div>
-        <div>
-          <div class="biligumi-score-main">
-            <span class="biligumi-score-value">${escapeHtml(formatPublicScore(score))}</span>
-            ${escapeHtml(getScoreLabel(score))}
+        <div class="biligumi-score-content">
+          <div class="biligumi-score-head">
+            <div class="biligumi-score-summary">
+              <div class="biligumi-score-main">
+                <span class="biligumi-score-value">${escapeHtml(formatPublicScore(score, mode))}</span>
+                ${escapeHtml(getScoreLabel(score))}
+              </div>
+              <div class="biligumi-score-extra">${rank ? `Bangumi Anime Ranked:#${rank}` : "Bangumi Anime Ranked: 暂无"}</div>
+            </div>
+            ${renderScoreModeToggle(mode)}
           </div>
-          <div class="biligumi-score-extra">${rank ? `Bangumi Anime Ranked:#${rank}` : "Bangumi Anime Ranked: 暂无"}</div>
-          <div class="biligumi-hist-votes">${escapeHtml(formatNumber(total))} votes</div>
-          ${renderRatingHistogram()}
-          <div class="biligumi-hist-footer">
-            <span>标准差： ${escapeHtml(getRatingStdDev())}</span>
-            <span>争议度： <span style="color:#159c62">${escapeHtml(getDisputeLabel())}</span></span>
-          </div>
+          ${complex ? `
+            <div class="biligumi-hist-votes">${escapeHtml(formatNumber(total))} votes</div>
+            ${renderRatingHistogram()}
+            <div class="biligumi-hist-footer">
+              <span>标准差： ${escapeHtml(getRatingStdDev())}</span>
+              <span>争议度： <span style="color:#159c62">${escapeHtml(getDisputeLabel())}</span></span>
+            </div>
+          ` : ""}
         </div>
+      </div>
+    `;
+  }
+
+  function renderScoreModeToggle(mode) {
+    const normalized = normalizeScoreDetailMode(mode);
+    return `
+      <div class="biligumi-score-mode ${normalized}" role="group" aria-label="评分显示模式">
+        <button type="button" class="biligumi-score-mode-btn ${normalized === "simple" ? "active" : ""}" data-action="set-score-mode" data-mode="simple" title="简易评分">简易</button>
+        <button type="button" class="biligumi-score-mode-btn ${normalized === "complex" ? "active" : ""}" data-action="set-score-mode" data-mode="complex" title="复杂评分">复杂</button>
       </div>
     `;
   }
@@ -3415,9 +3496,34 @@
     return value ? getRateLevel(Math.round(value), false) : "";
   }
 
-  function formatPublicScore(score) {
+  function formatPublicScore(score, mode = "complex") {
     const value = Number(score) || 0;
-    return value ? value.toFixed(1) : "暂无";
+    if (!value) return "暂无";
+    return value.toFixed(normalizeScoreDetailMode(mode) === "complex" ? 4 : 1);
+  }
+
+  function getPublicScoreValue(rating, mode = "complex") {
+    const score = Number(rating && rating.score) || 0;
+    if (normalizeScoreDetailMode(mode) === "simple") return score;
+    const averageScore = calculateRatingAverage(rating && rating.count);
+    return averageScore || score;
+  }
+
+  function normalizeScoreDetailMode(mode) {
+    return mode === "complex" ? "complex" : "simple";
+  }
+
+  function calculateRatingAverage(count) {
+    if (!count || typeof count !== "object") return 0;
+    let total = 0;
+    let weighted = 0;
+    for (let score = 1; score <= 10; score += 1) {
+      const votes = Number(count[score]) || 0;
+      if (votes <= 0) continue;
+      total += votes;
+      weighted += score * votes;
+    }
+    return total ? weighted / total : 0;
   }
 
   function getCommonTags() {
@@ -3517,6 +3623,7 @@
 
     if (action === "toggle-panel") togglePanelCollapsed();
     if (action === "toggle-standalone-search") toggleStandaloneSearchExpanded();
+    if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-save") saveSettings();
@@ -3653,6 +3760,14 @@
   function togglePanelCollapsed() {
     state.panelCollapsed = !state.panelCollapsed;
     writeValue(STORAGE.panelCollapsed, state.panelCollapsed ? "1" : "0");
+    render();
+  }
+
+  function setScoreDetailMode(mode) {
+    const nextMode = normalizeScoreDetailMode(mode);
+    if (nextMode === state.scoreDetailMode) return;
+    state.scoreDetailMode = nextMode;
+    writeValue(STORAGE.scoreDetailMode, state.scoreDetailMode);
     render();
   }
 

@@ -2,7 +2,7 @@
 
 把 Bangumi 的收藏状态、评分、观看进度和条目补充信息嵌入 Bilibili 网页端播放页。
 
-当前脚本版本：`0.6.2`。
+当前脚本版本：`0.6.4`。
 
 这是一个非官方 Biligumi Connector 原型，现在提供两种安装形态：
 
@@ -71,6 +71,7 @@ Access Token 可以在 Bangumi 官方页面生成：
 
 - [Bangumi API 文档](https://bangumi.github.io/api/)：用于 Bangumi 条目、收藏、评分、章节进度相关接口。
 - [Bangumi](https://bgm.tv/)：面板信息结构和视觉风格参考自 Bangumi 条目页、收藏盒、评分区域与章节列表。
+- [Bangumi 评分显示优化组件](https://bgm.tv/dev/app/31) / [组件讨论页](https://bgm.tv/rakuen/topic/group/345367)：高精度公开评分、标准差和争议度显示思路参考；组件通过评分分布重新计算平均分。
 - [Noneqin57/bilibili2bangumi](https://github.com/Noneqin57/bilibili2bangumi)：重点参考了 Bilibili 标题解析、UP 主白名单、同步流程、防重复和请求稳定性等思路。
 - [wopub/Bilibili2Bangumi](https://github.com/wopub/Bilibili2Bangumi)：作为同类项目参考。
 - [qianjiachun/douyuEx](https://github.com/qianjiachun/douyuEx)：弹幕 `+1` 和弹幕收藏交互参考。
