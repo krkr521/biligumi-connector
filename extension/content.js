@@ -4981,13 +4981,48 @@
     };
     document.addEventListener("copy", captureCopy, true);
     try {
+      suppressOfficialDanmakuCopyTooltip(host);
       copyButton.click();
+      hideOfficialDanmakuCopyTooltip(host);
       await wait(60);
+      hideOfficialDanmakuCopyTooltip(host);
     } finally {
       document.removeEventListener("copy", captureCopy, true);
     }
     if (copiedByEvent) return copiedByEvent;
     return "";
+  }
+
+  function suppressOfficialDanmakuCopyTooltip(host) {
+    hideOfficialDanmakuCopyTooltip(host);
+    const root = document.body || document.documentElement;
+    if (!root || typeof MutationObserver !== "function") return;
+    const observer = new MutationObserver(() => hideOfficialDanmakuCopyTooltip(host));
+    observer.observe(root, { childList: true, subtree: true });
+    window.setTimeout(() => {
+      observer.disconnect();
+      hideOfficialDanmakuCopyTooltip(host);
+    }, 500);
+  }
+
+  function hideOfficialDanmakuCopyTooltip(host) {
+    const roots = [];
+    const playerRoot = host && host.closest
+      ? host.closest(".bpx-player-container, .bpx-player-primary-area, #bilibili-player")
+      : null;
+    if (playerRoot) roots.push(playerRoot);
+    if (document.body) roots.push(document.body);
+    const seen = new Set();
+    roots.forEach((root) => {
+      if (!root || !root.querySelectorAll) return;
+      root.querySelectorAll("[class*='tooltip'], [class*='toast'], [class*='tip'], [class*='pop'], [class*='notice']").forEach((node) => {
+        if (!node || seen.has(node)) return;
+        seen.add(node);
+        if (node.closest(`.${DANMAKU_TOAST_CLASS}, #${DANMAKU_FAVORITES_OVERLAY_ID}`)) return;
+        const text = normalizeDanmakuText(node.textContent || "");
+        if (text === "已复制" || text === "复制成功" || text === "复制失败") node.remove();
+      });
+    });
   }
 
   function wait(ms) {
