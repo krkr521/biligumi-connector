@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.5";
+  const SCRIPT_VERSION = "0.6.6";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -866,6 +866,8 @@
       color: #5f6f80;
       box-shadow: 0 8px 20px rgba(52, 64, 84, .12);
       font-family: Arial, "Microsoft YaHei", sans-serif;
+    }
+    #${PANEL_ID}.biligumi-panel-under-bili-overlay {
       z-index: 0;
     }
     #${PANEL_ID} .biligumi-head {
@@ -2233,6 +2235,15 @@
     window.__biligumiViewportEventsBound = true;
     window.addEventListener("scroll", () => window.requestAnimationFrame(repositionPanel), { passive: true });
     window.addEventListener("resize", () => window.requestAnimationFrame(repositionPanel), { passive: true });
+    if (window.MutationObserver && document.body) {
+      const observer = new MutationObserver((mutations) => {
+        if (mutations.some(isBiliMusicOverlayMutation)) {
+          window.requestAnimationFrame(repositionPanel);
+        }
+      });
+      observer.observe(document.body, { childList: true, subtree: true });
+      window.__biligumiMusicOverlayObserver = observer;
+    }
   }
 
   function repositionPanel() {
@@ -2249,6 +2260,9 @@
     const upPanel = inner && inner.querySelector(".up-panel-container, .up-info-container");
     const officialAnchor = rightColumn && findOfficialBangumiLayoutAnchor(rightColumn);
     const layoutAnchor = upPanel && isVisible(upPanel) ? upPanel : officialAnchor;
+    if (panel) {
+      panel.classList.toggle("biligumi-panel-under-bili-overlay", Boolean(rightColumn && hasOverlappingBiliMusicOverlay(rightColumn)));
+    }
     if (!panel || !rightColumn || !layoutAnchor || !isVisible(layoutAnchor)) {
       if (panel) {
         panel.style.position = "fixed";
@@ -2274,6 +2288,32 @@
 
     const reserve = Math.ceil(panel.getBoundingClientRect().height + 24);
     reserveLayoutSpace(layoutAnchor, reserve);
+  }
+
+  function hasOverlappingBiliMusicOverlay(rightColumn) {
+    const rightRect = rightColumn.getBoundingClientRect();
+    return Array.from(document.querySelectorAll("#bgm-entry, #musicApp, [class*='musicPcDetailPlayer']"))
+      .some((node) => isVisible(node) && isBiliMusicOverlayNode(node) && horizontallyOverlaps(node, rightRect, 0.5));
+  }
+
+  function isBiliMusicOverlayMutation(mutation) {
+    const nodes = [mutation.target, ...mutation.addedNodes, ...mutation.removedNodes];
+    return nodes.some((node) => isBiliMusicOverlayNode(node));
+  }
+
+  function isBiliMusicOverlayNode(node) {
+    if (!node || node.nodeType !== 1) return false;
+    const element = node;
+    const className = String(element.className || "");
+    if (element.id === "bgm-entry" || element.id === "musicApp" || className.includes("musicPcDetailPlayer")) return true;
+    return Boolean(element.querySelector && element.querySelector("#bgm-entry, #musicApp, [class*='musicPcDetailPlayer']"));
+  }
+
+  function horizontallyOverlaps(node, referenceRect, minRatio) {
+    const rect = node.getBoundingClientRect();
+    const overlap = Math.min(rect.right, referenceRect.right) - Math.max(rect.left, referenceRect.left);
+    const baseWidth = Math.min(rect.width, referenceRect.width);
+    return baseWidth > 0 && overlap / baseWidth >= minRatio;
   }
 
   function findOfficialBangumiLayoutAnchor(rightColumn) {
