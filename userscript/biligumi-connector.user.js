@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.6.7
+// @version      0.6.8
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,7 +24,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.7";
+  const SCRIPT_VERSION = "0.6.8";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -3660,6 +3660,12 @@
 
     const action = target.dataset.action;
     if (action === "noop") return;
+    if (!shouldHandleModalAction(event, settings, target, action)) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      return;
+    }
 
     event.preventDefault();
     event.stopPropagation();
@@ -5638,6 +5644,9 @@
   }
 
   function bindModalEvents(wrapper) {
+    wrapper.addEventListener("pointerdown", handleModalPointerDown, true);
+    wrapper.addEventListener("pointerup", handleModalPointerUp, true);
+
     const editStars = wrapper.querySelector("[data-role='edit-rate-stars']");
     if (editStars) {
       editStars.addEventListener("mouseover", (event) => {
@@ -5681,6 +5690,27 @@
       });
       opedSkipHotkeyInput.addEventListener("keydown", captureOpedSkipHotkeyInput, true);
     }
+  }
+
+  function handleModalPointerDown(event) {
+    const wrapper = event.currentTarget;
+    wrapper.dataset.backdropPointerStarted = event.target === wrapper ? "1" : "0";
+    wrapper.dataset.backdropPointerEnded = "0";
+  }
+
+  function handleModalPointerUp(event) {
+    const wrapper = event.currentTarget;
+    wrapper.dataset.backdropPointerEnded = event.target === wrapper ? "1" : "0";
+  }
+
+  function shouldHandleModalAction(event, settings, target, action) {
+    if (target !== settings || (action !== "settings-cancel" && action !== "collection-cancel")) return true;
+    const closeFromBackdropClick = event.target === settings
+      && settings.dataset.backdropPointerStarted === "1"
+      && settings.dataset.backdropPointerEnded === "1";
+    settings.dataset.backdropPointerStarted = "0";
+    settings.dataset.backdropPointerEnded = "0";
+    return closeFromBackdropClick;
   }
 
   function updateCollectionCommentCounter(wrapper) {
