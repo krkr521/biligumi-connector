@@ -29,7 +29,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.6";
+  const SCRIPT_VERSION = "0.6.7";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -4529,6 +4529,7 @@
       button.setAttribute("role", "button");
       button.tabIndex = 0;
       button.className = OPED_SKIP_BUTTON_CLASS;
+      button.addEventListener("mousedown", handleOpedSkipButtonMouseDown, true);
       button.addEventListener("click", handleOpedSkipButtonClick, true);
       button.addEventListener("keydown", handleOpedSkipButtonKeydown, true);
     }
@@ -5306,6 +5307,15 @@
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
     if (event.currentTarget && event.currentTarget.getAttribute("aria-disabled") === "true") return;
     skipOpedForActiveVideo();
+    releaseOpedSkipButtonFocus(event.currentTarget);
+  }
+
+  function handleOpedSkipButtonMouseDown(event) {
+    event.preventDefault();
+  }
+
+  function releaseOpedSkipButtonFocus(button) {
+    if (button && document.activeElement === button && typeof button.blur === "function") button.blur();
   }
 
   function handleOpedSkipButtonKeydown(event) {
