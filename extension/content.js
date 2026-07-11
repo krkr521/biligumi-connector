@@ -12,7 +12,8 @@
   bootstrapConnector();
 
   function bootstrapConnector() {
-    preloadChromeStorage(() => {
+    preloadChromeStorage((ready) => {
+      if (!ready) return;
       storageReady = true;
       bindStorageMirrorUpdates();
       runUserscriptConnector();
@@ -29,7 +30,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.8";
+  const SCRIPT_VERSION = "0.6.9";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -92,6 +93,8 @@
   const nonMainPreviewRequests = new Map();
   const subjectInfoLinkRequests = new Map();
   const subjectInfoLinkCache = new Map();
+  const BINDINGS_LOCK_NAME = "biligumi-connector-bindings-v1";
+  let bindingsUpdateQueue = Promise.resolve();
   const COLLECTION_COMMENT_MAX_LENGTH = 380;
   const REQUEST_DEDUP_TTL = 500;
   const REQUEST_MAX_RETRIES = 3;
@@ -143,6 +146,7 @@
     panelCollapsed: readValue(STORAGE.panelCollapsed, "0") === "1",
     settingsOpen: false,
     collectionEditorOpen: false,
+    collectionEditorContext: null,
     pendingCollection: null,
     message: "",
     error: "",
@@ -2037,6 +2041,10 @@
 
   function scheduleRouteRefresh(previousRawTitle) {
     const seq = ++routeRefreshSeq;
+    state.settingsOpen = false;
+    state.collectionEditorOpen = false;
+    state.collectionEditorContext = null;
+    removeModal();
     state.busy = true;
     state.message = "正在等待 B站页面更新...";
     state.error = "";
@@ -2101,6 +2109,10 @@
   }
 
   function getCurrentBinding() {
+    const latestBindings = readJsonValue(STORAGE.bindings, {});
+    if (latestBindings && typeof latestBindings === "object" && !Array.isArray(latestBindings)) {
+      state.bindings = latestBindings;
+    }
     for (const key of getBindingKeysForCurrentPage()) {
       if (state.bindings[key]) {
         migrateCurrentBindingKeys(state.bindings[key]);
@@ -2121,14 +2133,19 @@
   }
 
   function migrateCurrentBindingKeys(subjectId) {
+    const bindingKeys = getBindingKeysForCurrentPage();
     let changed = false;
-    for (const key of getBindingKeysForCurrentPage()) {
+    for (const key of bindingKeys) {
       if (!state.bindings[key]) {
         state.bindings[key] = subjectId;
         changed = true;
       }
     }
-    if (changed) writeJsonValue(STORAGE.bindings, state.bindings);
+    if (changed) {
+      mergeBindingKeys(bindingKeys, subjectId).catch((error) => {
+        console.warn("[Biligumi Connector] Failed to migrate binding keys:", error);
+      });
+    }
   }
 
   function injectWhenReady(forceRefresh) {
@@ -3257,8 +3274,12 @@
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" data-role="settings-token" value="${escapeHtml(state.token || "")}" placeholder="粘贴 Bangumi Access Token">
-            <div class="biligumi-settings-help">可在 next.bgm.tv/demo/access-token 生成；留空表示只读取公开信息。</div>
+            <input id="biligumi-token-input" data-role="settings-token" type="password" value="" autocomplete="off" placeholder="${state.token ? "留空以保留已保存的 Token" : "粘贴 Bangumi Access Token"}">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-token-clear">
+              <span>清除已保存的 Token</span>
+            </label>
+            <div class="biligumi-settings-help">${state.token ? "已保存 Token；出于安全考虑不会回填到网页。留空会保留原值，勾选上方选项才会清除。" : "尚未保存 Token；可在 next.bgm.tv/demo/access-token 生成。"}</div>
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
@@ -3632,12 +3653,18 @@
 
     const typeSelect = panel.querySelector("[data-role='subject-type']");
     if (typeSelect) {
-      typeSelect.addEventListener("change", () => updateCollection({ type: Number(typeSelect.value) }).catch(showError));
+      typeSelect.addEventListener("change", (event) => {
+        if (!event.isTrusted) return;
+        updateCollection({ type: Number(typeSelect.value) }).catch(showError);
+      });
     }
 
     const rateSelect = panel.querySelector("[data-role='rate']");
     if (rateSelect) {
-      rateSelect.addEventListener("change", () => updateCollection({ rate: Number(rateSelect.value) }).catch(showError));
+      rateSelect.addEventListener("change", (event) => {
+        if (!event.isTrusted) return;
+        updateCollection({ rate: Number(rateSelect.value) }).catch(showError);
+      });
     }
 
     const starBox = panel.querySelector("[data-role='rate-stars']");
@@ -3659,6 +3686,12 @@
     const inPanel = Boolean(panel && panel.contains(event.target));
     const inSettings = Boolean(settings && settings.contains(event.target));
     if (!inPanel && !inSettings) return;
+    if (!event.isTrusted) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.stopImmediatePropagation) event.stopImmediatePropagation();
+      return;
+    }
 
     const target = event.target.closest("[data-action]");
     if (!target || !(inPanel ? panel.contains(target) : settings.contains(target))) return;
@@ -3681,7 +3714,7 @@
     if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
-    if (action === "settings-save") saveSettings();
+    if (action === "settings-save") saveSettings().catch(showError);
     if (action === "open-whitelist-space") openWhitelistSpace(target);
     if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
@@ -3693,7 +3726,7 @@
     if (action === "open-bangumi-search") openBangumiSearchFromInput();
     if (action === "clear-search") clearSearchResults();
     if (action === "bind") bindSubject(Number(target.dataset.subjectId)).catch(showError);
-    if (action === "unbind") unbindSubject();
+    if (action === "unbind") unbindSubject().catch(showError);
     if (action === "edit-collection") openCollectionEditor();
     if (action === "collection-cancel") closeCollectionEditor();
     if (action === "collection-save") saveCollectionEditor().catch(showError);
@@ -3707,7 +3740,7 @@
   }
 
   function handlePanelKeydown(event) {
-    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if (!event.isTrusted || event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
 
     const panel = document.getElementById(PANEL_ID);
     if (!panel || !panel.contains(event.target)) return;
@@ -3732,6 +3765,7 @@
 
     const target = event.target.closest("[data-action='toggle-episode']");
     if (!target || !panel.contains(target)) return;
+    if (!event.isTrusted) return;
 
     const discussionUrl = getEpisodeDiscussionUrl(target.dataset.episodeId);
     if (!discussionUrl) return;
@@ -3949,16 +3983,34 @@
   }
 
   async function bindSubjectFromDirectInput(subjectId) {
+    const routeContext = captureRouteContext();
     setBusy(`正在读取 Bangumi 条目 ${subjectId}...`);
-    const subject = await bgmRequest(`/v0/subjects/${subjectId}`);
+    let subject;
+    try {
+      subject = await bgmRequest(`/v0/subjects/${subjectId}`);
+    } catch (error) {
+      if (!isRouteContextCurrent(routeContext)) return;
+      throw error;
+    }
+    ensureRouteContext(routeContext, "页面已切换，已取消绑定；请在当前页面重新操作。");
     state.searchResults = [];
     state.message = `已通过 Bangumi 链接/ID 绑定：${displaySubjectName(subject)}`;
     state.error = "";
     state.subject = subject;
-    await bindSubject(subjectId);
+    await bindSubject(subjectId, routeContext);
   }
 
-  async function bindSubject(subjectId) {
+  async function bindSubject(subjectId, routeContext = captureRouteContext()) {
+    const bindingKeys = getBindingKeysForCurrentPage();
+    ensureRouteContext(routeContext, "页面已切换，已取消绑定；请在当前页面重新操作。");
+    let applied = false;
+    await updateBindings((bindings) => {
+      if (!isRouteContextCurrent(routeContext)) return false;
+      for (const key of bindingKeys) bindings[key] = subjectId;
+      applied = true;
+      return true;
+    });
+    if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.subjectId = subjectId;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
@@ -3970,15 +4022,11 @@
     state.previewCharacterKey = "";
     state.previewCharacterBusy = false;
     state.previewCharacterFailedKey = "";
-    for (const key of getBindingKeysForCurrentPage()) {
-      state.bindings[key] = subjectId;
-    }
-    writeJsonValue(STORAGE.bindings, state.bindings);
     state.searchResults = [];
     await loadSubjectBundle();
   }
 
-  function unbindSubject() {
+  async function unbindSubject() {
     if (!state.subjectId) {
       state.message = "当前页面没有绑定 Bangumi 条目。";
       state.error = "";
@@ -3987,10 +4035,19 @@
     }
     const ok = window.confirm("只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？");
     if (!ok) return;
-    for (const key of getBindingKeysForCurrentPage()) {
-      delete state.bindings[key];
-    }
-    writeJsonValue(STORAGE.bindings, state.bindings);
+    const routeContext = captureRouteContext();
+    const subjectId = Number(state.subjectId);
+    const bindingKeys = getBindingKeysForCurrentPage();
+    let applied = false;
+    await updateBindings((bindings) => {
+      if (!isRouteContextCurrent(routeContext)) return false;
+      applied = true;
+      for (const key of bindingKeys) {
+        if (Number(bindings[key]) === subjectId) delete bindings[key];
+      }
+      return true;
+    });
+    if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.subjectId = null;
     state.subject = null;
     state.subjectInfoLinks = {};
@@ -4668,6 +4725,7 @@
   }
 
   function handleDanmakuEnhancementPointerDown(event) {
+    if (!event.isTrusted) return;
     const target = event.target && event.target.closest ? event.target.closest(`.${DANMAKU_OFFICIAL_ACTION_CLASS}[data-action]`) : null;
     if (!target) return;
     target.dataset.biligumiPointerActionAt = String(Date.now());
@@ -4675,6 +4733,7 @@
   }
 
   function handleDanmakuEnhancementClick(event) {
+    if (!event.isTrusted) return;
     const target = event.target && event.target.closest ? event.target.closest("[data-action]") : null;
     if (!target) return;
     const handledAt = Number(target.dataset && target.dataset.biligumiPointerActionAt) || 0;
@@ -4712,7 +4771,7 @@
         addDanmakuFavorite(text);
       } else if (action === "danmaku-send-favorite") {
         const text = await getDanmakuActionText(target, action);
-        await sendBilibiliDanmaku(text);
+        await sendBilibiliDanmaku(text, { restoreOnBlocked: true });
       } else if (action === "danmaku-fill-favorite") {
         const text = await getDanmakuActionText(target, action);
         setBilibiliDanmakuInputText(text);
@@ -5483,8 +5542,9 @@
     render();
   }
 
-  function saveSettings() {
+  async function saveSettings() {
     const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
+    const tokenClearInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token-clear']`);
     const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
     const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
     const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
@@ -5492,7 +5552,9 @@
     const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
     const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
     const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
-    const nextToken = String(tokenInput && tokenInput.value || "").trim();
+    const replacementToken = String(tokenInput && tokenInput.value || "").trim();
+    const clearToken = Boolean(tokenClearInput && tokenClearInput.checked);
+    const nextToken = clearToken ? "" : (replacementToken || state.token);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -5518,14 +5580,16 @@
       state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
       if (!state.subjectInfoPanelEnabled) removeSubjectInfoPanel();
     }
-    writeValue(STORAGE.token, state.token);
-    writeListValue(STORAGE.whitelist, state.whitelist);
-    writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
-    writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
-    writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
-    writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
-    writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
-    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
+    await Promise.all([
+      writeValueAsync(STORAGE.token, state.token),
+      writeListValueAsync(STORAGE.whitelist, state.whitelist),
+      writeJsonValueAsync(STORAGE.whitelistLabels, state.whitelistLabels),
+      writeValueAsync(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0"),
+      writeValueAsync(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0"),
+      writeValueAsync(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0"),
+      writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
+      writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
+    ]);
     state.settingsOpen = false;
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
@@ -5584,7 +5648,15 @@
   }
 
   function openCollectionEditor() {
+    if (!state.subjectId) {
+      showError(new Error("请先绑定 Bangumi 条目"));
+      return;
+    }
     state.collectionEditorOpen = true;
+    state.collectionEditorContext = {
+      ...captureRouteContext(),
+      subjectId: Number(state.subjectId),
+    };
     state.settingsOpen = false;
     state.error = "";
     mountModal("collection-cancel", renderCollectionEditorDialog());
@@ -5592,13 +5664,18 @@
 
   function closeCollectionEditor() {
     state.collectionEditorOpen = false;
+    state.collectionEditorContext = null;
     removeModal();
     render();
   }
 
   async function saveCollectionEditor() {
     ensureToken();
-    if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    const editorContext = state.collectionEditorContext;
+    if (!editorContext || !editorContext.subjectId) throw new Error("收藏编辑窗口已失效，请重新打开。");
+    ensureRouteContext(editorContext, "页面已切换，已取消保存；请重新打开收藏编辑窗口。");
+    if (Number(state.subjectId) !== Number(editorContext.subjectId)) throw new Error("当前 Bangumi 条目已变化，已取消保存。");
+    const subjectId = Number(editorContext.subjectId);
     const typeInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-type']:checked`);
     const rateInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-rate']`);
     const tagsInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-tags']`);
@@ -5617,16 +5694,23 @@
     };
     const hadCollection = hasCollection();
     state.collectionEditorOpen = false;
+    state.collectionEditorContext = null;
     removeModal();
     state.collection = { ...(state.collection || {}), ...payload };
-    state.pendingCollection = { ...(state.pendingCollection || {}), subjectId: state.subjectId, ...payload, createdAt: Date.now() };
+    state.pendingCollection = { ...(state.pendingCollection || {}), subjectId, ...payload, createdAt: Date.now() };
     setBusy("正在保存记录...");
-    await bgmRequest(`/v0/users/-/collections/${state.subjectId}`, {
-      method: hadCollection ? "PATCH" : "POST",
-      auth: true,
-      body: payload,
-      expectNoContent: true,
-    });
+    try {
+      await bgmRequest(`/v0/users/-/collections/${subjectId}`, {
+        method: hadCollection ? "PATCH" : "POST",
+        auth: true,
+        body: payload,
+        expectNoContent: true,
+      });
+    } catch (error) {
+      if (!isRouteContextCurrent(editorContext) || Number(state.subjectId) !== subjectId) return;
+      throw error;
+    }
+    if (!isRouteContextCurrent(editorContext) || Number(state.subjectId) !== subjectId) return;
     await loadSubjectBundlePreservingLocal(state.collection);
     state.message = "记录已保存。";
     render();
@@ -6819,6 +6903,53 @@
     render();
   }
 
+  function captureRouteContext() {
+    return {
+      href: location.href,
+      pageKey: state.pageKey,
+      routeSeq: routeRefreshSeq,
+    };
+  }
+
+  function isRouteContextCurrent(context) {
+    return Boolean(context)
+      && context.href === location.href
+      && context.pageKey === state.pageKey
+      && context.routeSeq === routeRefreshSeq;
+  }
+
+  function ensureRouteContext(context, message) {
+    if (!isRouteContextCurrent(context)) throw new Error(message || "页面已切换，请重新操作。");
+  }
+
+  async function mergeBindingKeys(bindingKeys, subjectId) {
+    await updateBindings((bindings) => {
+      for (const key of bindingKeys) {
+        if (!bindings[key]) bindings[key] = subjectId;
+      }
+    });
+  }
+
+  async function updateBindings(update) {
+    return withBindingsLock(async () => {
+      const latest = await readJsonValueFresh(STORAGE.bindings, {});
+      const next = { ...(latest && typeof latest === "object" && !Array.isArray(latest) ? latest : {}) };
+      const changed = update(next) !== false;
+      if (changed) await writeJsonValueAsync(STORAGE.bindings, next);
+      state.bindings = next;
+      return next;
+    });
+  }
+
+  function withBindingsLock(callback) {
+    if (navigator.locks && typeof navigator.locks.request === "function") {
+      return navigator.locks.request(BINDINGS_LOCK_NAME, { mode: "exclusive" }, callback);
+    }
+    const run = bindingsUpdateQueue.catch(() => {}).then(callback);
+    bindingsUpdateQueue = run.catch(() => {});
+    return run;
+  }
+
   function getActiveEpisodeText() {
     const selectors = [
       ".video-pod__item.active",
@@ -7094,17 +7225,39 @@
   function readValue(key, fallback) {
     try {
       return GM_getValue(key, fallback);
-    } catch (_) {
-      return localStorage.getItem(key) || fallback;
+    } catch (error) {
+      throw new Error(`扩展存储不可用，请刷新页面后重试：${error && error.message ? error.message : error}`);
     }
   }
 
   function writeValue(key, value) {
     try {
       GM_setValue(key, value);
-    } catch (_) {
-      localStorage.setItem(key, value);
+    } catch (error) {
+      throw new Error(`扩展存储不可用，请刷新页面后重试：${error && error.message ? error.message : error}`);
     }
+  }
+
+  function readValueFresh(key, fallback) {
+    return GM_getValueFresh(key, fallback);
+  }
+
+  async function readJsonValueFresh(key, fallback) {
+    const value = await readValueFresh(key, "");
+    if (!value) return fallback;
+    return tryParseJson(value) || fallback;
+  }
+
+  function writeValueAsync(key, value) {
+    return GM_setValueAsync(key, value);
+  }
+
+  function writeJsonValueAsync(key, value) {
+    return writeValueAsync(key, JSON.stringify(value));
+  }
+
+  function writeListValueAsync(key, value) {
+    return writeValueAsync(key, JSON.stringify(parseList(value.join("\n"))));
   }
 
   function readJsonValue(key, fallback) {
@@ -7285,30 +7438,21 @@
 
   function preloadChromeStorage(done) {
     if (!isChromeStorageAvailable()) {
-      preloadLocalStorageFallback();
-      done();
+      showExtensionReloadRequired();
+      done(false);
       return;
     }
     chrome.storage.local.get(null, (items) => {
       if (chrome.runtime.lastError) {
         console.warn("[Biligumi Connector] Failed to preload chrome.storage.local:", chrome.runtime.lastError.message);
-        preloadLocalStorageFallback();
+        showExtensionReloadRequired();
+        done(false);
+        return;
       } else {
         Object.assign(storageCache, items || {});
       }
-      done();
+      done(true);
     });
-  }
-
-  function preloadLocalStorageFallback() {
-    try {
-      for (let index = 0; index < localStorage.length; index += 1) {
-        const key = localStorage.key(index);
-        if (key) storageCache[key] = localStorage.getItem(key);
-      }
-    } catch (_error) {
-      // Ignore inaccessible page storage.
-    }
   }
 
   function bindStorageMirrorUpdates() {
@@ -7331,22 +7475,116 @@
     return fallback;
   }
 
+  function GM_getValueFresh(key, fallback) {
+    const storageKey = normalizeStorageKey(key);
+    return new Promise((resolve, reject) => {
+      if (!isChromeStorageAvailable() || !isExtensionRuntimeAvailable()) {
+        showExtensionReloadRequired();
+        reject(new Error("扩展上下文已失效，请刷新页面后重试。"));
+        return;
+      }
+      try {
+        chrome.storage.local.get(storageKey, (items) => {
+          if (chrome.runtime.lastError) {
+            showExtensionReloadRequired();
+            reject(new Error(chrome.runtime.lastError.message || "读取扩展存储失败"));
+            return;
+          }
+          if (items && Object.prototype.hasOwnProperty.call(items, storageKey)) {
+            storageCache[storageKey] = items[storageKey];
+            resolve(items[storageKey]);
+            return;
+          }
+          delete storageCache[storageKey];
+          resolve(fallback);
+        });
+      } catch (error) {
+        showExtensionReloadRequired();
+        reject(error);
+      }
+    });
+  }
+
   function GM_setValue(key, value) {
     const storageKey = normalizeStorageKey(key);
+    if (!isChromeStorageAvailable() || !isExtensionRuntimeAvailable()) {
+      showExtensionReloadRequired();
+      throw new Error("扩展上下文已失效，请刷新页面后重试。");
+    }
+    const hadPrevious = Object.prototype.hasOwnProperty.call(storageCache, storageKey);
+    const previousValue = storageCache[storageKey];
     storageCache[storageKey] = value;
-    if (isChromeStorageAvailable()) {
+    try {
       chrome.storage.local.set({ [storageKey]: value }, () => {
         if (chrome.runtime.lastError) {
           console.warn("[Biligumi Connector] Failed to write chrome.storage.local:", chrome.runtime.lastError.message);
+          if (hadPrevious) storageCache[storageKey] = previousValue;
+          else delete storageCache[storageKey];
+          showExtensionReloadRequired();
         }
       });
-      return;
+    } catch (error) {
+      if (hadPrevious) storageCache[storageKey] = previousValue;
+      else delete storageCache[storageKey];
+      showExtensionReloadRequired();
+      throw error;
     }
-    try {
-      localStorage.setItem(storageKey, String(value));
-    } catch (_error) {
-      // Ignore inaccessible page storage.
-    }
+  }
+
+  function GM_setValueAsync(key, value) {
+    const storageKey = normalizeStorageKey(key);
+    return new Promise((resolve, reject) => {
+      if (!isChromeStorageAvailable() || !isExtensionRuntimeAvailable()) {
+        showExtensionReloadRequired();
+        reject(new Error("扩展上下文已失效，请刷新页面后重试。"));
+        return;
+      }
+      const hadPrevious = Object.prototype.hasOwnProperty.call(storageCache, storageKey);
+      const previousValue = storageCache[storageKey];
+      storageCache[storageKey] = value;
+      try {
+        chrome.storage.local.set({ [storageKey]: value }, () => {
+          if (chrome.runtime.lastError) {
+            if (hadPrevious) storageCache[storageKey] = previousValue;
+            else delete storageCache[storageKey];
+            showExtensionReloadRequired();
+            reject(new Error(chrome.runtime.lastError.message || "写入扩展存储失败"));
+            return;
+          }
+          resolve();
+        });
+      } catch (error) {
+        if (hadPrevious) storageCache[storageKey] = previousValue;
+        else delete storageCache[storageKey];
+        showExtensionReloadRequired();
+        reject(error);
+      }
+    });
+  }
+
+  function showExtensionReloadRequired() {
+    const bannerId = "biligumi-extension-reload-required";
+    if (document.getElementById(bannerId)) return;
+    const banner = document.createElement("div");
+    banner.id = bannerId;
+    banner.textContent = "Biligumi Connector 扩展已更新或失效，请刷新页面后重试。为保护 Token，本次数据不会写入网页存储。";
+    Object.assign(banner.style, {
+      position: "fixed",
+      left: "50%",
+      top: "16px",
+      zIndex: "2147483647",
+      transform: "translateX(-50%)",
+      maxWidth: "min(680px, calc(100vw - 32px))",
+      padding: "10px 14px",
+      borderRadius: "8px",
+      background: "#fff4e5",
+      color: "#7a3e00",
+      border: "1px solid #ffb45b",
+      boxShadow: "0 8px 24px rgba(0, 0, 0, .18)",
+      fontSize: "14px",
+      lineHeight: "1.5",
+    });
+    (document.body || document.documentElement).appendChild(banner);
   }
 
   function GM_addStyle(css) {

@@ -141,7 +141,6 @@
     for (const tab of candidates) {
       const response = await sendSkipMessage(tab.id);
       if (response && response.ok) return response;
-      if (response && response.delivered) return response;
     }
     return { ok: false, reason: "no-bilibili-tab" };
   }
