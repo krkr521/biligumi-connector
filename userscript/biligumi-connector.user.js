@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.6.9
+// @version      0.6.10
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -24,10 +24,11 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.9";
+  const SCRIPT_VERSION = "0.6.10";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
+    bindingSubjects: "biligumi.bindingSubjects",
     whitelist: "biligumi.whitelist",
     whitelistLabels: "biligumi.whitelistLabels",
     panelCollapsed: "biligumi.panelCollapsed",
@@ -117,6 +118,7 @@
     username: "",
     token: readValue(STORAGE.token, ""),
     bindings: readJsonValue(STORAGE.bindings, {}),
+    bindingSubjects: readJsonValue(STORAGE.bindingSubjects, {}),
     whitelist: readListValue(STORAGE.whitelist, []),
     whitelistLabels: readJsonValue(STORAGE.whitelistLabels, {}),
     subjectId: null,
@@ -135,6 +137,7 @@
     episodes: [],
     episodeCollections: [],
     currentEpisodeNo: null,
+    bindingGuardMessage: "",
     busy: false,
     scoreDetailMode: normalizeScoreDetailMode(readValue(STORAGE.scoreDetailMode, "simple")),
     panelCollapsed: readValue(STORAGE.panelCollapsed, "0") === "1",
@@ -2077,7 +2080,7 @@
     state.collectionEditorContext = null;
     removeModal();
     state.busy = false;
-    state.message = "";
+    state.message = state.bindingGuardMessage || "";
     state.standaloneSearchExpanded = false;
     state.autoEpisodeSyncing = false;
     state.autoEpisodeSyncLastKey = "";
@@ -2106,25 +2109,42 @@
   }
 
   function getCurrentBinding() {
+    if (state.message === state.bindingGuardMessage) state.message = "";
+    state.bindingGuardMessage = "";
     const latestBindings = readJsonValue(STORAGE.bindings, {});
     if (latestBindings && typeof latestBindings === "object" && !Array.isArray(latestBindings)) {
       state.bindings = latestBindings;
     }
-    for (const key of getBindingKeysForCurrentPage()) {
+    const latestBindingSubjects = readJsonValue(STORAGE.bindingSubjects, {});
+    if (latestBindingSubjects && typeof latestBindingSubjects === "object" && !Array.isArray(latestBindingSubjects)) {
+      state.bindingSubjects = latestBindingSubjects;
+    }
+    for (const key of getDirectBindingKeysForCurrentPage()) {
       if (state.bindings[key]) {
         migrateCurrentBindingKeys(state.bindings[key]);
         return state.bindings[key];
       }
     }
+    const titleKey = getTitleBindingKey();
+    const sameOwnerSubjectId = titleKey && state.bindings[titleKey];
+    if (sameOwnerSubjectId && canReuseTitleBinding(sameOwnerSubjectId)) {
+      migrateCurrentBindingKeys(sameOwnerSubjectId);
+      return sameOwnerSubjectId;
+    }
     const crossOwnerSubjectId = getCrossOwnerTitleBinding();
-    if (crossOwnerSubjectId) {
+    if (crossOwnerSubjectId && canReuseTitleBinding(crossOwnerSubjectId)) {
       migrateCurrentBindingKeys(crossOwnerSubjectId);
       return crossOwnerSubjectId;
     }
     const nonMainSubjectId = getNonMainTitleBinding();
-    if (nonMainSubjectId) {
+    if (nonMainSubjectId && canReuseTitleBinding(nonMainSubjectId)) {
       migrateCurrentBindingKeys(nonMainSubjectId);
       return nonMainSubjectId;
+    }
+    const titleInfo = getTitleBindingInfo();
+    if (!state.bindingGuardMessage && titleInfo.lowConfidence && getTitleBindingSubjectIdsByToken(titleInfo.token).length) {
+      state.bindingGuardMessage = "检测到低置信度标题，已有标题绑定但无法唯一、可靠地确认同一部番；请搜索并确认正确条目。";
+      state.message = state.bindingGuardMessage;
     }
     return null;
   }
@@ -4007,6 +4027,17 @@
     });
   }
 
+  function updateStoredBindingSubjects(mutator) {
+    return withBindingsLock(async () => {
+      const stored = readJsonValue(STORAGE.bindingSubjects, {});
+      const subjects = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {};
+      const changed = mutator(subjects) !== false;
+      state.bindingSubjects = subjects;
+      if (changed) writeJsonValue(STORAGE.bindingSubjects, subjects);
+      return subjects;
+    });
+  }
+
   async function bindSubjectFromDirectInput(subjectId) {
     const origin = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     setBusy(`正在读取 Bangumi 条目 ${subjectId}...`);
@@ -4022,6 +4053,7 @@
     state.message = `已通过 Bangumi 链接/ID 绑定：${displaySubjectName(subject)}`;
     state.error = "";
     state.subject = subject;
+    await rememberBindingSubject(subject);
     await bindSubject(subjectId, origin);
   }
 
@@ -4036,6 +4068,7 @@
       return true;
     });
     if (!applied || !isCurrentPageContext(context)) return;
+    state.bindingGuardMessage = "";
     state.subjectId = subjectId;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
@@ -4100,9 +4133,15 @@
 
   function getBindingKeysForCurrentPage() {
     return [
+      ...getDirectBindingKeysForCurrentPage(),
+      getTitleBindingKey(),
+    ].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index);
+  }
+
+  function getDirectBindingKeysForCurrentPage() {
+    return [
       state.pageKey,
       getStableBiliSubjectKey(),
-      getTitleBindingKey(),
       location.pathname,
       getBvIdFromUrl(),
     ].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index);
@@ -4137,6 +4176,7 @@
     ]);
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
+    await rememberBindingSubject(subject);
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
@@ -4167,6 +4207,7 @@
     ]);
     if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
     state.subject = subject;
+    await rememberBindingSubject(subject);
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
@@ -6115,8 +6156,185 @@
   }
 
   function getTitleBindingTitleToken() {
-    const title = cleanTitle(getSeriesTitle() || getPageTitle());
-    return title ? normalizeBindingToken(title) : "";
+    return getTitleBindingInfo().token;
+  }
+
+  function getTitleBindingInfo() {
+    const sourceTitle = getSeriesTitle() || getPageTitle();
+    const cleanedTitle = cleanTitle(sourceTitle);
+    const sourceToken = normalizeTitleMatchToken(sourceTitle);
+    const token = normalizeBindingToken(cleanedTitle);
+    const matchToken = normalizeTitleMatchToken(cleanedTitle);
+    const suspiciousToken = /^(?:(?:第)?\d+(?:话|話|集)?|第|话|話|集|pv\d*|op\d*|ed\d*|预告|預告|番宣|动画|動畫|动漫|動漫|新番)$/i.test(matchToken);
+    const sourceLength = Array.from(sourceToken).length;
+    const cleanedLength = Array.from(matchToken).length;
+    const retainedRatio = sourceLength ? cleanedLength / sourceLength : 0;
+    let confidence = 1;
+    if (!matchToken) confidence = 0;
+    else if (suspiciousToken) confidence = 0.1;
+    else if (cleanedLength <= 2) confidence = 0.35;
+    else if (sourceLength >= 8 && cleanedLength <= 3) confidence = 0.4;
+    else if (sourceLength >= 12 && cleanedLength <= 6 && retainedRatio < 0.28) confidence = 0.5;
+    return { sourceTitle, cleanedTitle, token, matchToken, confidence, lowConfidence: confidence < 0.6 };
+  }
+
+  function canReuseTitleBinding(subjectId) {
+    const titleInfo = getTitleBindingInfo();
+    if (!titleInfo.lowConfidence) {
+      if (state.message === state.bindingGuardMessage) state.message = "";
+      state.bindingGuardMessage = "";
+      return true;
+    }
+    const evidence = state.bindingSubjects && state.bindingSubjects[String(subjectId)];
+    if (doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo)) {
+      if (state.message === state.bindingGuardMessage) state.message = "";
+      state.bindingGuardMessage = "";
+      return true;
+    }
+    const hasEvidence = evidence && Array.isArray(evidence.names) && evidence.names.length;
+    state.bindingGuardMessage = hasEvidence
+      ? "检测到低置信度标题，且完整标题与已记录的 Bangumi 名称/别名不一致，已暂停自动绑定；请搜索并确认正确条目。"
+      : "检测到低置信度标题，但旧绑定缺少 Bangumi 名称/别名资料，已暂停自动绑定；请搜索并确认正确条目。";
+    state.message = state.bindingGuardMessage;
+    return false;
+  }
+
+  function doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo = getTitleBindingInfo()) {
+    const names = evidence && Array.isArray(evidence.names) ? evidence.names : [];
+    if (!names.length) return false;
+    const rawTitle = getPageTitle();
+    const normalizedRawTitle = normalizeTitleText(rawTitle);
+    const fullTitleTokens = [getSeriesTitle(), rawTitle].map(normalizeTitleMatchToken).filter(Boolean);
+    const candidates = [
+      getSeriesTitle(),
+      rawTitle,
+      titleInfo.cleanedTitle,
+      state.pageTitle,
+      extractAnimeWorkTitle(normalizedRawTitle),
+      extractQuotedWorkTitle(normalizedRawTitle),
+    ].map(normalizeTitleMatchToken).filter(Boolean);
+    return names.some((name) => {
+      const subjectName = normalizeTitleMatchToken(name);
+      if (fullTitleTokens.some((fullTitle) => hasTitleSeasonConflict(fullTitle, subjectName))) return false;
+      return candidates.some((candidate) => isTitleEvidenceMatch(candidate, subjectName));
+    });
+  }
+
+  function isTitleEvidenceMatch(candidate, subjectName) {
+    if (!candidate || !subjectName) return false;
+    if (hasTitleSeasonConflict(candidate, subjectName)) return false;
+    if (candidate === subjectName) return true;
+    const candidateLength = Array.from(candidate).length;
+    const nameLength = Array.from(subjectName).length;
+    if (nameLength >= 3 && candidate.includes(subjectName)) return true;
+    if (candidateLength >= 4 && subjectName.includes(candidate) && candidateLength / nameLength >= 0.65) return true;
+    const lengthRatio = Math.min(candidateLength, nameLength) / Math.max(candidateLength, nameLength);
+    return candidateLength >= 4 && nameLength >= 4 && lengthRatio >= 0.6 && getTitleBigramDice(candidate, subjectName) >= 0.78;
+  }
+
+  function hasTitleSeasonConflict(candidate, subjectName) {
+    const candidateSeason = getTitleSeasonNumber(candidate);
+    const subjectSeason = getTitleSeasonNumber(subjectName);
+    if (candidateSeason && subjectSeason) return candidateSeason !== subjectSeason;
+    return candidateSeason > 1 && !subjectSeason;
+  }
+
+  function getTitleSeasonNumber(value) {
+    const text = String(value || "").toLowerCase();
+    const numeric = text.match(/第(\d{1,2})(?:季|期)/)
+      || text.match(/(?:season|s)(\d{1,2})(?:$|[^0-9])/)
+      || text.match(/(\d{1,2})(?:st|nd|rd|th)season/);
+    if (numeric) return Number(numeric[1]) || 0;
+    const chinese = text.match(/第([一二两兩三四五六七八九十]{1,3})(?:季|期)/);
+    return chinese ? parseChineseTitleNumber(chinese[1]) : 0;
+  }
+
+  function parseChineseTitleNumber(value) {
+    const digits = { 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    const text = String(value || "");
+    if (text === "十") return 10;
+    const parts = text.split("十");
+    if (parts.length === 2) return (digits[parts[0]] || 1) * 10 + (digits[parts[1]] || 0);
+    return digits[text] || 0;
+  }
+
+  function getTitleBigramDice(left, right) {
+    const leftChars = Array.from(left);
+    const rightChars = Array.from(right);
+    if (leftChars.length < 2 || rightChars.length < 2) return 0;
+    const rightPairs = new Map();
+    for (let index = 0; index < rightChars.length - 1; index += 1) {
+      const pair = `${rightChars[index]}${rightChars[index + 1]}`;
+      rightPairs.set(pair, (rightPairs.get(pair) || 0) + 1);
+    }
+    let matches = 0;
+    for (let index = 0; index < leftChars.length - 1; index += 1) {
+      const pair = `${leftChars[index]}${leftChars[index + 1]}`;
+      const count = rightPairs.get(pair) || 0;
+      if (!count) continue;
+      matches += 1;
+      rightPairs.set(pair, count - 1);
+    }
+    return (2 * matches) / (leftChars.length + rightChars.length - 2);
+  }
+
+  function normalizeTitleMatchToken(value) {
+    const text = String(value || "");
+    const normalized = typeof text.normalize === "function" ? text.normalize("NFKC") : text;
+    return normalized
+      .toLowerCase()
+      .replace(/_哔哩哔哩_bilibili.*$/i, "")
+      .replace(/[\s\p{P}\p{S}]+/gu, "")
+      .trim();
+  }
+
+  async function rememberBindingSubject(subject) {
+    const subjectId = Number(subject && subject.id);
+    const extractedNames = extractSubjectBindingNames(subject);
+    if (!subjectId || !extractedNames.length) return;
+    await updateStoredBindingSubjects((subjects) => {
+      const key = String(subjectId);
+      const previous = subjects[key] && typeof subjects[key] === "object" ? subjects[key] : {};
+      const previousNames = Array.isArray(previous.names) ? previous.names : [];
+      const names = uniqueSubjectBindingNames([...extractedNames, ...previousNames]).slice(0, 40);
+      if (JSON.stringify(names) === JSON.stringify(previousNames)) return false;
+      subjects[key] = { names, updatedAt: Date.now() };
+      return true;
+    });
+  }
+
+  function extractSubjectBindingNames(subject) {
+    const values = [subject && subject.name_cn, subject && subject.name];
+    const infobox = subject && Array.isArray(subject.infobox) ? subject.infobox : [];
+    infobox.forEach((item) => {
+      const key = normalizeSubjectInfoKey(item && item.key).toLowerCase();
+      if (["别名", "別名", "alias", "aliases"].includes(key)) collectSubjectBindingNameValues(item.value, values);
+    });
+    return uniqueSubjectBindingNames(values);
+  }
+
+  function collectSubjectBindingNameValues(value, target) {
+    if (Array.isArray(value)) {
+      value.forEach((item) => collectSubjectBindingNameValues(item, target));
+      return;
+    }
+    if (value && typeof value === "object") {
+      collectSubjectBindingNameValues(value.v || value.value || value.name || value.title, target);
+      return;
+    }
+    if (typeof value === "string") {
+      value.split(/[\r\n]+/).map((item) => item.trim()).filter(Boolean).forEach((item) => target.push(item));
+    }
+  }
+
+  function uniqueSubjectBindingNames(values) {
+    const seen = new Set();
+    return values.map((value) => String(value || "").trim()).filter((value) => {
+      const token = normalizeTitleMatchToken(value);
+      if (!token || seen.has(token)) return false;
+      seen.add(token);
+      return true;
+    });
   }
 
   function getCrossOwnerTitleBinding() {
@@ -6132,13 +6350,17 @@
   }
 
   function getUniqueTitleBindingByToken(titleToken, excludeKey) {
-    if (!titleToken) return null;
+    const uniqueSubjectIds = getTitleBindingSubjectIdsByToken(titleToken, excludeKey);
+    return uniqueSubjectIds.length === 1 ? uniqueSubjectIds[0] : null;
+  }
+
+  function getTitleBindingSubjectIdsByToken(titleToken, excludeKey = "") {
+    if (!titleToken) return [];
     const titleSuffix = `|${titleToken}`;
     const subjectIds = Object.entries(state.bindings || {})
       .filter(([key, subjectId]) => key.startsWith("title:") && key.endsWith(titleSuffix) && key !== excludeKey && subjectId)
       .map(([, subjectId]) => String(subjectId));
-    const uniqueSubjectIds = subjectIds.filter((subjectId, index, list) => list.indexOf(subjectId) === index);
-    return uniqueSubjectIds.length === 1 ? uniqueSubjectIds[0] : null;
+    return subjectIds.filter((subjectId, index, list) => list.indexOf(subjectId) === index);
   }
 
   function getPathToken(prefix) {
@@ -6637,7 +6859,7 @@
   }
 
   function cleanTitle(title) {
-    const raw = normalizeTitleText(title);
+    const raw = stripEpisodeMarkersAtEdges(normalizeTitleText(title));
     if (!raw) return "";
 
     const animeWorkTitle = extractAnimeWorkTitle(raw);
@@ -6768,7 +6990,7 @@
   }
 
   function cleanupAnimeTitle(title) {
-    return String(title || "")
+    return stripEpisodeMarkersAtEdges(title)
       .replace(/^第\s*\d+(?:\.\d+)?\s*[话集][：:\s]*/, "")
       .replace(/\s*第\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话集].*$/i, "")
       .replace(/\s*全\s*\d+(?:\.\d+)?\s*[话話集].*$/i, "")
@@ -6787,6 +7009,14 @@
       .replace(/\s*(?:(?:第\s*)?[一二三四五六七八九十\d]+\s*季\s*)?(?:回顾|回顧|回顾映像|回顧映像|映像|总集篇|總集篇)\s*$/i, "")
       .replace(/\s*(?:(?:正式|主|第\s*\d+\s*[弹彈]|先导|先導)\s*)?(?:PV|CM|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|先导|先導|特报|特報|特典|片头|片尾|无字幕OP|无字幕ED)(?:\s*\d+(?:\.\d+)?)?\s*$/, "")
       .replace(/[\s\-~～〜－–—―|｜·・•、，,;；:：／/]+/g, " ")
+      .trim();
+  }
+
+  function stripEpisodeMarkersAtEdges(title) {
+    const episodeMarker = "第\\s*\\d+(?:\\.\\d+)?(?:(?:\\s*[-~～〜－–—―至到]\\s*|\\s+)\\d+(?:\\.\\d+)?)?\\s*[话話集]";
+    return String(title || "")
+      .replace(new RegExp(`^(?:\\s*[【\\[]\\s*)?${episodeMarker}(?:\\s*[】\\]])?[：:\\s]*`, "i"), " ")
+      .replace(new RegExp(`\\s*(?:[【\\[]\\s*)?${episodeMarker}(?:\\s*[】\\]])?\\s*$`, "i"), " ")
       .trim();
   }
 
