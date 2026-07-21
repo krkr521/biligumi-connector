@@ -1433,6 +1433,10 @@
       height: 34px;
       padding: 4px 9px;
     }
+    /* Keep this a text field so Chrome does not treat the page as a login form. */
+    #${SETTINGS_ID} .biligumi-secret-input {
+      -webkit-text-security: disc;
+    }
     #${SETTINGS_ID} .biligumi-settings-field textarea {
       min-height: 112px;
       resize: vertical;
@@ -3419,7 +3423,7 @@
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" data-role="settings-token" type="password" value="" autocomplete="off" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
+            <input id="biligumi-token-input" class="biligumi-secret-input" data-role="settings-token" type="text" value="" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
             <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换；清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
             <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
           </div>
