@@ -50,5 +50,5 @@
 - Manifest commands 能否在浏览器完全非焦点时触发，取决于 Chrome/Edge、操作系统和快捷键是否被系统占用。
 - 插件版由 userscript 主体迁移而来，后续如果 userscript 更新，需要同步重新生成或移植 `extension/content.js`。
 - 如果目标标签页还没有加载 content script，或 Bilibili 页面结构阻止脚本访问播放器，命令可能不会生效。
-- Bangumi 网页登录态校验依赖扩展后台请求携带 `bgm.tv` Cookie；不同浏览器隐私设置可能影响结果。
+- 删除 Bangumi 收藏时会在后台打开 `bgm.tv` 第一方标签页完成登录态与账号校验；仅在未登录、需要手动操作时切到前台，登录并删除成功后自动关闭。扩展不会读取、复制或记录登录 Cookie。
 - 画中画追踪依赖页面触发 `enterpictureinpicture` / `leavepictureinpicture` 事件；service worker 被回收后会从 `chrome.storage.session` 恢复最近记录，旧版浏览器会回退到 `chrome.storage.local` 的运行时记录。

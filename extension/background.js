@@ -5,6 +5,9 @@
   const MSG_PAGE_STATE = "biligumi-oped-page-state";
   const MSG_EXECUTE_SKIP = "biligumi-oped-execute-skip";
   const MSG_HTTP_REQUEST = "biligumi-http-request";
+  const MSG_OPEN_DELETE_BRIDGE = "biligumi-open-delete-bridge";
+  const MSG_FOCUS_DELETE_BRIDGE = "biligumi-focus-delete-bridge";
+  const MSG_CLOSE_DELETE_BRIDGE = "biligumi-close-delete-bridge";
   const RUNTIME_STATE_KEY = "__biligumiOpedRuntimeState";
   const BILIBILI_URL_PATTERNS = [
     "https://www.bilibili.com/video/*",
@@ -12,6 +15,30 @@
   ];
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message && message.type === MSG_OPEN_DELETE_BRIDGE) {
+      openDeleteBridgeTab(message.url, message.active, sender).then(
+        (tab) => sendResponse({ ok: true, tabId: tab && tab.id }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
+    if (message && message.type === MSG_FOCUS_DELETE_BRIDGE) {
+      focusDeleteBridgeTab(sender, message.tabId).then(
+        () => sendResponse({ ok: true }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
+    if (message && message.type === MSG_CLOSE_DELETE_BRIDGE) {
+      closeDeleteBridgeTab(sender, message.tabId).then(
+        () => sendResponse({ ok: true }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
     if (message && message.type === MSG_HTTP_REQUEST) {
       handleHttpRequest(message.request).then(
         (response) => sendResponse({ ok: true, response }),
@@ -27,6 +54,68 @@
     );
     return true;
   });
+
+  async function openDeleteBridgeTab(url, active, sender) {
+    if (!isDeleteBridgeUrl(url)) throw new Error("Blocked delete bridge URL");
+    if (!sender || !sender.tab || !Number.isInteger(sender.tab.id) || !isBilibiliVideoUrl(sender.tab.url)) {
+      throw new Error("Blocked delete bridge sender");
+    }
+    const createProperties = { url, active: Boolean(active) };
+    createProperties.openerTabId = sender.tab.id;
+    return tabsCreate(createProperties);
+  }
+
+  async function focusDeleteBridgeTab(sender, requestedTabId) {
+    const senderTab = sender && sender.tab;
+    const tab = Number.isInteger(requestedTabId) ? await tabsGet(requestedTabId) : null;
+    if (
+      !senderTab
+      || !Number.isInteger(senderTab.id)
+      || !tab
+      || tab.openerTabId !== senderTab.id
+      || !isDeleteBridgeTabUrl(tab.url)
+    ) {
+      throw new Error("Blocked delete bridge tab focus");
+    }
+    await tabsUpdate(tab.id, { active: true });
+  }
+
+  async function closeDeleteBridgeTab(sender, requestedTabId) {
+    const senderTab = sender && sender.tab;
+    let tab = senderTab;
+    if (Number.isInteger(requestedTabId)) {
+      tab = await tabsGet(requestedTabId);
+      if (!senderTab || !Number.isInteger(senderTab.id) || !tab || tab.openerTabId !== senderTab.id) {
+        throw new Error("Blocked delete bridge tab close");
+      }
+    }
+    if (!tab || !Number.isInteger(tab.id) || !isDeleteBridgeTabUrl(tab.url)) {
+      throw new Error("Blocked delete bridge tab close");
+    }
+    await tabsRemove(tab.id);
+  }
+
+  function isDeleteBridgeUrl(url) {
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "https:"
+        && parsed.hostname === "bgm.tv"
+        && /^\/subject\/\d+\/?$/.test(parsed.pathname)
+        && /^[a-f0-9]{32}$/.test(parsed.searchParams.get("biligumi_delete_bridge") || "");
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function isDeleteBridgeTabUrl(url) {
+    if (isDeleteBridgeUrl(url)) return true;
+    try {
+      const parsed = new URL(String(url || ""));
+      return parsed.protocol === "https:" && parsed.hostname === "bgm.tv" && parsed.pathname === "/login";
+    } catch (_error) {
+      return false;
+    }
+  }
 
   async function handleHttpRequest(request) {
     const normalized = normalizeHttpRequest(request);
@@ -252,11 +341,47 @@
     });
   }
 
+  function tabsCreate(createProperties) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.create(createProperties, (tab) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(tab || null);
+      });
+    });
+  }
+
+  function tabsRemove(tabId) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.remove(tabId, () => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
   function tabsGet(tabId) {
     return new Promise((resolve) => {
       chrome.tabs.get(tabId, (tab) => {
         if (chrome.runtime.lastError) {
           resolve(null);
+          return;
+        }
+        resolve(tab || null);
+      });
+    });
+  }
+
+  function tabsUpdate(tabId, updateProperties) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.update(tabId, updateProperties, (tab) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
           return;
         }
         resolve(tab || null);

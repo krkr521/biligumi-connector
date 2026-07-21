@@ -20,7 +20,8 @@
     {
       "matches": [
         "https://www.bilibili.com/video/*",
-        "https://www.bilibili.com/bangumi/play/*"
+        "https://www.bilibili.com/bangumi/play/*",
+        "https://bgm.tv/subject/*"
       ],
       "js": [
         "content.js"

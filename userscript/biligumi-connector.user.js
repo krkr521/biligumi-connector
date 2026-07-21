@@ -6,12 +6,16 @@
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/video/*
+// @match        https://bgm.tv/subject/*
 // @connect      api.bgm.tv
 // @connect      bgm.tv
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_openInTab
+// @grant        GM_closeTab
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -20,6 +24,9 @@
 
   const API_BASE = "https://api.bgm.tv";
   const BGM_WEB_BASE = "https://bgm.tv";
+  const DELETE_BRIDGE_PARAM = "biligumi_delete_bridge";
+  const DELETE_BRIDGE_TTL_MS = 5 * 60 * 1000;
+  const DELETE_BRIDGE_POLL_MS = 400;
   const PANEL_ID = "biligumi-connector-panel";
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
@@ -42,7 +49,15 @@
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
     danmakuFavorites: "biligumi.danmakuFavorites",
+    deleteBridge: "biligumi.deleteBridge",
   };
+
+  if (location.hostname === "bgm.tv") {
+    runBangumiDeleteBridgePage().catch(() => {
+      failBangumiDeleteBridgeFromPage("bridge-failed");
+    });
+    return;
+  }
 
   const SUBJECT_TYPES = {
     1: "想看",
@@ -4427,21 +4442,9 @@
 
     setBusy("正在删除 Bangumi 收藏记录...");
     const subjectId = Number(state.subjectId);
-    const pageHtml = await bgmWebRequest(`/subject/${subjectId}`);
-    const webUsername = parseBangumiWebUsername(pageHtml);
     const tokenUsername = await getCurrentUsername();
-    if (!webUsername) {
-      throw new Error("无法读取 Bangumi 网页登录状态，请先在 bgm.tv 登录后再删除收藏。");
-    }
-    if (tokenUsername && webUsername !== tokenUsername) {
-      throw new Error(`Bangumi 网页登录账号（${webUsername}）和 Access Token 账号（${tokenUsername}）不一致，已停止删除。`);
-    }
-    const gh = parseSubjectRemoveHash(pageHtml, subjectId);
-    if (!gh) {
-      throw new Error("无法从 Bangumi 页面读取删除令牌，请刷新页面或确认这个条目仍在网页端收藏中。");
-    }
-
-    await bgmWebRequest(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`);
+    if (!tokenUsername) throw new Error("无法读取 Access Token 对应的 Bangumi 账号，已停止删除。");
+    await requestBangumiFirstPartyDelete(subjectId, tokenUsername);
     state.collection = null;
     state.episodeCollections = [];
     state.pendingCollection = null;
@@ -4450,6 +4453,241 @@
     state.error = "";
     render();
     window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+  }
+
+  async function requestBangumiFirstPartyDelete(subjectId, expectedUsername) {
+    const existing = readJsonValue(STORAGE.deleteBridge, null);
+    if (isActiveDeleteBridgeTask(existing)) {
+      throw new Error("已有一项 Bangumi 删除操作正在等待处理，请先完成或关闭已打开的 Bangumi 页面。");
+    }
+
+    const nonce = createDeleteBridgeNonce();
+    const createdAt = Date.now();
+    const task = {
+      version: 1,
+      nonce,
+      subjectId: Number(subjectId),
+      expectedUsername: String(expectedUsername || ""),
+      createdAt,
+      status: "pending",
+    };
+    await writeJsonValueAsync(STORAGE.deleteBridge, task);
+
+    const bridgeUrl = `${BGM_WEB_BASE}/subject/${task.subjectId}?${DELETE_BRIDGE_PARAM}=${encodeURIComponent(nonce)}`;
+    let bridgeTab;
+    try {
+      bridgeTab = GM_openInTab(bridgeUrl, { active: false, insert: true, setParent: true });
+      if (bridgeTab && bridgeTab.ready && typeof bridgeTab.ready.then === "function") await bridgeTab.ready;
+    } catch (_) {
+      clearDeleteBridgeTask(nonce);
+      throw new Error("无法打开 Bangumi 登录页面，请允许 Tampermonkey 打开新标签页后重试。");
+    }
+
+    let loginNoticeShown = false;
+    try {
+      while (Date.now() - createdAt <= DELETE_BRIDGE_TTL_MS) {
+        const current = readJsonValue(STORAGE.deleteBridge, null);
+        if (!current || current.nonce !== nonce) {
+          throw new Error("Bangumi 删除任务已被替换或取消，请重试。");
+        }
+        if (current.status === "success") return;
+        if (current.status === "error") {
+          throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
+        }
+        if (current.status === "awaiting-login" && !loginNoticeShown) {
+          loginNoticeShown = true;
+          bridgeTab = bringDeleteBridgeToForeground(bridgeTab, bridgeUrl);
+          state.message = "请在已打开的 Bangumi 页面完成登录；登录成功后会自动删除并关闭该页面。";
+          state.error = "";
+          render();
+        }
+        await sleep(DELETE_BRIDGE_POLL_MS);
+      }
+      throw new Error("等待 Bangumi 登录或删除结果超时，请重新点击删除后再试。");
+    } finally {
+      clearDeleteBridgeTask(nonce);
+      if (bridgeTab && typeof bridgeTab.close === "function") {
+        try {
+          bridgeTab.close();
+        } catch (_) {
+          // The first-party bridge normally closes itself after success.
+        }
+      }
+    }
+  }
+
+  function bringDeleteBridgeToForeground(bridgeTab, bridgeUrl) {
+    if (bridgeTab && typeof bridgeTab.focus === "function") {
+      bridgeTab.focus();
+      return bridgeTab;
+    }
+    if (bridgeTab && typeof bridgeTab.closed === "boolean" && !bridgeTab.closed) {
+      // Tab is still open (likely mid-login) but we cannot focus it programmatically.
+      // Do NOT close it — that would discard an in-progress login form. Let the
+      // user switch to it manually; the parent panel message directs them there.
+      return bridgeTab;
+    }
+    return GM_openInTab(bridgeUrl, { active: true, insert: true, setParent: true });
+  }
+
+  function isActiveDeleteBridgeTask(task) {
+    if (!task || typeof task !== "object") return false;
+    if (!Number.isFinite(Number(task.createdAt))) return false;
+    if (Date.now() - Number(task.createdAt) > DELETE_BRIDGE_TTL_MS) return false;
+    return ["pending", "awaiting-login", "processing"].includes(String(task.status || ""));
+  }
+
+  function createDeleteBridgeNonce() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function clearDeleteBridgeTask(nonce) {
+    const current = readJsonValue(STORAGE.deleteBridge, null);
+    if (current && current.nonce !== nonce) return;
+    try {
+      GM_deleteValue(STORAGE.deleteBridge);
+    } catch (_) {
+      writeValue(STORAGE.deleteBridge, "");
+    }
+  }
+
+  function getDeleteBridgeErrorMessage(task, expectedUsername) {
+    switch (String(task && task.errorCode || "")) {
+      case "account-mismatch":
+        return `Bangumi 网页登录账号（${String(task.actualUsername || "未知")}）和 Access Token 账号（${String(expectedUsername || "未知")}）不一致，已停止删除。`;
+      case "remove-token-missing":
+        return "无法从 Bangumi 页面读取删除令牌，请确认这个条目仍在网页端收藏中。";
+      case "task-expired":
+        return "Bangumi 登录或删除任务已经过期，请重新点击删除。";
+      case "task-invalid":
+        return "Bangumi 删除任务无效或已被其他页面处理，请重试。";
+      case "remove-request-failed":
+        return "Bangumi 网页端删除请求失败，请稍后重试。";
+      default:
+        return "Bangumi 第一方页面未能完成删除，请在打开的页面中确认登录状态后重试。";
+    }
+  }
+
+  async function runBangumiDeleteBridgePage() {
+    const match = location.pathname.match(/^\/subject\/(\d+)\/?$/);
+    const nonce = new URLSearchParams(location.search).get(DELETE_BRIDGE_PARAM) || "";
+    if (!match || !/^[a-f0-9]{32}$/.test(nonce)) return;
+
+    const subjectId = Number(match[1]);
+    const task = readJsonValue(STORAGE.deleteBridge, null);
+    if (!isValidDeleteBridgeTask(task, nonce, subjectId)) {
+      if (task && task.nonce === nonce && task.status === "success") {
+        closeBangumiDeleteBridgeTab();
+        return;
+      }
+      // If the nonce matches but the task is invalid (wrong subject, unexpected
+      // status, etc.), signal an error so the parent fails fast instead of
+      // waiting until the TTL. Leave "processing"/"success" tasks untouched —
+      // another bridge tab is handling or has already completed them.
+      if (task && task.nonce === nonce && !["processing", "success"].includes(String(task.status))) {
+        updateDeleteBridgeTask(task, { status: "error", errorCode: "task-invalid", completedAt: Date.now() });
+      }
+      return;
+    }
+    if (Date.now() - Number(task.createdAt) > DELETE_BRIDGE_TTL_MS) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "task-expired", completedAt: Date.now() });
+      return;
+    }
+
+    const pageHtml = document.documentElement.outerHTML;
+    const webUsername = parseBangumiWebUsername(pageHtml);
+    if (!webUsername) {
+      updateDeleteBridgeTask(task, { status: "awaiting-login", loginRequestedAt: Date.now() });
+      // Pass the full subject URL (with the bridge nonce) as the return target so
+      // Bangumi redirects back here after login even if the Referer header is stripped.
+      const returnUrl = `${location.pathname}${location.search}`;
+      location.assign(`/login?referer=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+    if (webUsername !== String(task.expectedUsername || "")) {
+      updateDeleteBridgeTask(task, {
+        status: "error",
+        errorCode: "account-mismatch",
+        actualUsername: webUsername,
+        completedAt: Date.now(),
+      });
+      return;
+    }
+
+    const gh = parseSubjectRemoveHash(pageHtml, subjectId);
+    if (!gh) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-token-missing", completedAt: Date.now() });
+      return;
+    }
+
+    updateDeleteBridgeTask(task, { status: "processing", processingAt: Date.now() });
+    let response;
+    try {
+      response = await fetch(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`, {
+        method: "GET",
+        credentials: "same-origin",
+        redirect: "follow",
+        cache: "no-store",
+      });
+    } catch (_) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+    if (!response.ok) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+    const responseHtml = await response.text();
+    if (
+      parseBangumiWebUsername(responseHtml) !== webUsername
+      || parseSubjectRemoveHash(responseHtml, subjectId)
+    ) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+
+    updateDeleteBridgeTask(task, { status: "success", completedAt: Date.now() });
+    window.setTimeout(closeBangumiDeleteBridgeTab, 250);
+  }
+
+  function isValidDeleteBridgeTask(task, nonce, subjectId) {
+    return Boolean(
+      task
+      && task.version === 1
+      && task.nonce === nonce
+      && Number(task.subjectId) === Number(subjectId)
+      && typeof task.expectedUsername === "string"
+      && task.expectedUsername
+      && ["pending", "awaiting-login"].includes(String(task.status || ""))
+    );
+  }
+
+  function updateDeleteBridgeTask(task, patch) {
+    const current = readJsonValue(STORAGE.deleteBridge, null);
+    if (!current || current.nonce !== task.nonce) return false;
+    writeJsonValue(STORAGE.deleteBridge, { ...current, ...patch });
+    return true;
+  }
+
+  function failBangumiDeleteBridgeFromPage(errorCode) {
+    const nonce = new URLSearchParams(location.search).get(DELETE_BRIDGE_PARAM) || "";
+    const task = readJsonValue(STORAGE.deleteBridge, null);
+    if (!task || task.nonce !== nonce || !isActiveDeleteBridgeTask(task)) return;
+    updateDeleteBridgeTask(task, { status: "error", errorCode, completedAt: Date.now() });
+  }
+
+  function closeBangumiDeleteBridgeTab() {
+    try {
+      if (typeof GM_closeTab === "function") {
+        GM_closeTab();
+        return;
+      }
+    } catch (_) {
+      // Fall through to the standard window API.
+    }
+    window.close();
   }
 
   async function saveProgressFromInput() {
@@ -7473,6 +7711,11 @@
 
   function writeJsonValue(key, value) {
     writeValue(key, JSON.stringify(value));
+  }
+
+  function writeJsonValueAsync(key, value) {
+    writeJsonValue(key, value);
+    return Promise.resolve();
   }
 
   function readListValue(key, fallback) {
