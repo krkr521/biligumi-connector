@@ -1,17 +1,21 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/local/biligumi-connector
-// @version      0.6.11
+// @version      0.6.12
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       local
 // @match        https://www.bilibili.com/bangumi/play/*
 // @match        https://www.bilibili.com/video/*
+// @match        https://bgm.tv/subject/*
 // @connect      api.bgm.tv
 // @connect      bgm.tv
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
 // @grant        GM_setValue
+// @grant        GM_deleteValue
+// @grant        GM_openInTab
+// @grant        GM_closeTab
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -20,11 +24,14 @@
 
   const API_BASE = "https://api.bgm.tv";
   const BGM_WEB_BASE = "https://bgm.tv";
+  const DELETE_BRIDGE_PARAM = "biligumi_delete_bridge";
+  const DELETE_BRIDGE_TTL_MS = 5 * 60 * 1000;
+  const DELETE_BRIDGE_POLL_MS = 400;
   const PANEL_ID = "biligumi-connector-panel";
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.11";
+  const SCRIPT_VERSION = "0.6.12";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -45,7 +52,15 @@
     longVideoEpisodeGuess: "biligumi.longVideoEpisodeGuess",
     longVideoEpisodeOffsets: "biligumi.longVideoEpisodeOffsets",
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
+    deleteBridge: "biligumi.deleteBridge",
   };
+
+  if (location.hostname === "bgm.tv") {
+    runBangumiDeleteBridgePage().catch(() => {
+      failBangumiDeleteBridgeFromPage("bridge-failed");
+    });
+    return;
+  }
 
   const SUBJECT_TYPES = {
     1: "想看",
@@ -105,8 +120,14 @@
   const LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS = 5 * 60;
   const LONG_VIDEO_BIND_WAIT_TIMEOUT_MS = 8 * 1000;
   const LONG_VIDEO_BIND_WAIT_POLL_MS = 400;
+  const DEFAULT_AUTO_WATCH_THRESHOLD = 50;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Ctrl+Alt+ArrowRight";
+  const DEFAULT_CHARACTER_STRIP_ENABLED = true;
+  const DEFAULT_SUBJECT_INFO_PANEL_ENABLED = false;
+  const DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED = true;
+  // Bangumi chii_oauth_access_tokens.access_token is varchar(40).
+  const BANGUMI_ACCESS_TOKEN_LENGTH = 40;
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
   const DANMAKU_FAVORITE_BUTTON_CLASS = "biligumi-danmaku-fav-btn";
   const DANMAKU_HOVER_BAR_CLASS = "biligumi-danmaku-hover-bar";
@@ -154,6 +175,7 @@
     settingsOpen: false,
     collectionEditorOpen: false,
     collectionEditorContext: null,
+    collectionDeleteConfirmSubjectId: null,
     pendingCollection: null,
     message: "",
     error: "",
@@ -1004,6 +1026,54 @@
       color: #7b8794;
       font-size: 13px;
     }
+    #${PANEL_ID} .biligumi-collection-delete-confirm {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+      padding: 9px 10px;
+      border: 1px solid #efc4cc;
+      border-radius: 8px;
+      background: #fff7f9;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-copy {
+      min-width: 0;
+      flex: 1 1 190px;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-title {
+      color: #bd2441;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-detail {
+      margin-top: 2px;
+      color: #7b5962;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 9px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .danger {
+      border-color: #d96363;
+      background: #d96363;
+      color: #fff;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .danger:hover {
+      border-color: #c94e4e;
+      background: #c94e4e;
+      color: #fff;
+    }
     #${PANEL_ID} .biligumi-collection-box {
       display: grid;
       grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -1424,6 +1494,10 @@
       height: 34px;
       padding: 4px 9px;
     }
+    /* Keep this a text field so Chrome does not treat the page as a login form. */
+    #${SETTINGS_ID} .biligumi-secret-input {
+      -webkit-text-security: disc;
+    }
     #${SETTINGS_ID} .biligumi-settings-field textarea {
       min-height: 112px;
       resize: vertical;
@@ -1528,6 +1602,46 @@
       color: #d03030;
       font-weight: 600;
     }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: fit-content;
+      min-height: 32px;
+      margin-top: 8px;
+      padding: 5px 12px;
+      border-color: #f0c2cc;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #fffafb 0%, #fff3f6 100%);
+      box-shadow: 0 1px 2px rgba(190, 75, 101, .08);
+      color: #bd5269;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.2;
+      white-space: nowrap;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:not(:disabled):hover {
+      border-color: #e68aa2;
+      background: #ffedf2;
+      box-shadow: 0 4px 10px rgba(190, 75, 101, .14);
+      color: #a93d57;
+      transform: translateY(-1px);
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:not(:disabled):active {
+      box-shadow: 0 1px 3px rgba(190, 75, 101, .12);
+      transform: translateY(0);
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:focus-visible {
+      outline: 2px solid rgba(234, 143, 163, .35);
+      outline-offset: 2px;
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:disabled {
+      border-color: #e2e6eb;
+      background: #f7f8fa;
+      box-shadow: none;
+      color: #a6afb9;
+    }
     #${SETTINGS_ID} .biligumi-settings-check {
       display: flex;
       align-items: flex-start;
@@ -1587,7 +1701,7 @@
     }
     #${SETTINGS_ID} .biligumi-oped-hotkey-line {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) auto;
+      grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 8px;
       margin-top: 8px;
     }
@@ -1739,6 +1853,9 @@
     }
     @media (max-width: 620px) {
       #${SETTINGS_ID} .biligumi-settings-body {
+        grid-template-columns: 1fr;
+      }
+      #${SETTINGS_ID} .biligumi-oped-hotkey-line {
         grid-template-columns: 1fr;
       }
     }
@@ -2113,6 +2230,7 @@
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
+    state.collectionDeleteConfirmSubjectId = null;
     removeModal();
     state.busy = true;
     state.message = "正在等待 B站页面更新...";
@@ -2151,6 +2269,7 @@
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
+    state.collectionDeleteConfirmSubjectId = null;
     removeModal();
     state.busy = false;
     state.message = state.bindingGuardMessage || "";
@@ -3273,14 +3392,29 @@
         </div>
       `;
     }
+    const isDeleteConfirming = Number(state.collectionDeleteConfirmSubjectId) === Number(state.subjectId);
     return `
       <div class="biligumi-row">
         <div class="biligumi-current">
           ${escapeHtml(getCollectionSentence())}
-          <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
-          <button data-action="delete-collection" title="删除 Bangumi 收藏记录">删除</button>
+          ${isDeleteConfirming ? "" : `
+            <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
+            <button data-action="delete-collection" title="删除 Bangumi 收藏记录">删除</button>
+          `}
         </div>
         <div class="biligumi-current-meta">${escapeHtml(getCollectionUpdatedText())}</div>
+        ${isDeleteConfirming ? `
+          <div class="biligumi-collection-delete-confirm" role="group" aria-label="确认删除收藏记录">
+            <div class="biligumi-collection-delete-copy">
+              <div class="biligumi-collection-delete-title">确认删除这条 Bangumi 收藏记录？</div>
+              <div class="biligumi-collection-delete-detail">评分、标签、吐槽和章节进度会一起移除。</div>
+            </div>
+            <div class="biligumi-collection-delete-actions">
+              <button class="biligumi-button" data-action="cancel-delete-collection">取消</button>
+              <button class="biligumi-button danger" data-action="confirm-delete-collection" ${state.busy ? "disabled" : ""}>确认删除</button>
+            </div>
+          </div>
+        ` : ""}
       </div>
       <div class="biligumi-row">
         <div class="biligumi-label">我的评价 <span class="biligumi-rate-text" data-role="rate-preview">${escapeHtml(formatRatePreview(getRate()))}</span></div>
@@ -3371,12 +3505,9 @@
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" type="password" autocomplete="off" data-role="settings-token" value="" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-token-clear" ${state.token ? "" : "disabled"}>
-              <span>清除已保存的 Access Token</span>
-            </label>
-            <div class="biligumi-settings-help">${state.token ? "已保存 Token；留空将保留现有 Token，粘贴新值才会替换。" : "尚未保存 Token；可在 next.bgm.tv/demo/access-token 生成。"}</div>
+            <input id="biligumi-token-input" class="biligumi-secret-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" data-role="settings-token" value="" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
+            <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换。清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
+            <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
@@ -3438,15 +3569,15 @@
             </div>
             <div class="biligumi-field biligumi-oped-hotkey-line">
               <input id="biligumi-oped-skip-hotkey" data-role="settings-oped-skip-hotkey" value="${escapeHtml(formatHotkey(state.opedSkipHotkey))}" readonly placeholder="点击后按下快捷键">
-              <button class="biligumi-button" data-action="clear-oped-skip-hotkey">清空</button>
+              <button type="button" class="biligumi-button" data-action="reset-oped-skip-hotkey">设为默认</button>
+              <button type="button" class="biligumi-button" data-action="clear-oped-skip-hotkey">清空</button>
             </div>
             <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
-            <div class="biligumi-settings-help">快捷键为全局设置，默认 Ctrl+Alt+→；点击输入框后直接按组合键录入。</div>
+            <div class="biligumi-settings-help">快捷键为全局设置，默认 Ctrl+Alt+→；点击输入框后直接按组合键录入。若组合键被浏览器或系统拦截，可点“设为默认”。</div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
-          <button class="biligumi-button" data-action="settings-cancel">取消</button>
-          <button class="biligumi-button primary" data-action="settings-save">保存</button>
+          <button class="biligumi-button" data-action="settings-reset">恢复默认</button>
         </div>
       </div>
     `;
@@ -3868,14 +3999,20 @@
 
     blockPanelEvent(event);
 
+    if (state.collectionDeleteConfirmSubjectId !== null && action !== "confirm-delete-collection" && action !== "cancel-delete-collection") {
+      state.collectionDeleteConfirmSubjectId = null;
+    }
+
     if (action === "toggle-panel") togglePanelCollapsed();
     if (action === "toggle-standalone-search") toggleStandaloneSearchExpanded();
     if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
-    if (action === "settings-save") saveSettings();
+    if (action === "settings-reset") resetSettingsToDefaults();
+    if (action === "clear-settings-token") clearSavedAccessToken();
     if (action === "open-whitelist-space") openWhitelistSpace(target);
     if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
+    if (action === "reset-oped-skip-hotkey") resetOpedSkipHotkeyInput();
     if (action === "clear-oped-skip-hotkey") clearOpedSkipHotkeyInput();
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
     if (action === "add-edit-tag") addEditorTag(target.dataset.tag || "");
@@ -3895,7 +4032,9 @@
     if (action === "collection-cancel") closeCollectionEditor();
     if (action === "collection-save") saveCollectionEditor().catch(showError);
     if (action === "set-collection-type") updateCollection({ type: Number(target.dataset.type) }).catch(showError);
-    if (action === "delete-collection") deleteCollection().catch(showError);
+    if (action === "delete-collection") showCollectionDeleteConfirmation();
+    if (action === "cancel-delete-collection") cancelCollectionDeleteConfirmation();
+    if (action === "confirm-delete-collection") confirmDeleteCollection().catch(showError);
     if (action === "cycle-type") cycleCollectionType().catch(showError);
     if (action === "rate-star") rateSubject(Number(target.dataset.rate)).catch(showError);
     if (action === "rate-clear") rateSubject(0).catch(showError);
@@ -4480,6 +4619,7 @@
     if (!applied || !isCurrentPageContext(context)) return;
     state.bindingGuardMessage = "";
     state.subjectId = subjectId;
+    state.collectionDeleteConfirmSubjectId = null;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.characters = [];
@@ -4520,6 +4660,7 @@
     });
     if (!applied || !isCurrentPageContext(context)) return;
     state.subjectId = null;
+    state.collectionDeleteConfirmSubjectId = null;
     state.subject = null;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
@@ -4830,35 +4971,52 @@
     }
   }
 
-  async function deleteCollection() {
+  function showCollectionDeleteConfirmation() {
+    if (!state.subjectId || !hasCollection() || state.busy) return;
+    state.collectionDeleteConfirmSubjectId = Number(state.subjectId);
+    state.error = "";
+    render();
+    const confirmButton = document.querySelector(`#${PANEL_ID} [data-action='confirm-delete-collection']`);
+    if (confirmButton) confirmButton.focus();
+  }
+
+  function cancelCollectionDeleteConfirmation() {
+    state.collectionDeleteConfirmSubjectId = null;
+    render();
+    const deleteButton = document.querySelector(`#${PANEL_ID} [data-action='delete-collection']`);
+    if (deleteButton) deleteButton.focus();
+  }
+
+  async function confirmDeleteCollection() {
+    if (state.busy) return;
+    const subjectId = Number(state.subjectId);
+    if (!subjectId || Number(state.collectionDeleteConfirmSubjectId) !== subjectId) return;
+    state.collectionDeleteConfirmSubjectId = null;
+    try {
+      await deleteCollection(subjectId);
+    } catch (error) {
+      if (Number(state.subjectId) === subjectId) state.collectionDeleteConfirmSubjectId = subjectId;
+      throw error;
+    }
+  }
+
+  async function deleteCollection(expectedSubjectId) {
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    if (Number(state.subjectId) !== Number(expectedSubjectId)) {
+      throw new Error("当前番剧已经切换，请重新点击删除。");
+    }
     if (!hasCollection()) {
       state.message = "这个条目当前没有 Bangumi 收藏记录。";
       state.error = "";
       render();
       return;
     }
-    const ok = window.confirm("确定删除这个 Bangumi 收藏记录吗？评分、标签、吐槽和章节进度会一起移除。");
-    if (!ok) return;
-
     setBusy("正在删除 Bangumi 收藏记录...");
     const subjectId = Number(state.subjectId);
-    const pageHtml = await bgmWebRequest(`/subject/${subjectId}`);
-    const webUsername = parseBangumiWebUsername(pageHtml);
     const tokenUsername = await getCurrentUsername();
-    if (!webUsername) {
-      throw new Error("无法读取 Bangumi 网页登录状态，请先在 bgm.tv 登录后再删除收藏。");
-    }
-    if (tokenUsername && webUsername !== tokenUsername) {
-      throw new Error(`Bangumi 网页登录账号（${webUsername}）和 Access Token 账号（${tokenUsername}）不一致，已停止删除。`);
-    }
-    const gh = parseSubjectRemoveHash(pageHtml, subjectId);
-    if (!gh) {
-      throw new Error("无法从 Bangumi 页面读取删除令牌，请刷新页面或确认这个条目仍在网页端收藏中。");
-    }
-
-    await bgmWebRequest(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`);
+    if (!tokenUsername) throw new Error("无法读取 Access Token 对应的 Bangumi 账号，已停止删除。");
+    await requestBangumiFirstPartyDelete(subjectId, tokenUsername);
     state.collection = null;
     state.episodeCollections = [];
     state.pendingCollection = null;
@@ -4867,6 +5025,241 @@
     state.error = "";
     render();
     window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+  }
+
+  async function requestBangumiFirstPartyDelete(subjectId, expectedUsername) {
+    const existing = readJsonValue(STORAGE.deleteBridge, null);
+    if (isActiveDeleteBridgeTask(existing)) {
+      throw new Error("已有一项 Bangumi 删除操作正在等待处理，请先完成或关闭已打开的 Bangumi 页面。");
+    }
+
+    const nonce = createDeleteBridgeNonce();
+    const createdAt = Date.now();
+    const task = {
+      version: 1,
+      nonce,
+      subjectId: Number(subjectId),
+      expectedUsername: String(expectedUsername || ""),
+      createdAt,
+      status: "pending",
+    };
+    await writeJsonValueAsync(STORAGE.deleteBridge, task);
+
+    const bridgeUrl = `${BGM_WEB_BASE}/subject/${task.subjectId}?${DELETE_BRIDGE_PARAM}=${encodeURIComponent(nonce)}`;
+    let bridgeTab;
+    try {
+      bridgeTab = GM_openInTab(bridgeUrl, { active: false, insert: true, setParent: true });
+      if (bridgeTab && bridgeTab.ready && typeof bridgeTab.ready.then === "function") await bridgeTab.ready;
+    } catch (_) {
+      clearDeleteBridgeTask(nonce);
+      throw new Error("无法打开 Bangumi 登录页面，请允许 Tampermonkey 打开新标签页后重试。");
+    }
+
+    let loginNoticeShown = false;
+    try {
+      while (Date.now() - createdAt <= DELETE_BRIDGE_TTL_MS) {
+        const current = readJsonValue(STORAGE.deleteBridge, null);
+        if (!current || current.nonce !== nonce) {
+          throw new Error("Bangumi 删除任务已被替换或取消，请重试。");
+        }
+        if (current.status === "success") return;
+        if (current.status === "error") {
+          throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
+        }
+        if (current.status === "awaiting-login" && !loginNoticeShown) {
+          loginNoticeShown = true;
+          bridgeTab = bringDeleteBridgeToForeground(bridgeTab, bridgeUrl);
+          state.message = "请在已打开的 Bangumi 页面完成登录；登录成功后会自动删除并关闭该页面。";
+          state.error = "";
+          render();
+        }
+        await sleep(DELETE_BRIDGE_POLL_MS);
+      }
+      throw new Error("等待 Bangumi 登录或删除结果超时，请重新点击删除后再试。");
+    } finally {
+      clearDeleteBridgeTask(nonce);
+      if (bridgeTab && typeof bridgeTab.close === "function") {
+        try {
+          bridgeTab.close();
+        } catch (_) {
+          // The first-party bridge normally closes itself after success.
+        }
+      }
+    }
+  }
+
+  function bringDeleteBridgeToForeground(bridgeTab, bridgeUrl) {
+    if (bridgeTab && typeof bridgeTab.focus === "function") {
+      bridgeTab.focus();
+      return bridgeTab;
+    }
+    if (bridgeTab && typeof bridgeTab.closed === "boolean" && !bridgeTab.closed) {
+      // Tab is still open (likely mid-login) but we cannot focus it programmatically.
+      // Do NOT close it — that would discard an in-progress login form. Let the
+      // user switch to it manually; the parent panel message directs them there.
+      return bridgeTab;
+    }
+    return GM_openInTab(bridgeUrl, { active: true, insert: true, setParent: true });
+  }
+
+  function isActiveDeleteBridgeTask(task) {
+    if (!task || typeof task !== "object") return false;
+    if (!Number.isFinite(Number(task.createdAt))) return false;
+    if (Date.now() - Number(task.createdAt) > DELETE_BRIDGE_TTL_MS) return false;
+    return ["pending", "awaiting-login", "processing"].includes(String(task.status || ""));
+  }
+
+  function createDeleteBridgeNonce() {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
+  function clearDeleteBridgeTask(nonce) {
+    const current = readJsonValue(STORAGE.deleteBridge, null);
+    if (current && current.nonce !== nonce) return;
+    try {
+      GM_deleteValue(STORAGE.deleteBridge);
+    } catch (_) {
+      writeValue(STORAGE.deleteBridge, "");
+    }
+  }
+
+  function getDeleteBridgeErrorMessage(task, expectedUsername) {
+    switch (String(task && task.errorCode || "")) {
+      case "account-mismatch":
+        return `Bangumi 网页登录账号（${String(task.actualUsername || "未知")}）和 Access Token 账号（${String(expectedUsername || "未知")}）不一致，已停止删除。`;
+      case "remove-token-missing":
+        return "无法从 Bangumi 页面读取删除令牌，请确认这个条目仍在网页端收藏中。";
+      case "task-expired":
+        return "Bangumi 登录或删除任务已经过期，请重新点击删除。";
+      case "task-invalid":
+        return "Bangumi 删除任务无效或已被其他页面处理，请重试。";
+      case "remove-request-failed":
+        return "Bangumi 网页端删除请求失败，请稍后重试。";
+      default:
+        return "Bangumi 第一方页面未能完成删除，请在打开的页面中确认登录状态后重试。";
+    }
+  }
+
+  async function runBangumiDeleteBridgePage() {
+    const match = location.pathname.match(/^\/subject\/(\d+)\/?$/);
+    const nonce = new URLSearchParams(location.search).get(DELETE_BRIDGE_PARAM) || "";
+    if (!match || !/^[a-f0-9]{32}$/.test(nonce)) return;
+
+    const subjectId = Number(match[1]);
+    const task = readJsonValue(STORAGE.deleteBridge, null);
+    if (!isValidDeleteBridgeTask(task, nonce, subjectId)) {
+      if (task && task.nonce === nonce && task.status === "success") {
+        closeBangumiDeleteBridgeTab();
+        return;
+      }
+      // If the nonce matches but the task is invalid (wrong subject, unexpected
+      // status, etc.), signal an error so the parent fails fast instead of
+      // waiting until the TTL. Leave "processing"/"success" tasks untouched —
+      // another bridge tab is handling or has already completed them.
+      if (task && task.nonce === nonce && !["processing", "success"].includes(String(task.status))) {
+        updateDeleteBridgeTask(task, { status: "error", errorCode: "task-invalid", completedAt: Date.now() });
+      }
+      return;
+    }
+    if (Date.now() - Number(task.createdAt) > DELETE_BRIDGE_TTL_MS) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "task-expired", completedAt: Date.now() });
+      return;
+    }
+
+    const pageHtml = document.documentElement.outerHTML;
+    const webUsername = parseBangumiWebUsername(pageHtml);
+    if (!webUsername) {
+      updateDeleteBridgeTask(task, { status: "awaiting-login", loginRequestedAt: Date.now() });
+      // Pass the full subject URL (with the bridge nonce) as the return target so
+      // Bangumi redirects back here after login even if the Referer header is stripped.
+      const returnUrl = `${location.pathname}${location.search}`;
+      location.assign(`/login?referer=${encodeURIComponent(returnUrl)}`);
+      return;
+    }
+    if (webUsername !== String(task.expectedUsername || "")) {
+      updateDeleteBridgeTask(task, {
+        status: "error",
+        errorCode: "account-mismatch",
+        actualUsername: webUsername,
+        completedAt: Date.now(),
+      });
+      return;
+    }
+
+    const gh = parseSubjectRemoveHash(pageHtml, subjectId);
+    if (!gh) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-token-missing", completedAt: Date.now() });
+      return;
+    }
+
+    updateDeleteBridgeTask(task, { status: "processing", processingAt: Date.now() });
+    let response;
+    try {
+      response = await fetch(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`, {
+        method: "GET",
+        credentials: "same-origin",
+        redirect: "follow",
+        cache: "no-store",
+      });
+    } catch (_) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+    if (!response.ok) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+    const responseHtml = await response.text();
+    if (
+      parseBangumiWebUsername(responseHtml) !== webUsername
+      || parseSubjectRemoveHash(responseHtml, subjectId)
+    ) {
+      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+
+    updateDeleteBridgeTask(task, { status: "success", completedAt: Date.now() });
+    window.setTimeout(closeBangumiDeleteBridgeTab, 250);
+  }
+
+  function isValidDeleteBridgeTask(task, nonce, subjectId) {
+    return Boolean(
+      task
+      && task.version === 1
+      && task.nonce === nonce
+      && Number(task.subjectId) === Number(subjectId)
+      && typeof task.expectedUsername === "string"
+      && task.expectedUsername
+      && ["pending", "awaiting-login"].includes(String(task.status || ""))
+    );
+  }
+
+  function updateDeleteBridgeTask(task, patch) {
+    const current = readJsonValue(STORAGE.deleteBridge, null);
+    if (!current || current.nonce !== task.nonce) return false;
+    writeJsonValue(STORAGE.deleteBridge, { ...current, ...patch });
+    return true;
+  }
+
+  function failBangumiDeleteBridgeFromPage(errorCode) {
+    const nonce = new URLSearchParams(location.search).get(DELETE_BRIDGE_PARAM) || "";
+    const task = readJsonValue(STORAGE.deleteBridge, null);
+    if (!task || task.nonce !== nonce || !isActiveDeleteBridgeTask(task)) return;
+    updateDeleteBridgeTask(task, { status: "error", errorCode, completedAt: Date.now() });
+  }
+
+  function closeBangumiDeleteBridgeTab() {
+    try {
+      if (typeof GM_closeTab === "function") {
+        GM_closeTab();
+        return;
+      }
+    } catch (_) {
+      // Fall through to the standard window API.
+    }
+    window.close();
   }
 
   async function saveProgressFromInput() {
@@ -6044,23 +6437,25 @@
     render();
   }
 
-  function saveSettings() {
-    const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
-    const tokenClearInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token-clear']`);
-    const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
-    const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
-    const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
-    const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
-    const longVideoEpisodeGuessInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-long-video-episode-guess']`);
-    const longVideoOffsetInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-long-video-offset']`);
-    const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
-    const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
-    const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
-    const opedSkipHotkeyInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-hotkey']`);
-    const replacementToken = String(tokenInput && tokenInput.value || "").trim();
-    const nextToken = tokenClearInput && tokenClearInput.checked
-      ? ""
-      : (replacementToken || state.token);
+  function applySettingsFromDialog() {
+    const settings = document.getElementById(SETTINGS_ID);
+    if (!isSettingsDialogOpen(settings)) return false;
+
+    const tokenInput = settings.querySelector("[data-role='settings-token']");
+    const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
+    const characterStripInput = settings.querySelector("[data-role='settings-character-strip']");
+    const subjectInfoPanelInput = settings.querySelector("[data-role='settings-subject-info-panel']");
+    const officialBangumiLayoutInput = settings.querySelector("[data-role='settings-official-bangumi-layout']");
+    const longVideoEpisodeGuessInput = settings.querySelector("[data-role='settings-long-video-episode-guess']");
+    const longVideoOffsetInput = settings.querySelector("[data-role='settings-long-video-offset']");
+    const autoWatchThresholdInput = settings.querySelector("[data-role='settings-auto-watch-threshold']");
+    const opedSkipEnabledInput = settings.querySelector("[data-role='settings-oped-skip-enabled']");
+    const opedSkipSecondsInput = settings.querySelector("[data-role='settings-oped-skip-seconds']");
+    const opedSkipHotkeyInput = settings.querySelector("[data-role='settings-oped-skip-hotkey']");
+    const replacementToken = normalizeAccessTokenInput(tokenInput && tokenInput.value);
+    const hasValidReplacementToken = isValidAccessToken(replacementToken);
+    const hasInvalidReplacementToken = Boolean(replacementToken) && !hasValidReplacementToken;
+    const nextToken = hasValidReplacementToken ? replacementToken : state.token;
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -6075,25 +6470,34 @@
         longVideoOffsetInput.reportValidity();
         longVideoOffsetInput.focus();
       }
-      return;
+      return false;
     }
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
     const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
     const nextOpedSkipHotkey = normalizeHotkey(opedSkipHotkeyInput && opedSkipHotkeyInput.dataset.hotkey || opedSkipHotkeyInput && opedSkipHotkeyInput.value);
-    if (nextToken !== state.token) {
+    const tokenChanged = nextToken !== state.token;
+    const characterStripChanged = nextCharacterStripEnabled !== state.characterStripEnabled;
+    const subjectInfoPanelChanged = nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled;
+    const officialLayoutChanged = nextOfficialBangumiLayoutEnabled !== state.officialBangumiLayoutEnabled;
+    const normalizedLongVideoOffsetSeconds = normalizeLongVideoOffsetSeconds(nextLongVideoOffsetSeconds);
+    const longVideoSettingsChanged = nextLongVideoEpisodeGuessEnabled !== state.longVideoEpisodeGuessEnabled
+      || Boolean(longVideoContext.ownerKey
+        && normalizedLongVideoOffsetSeconds !== normalizeLongVideoOffsetSeconds(state.longVideoEpisodeOffsets[longVideoContext.ownerKey]));
+
+    if (tokenChanged) {
       state.username = "";
       pendingRequests.clear();
     }
     state.token = nextToken;
     state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
+    state.characterStripEnabled = nextCharacterStripEnabled;
+    state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
     state.longVideoEpisodeGuessEnabled = nextLongVideoEpisodeGuessEnabled;
-    state.longVideoDetectionCache = null;
-    resetAutoWatchObservationState();
     if (longVideoContext.ownerKey) {
       state.longVideoEpisodeOffsets = {
         ...state.longVideoEpisodeOffsets,
-        [longVideoContext.ownerKey]: normalizeLongVideoOffsetSeconds(nextLongVideoOffsetSeconds),
+        [longVideoContext.ownerKey]: normalizedLongVideoOffsetSeconds,
       };
     }
     const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
@@ -6102,14 +6506,7 @@
     setAutoWatchThreshold(nextAutoWatchThreshold);
     if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
     state.opedSkipHotkey = nextOpedSkipHotkey;
-    if (nextCharacterStripEnabled !== state.characterStripEnabled) {
-      state.characterStripEnabled = nextCharacterStripEnabled;
-      if (!state.characterStripEnabled) removeCharacterStrip();
-    }
-    if (nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled) {
-      state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
-      if (!state.subjectInfoPanelEnabled) removeSubjectInfoPanel();
-    }
+
     writeValue(STORAGE.token, state.token);
     writeListValue(STORAGE.whitelist, state.whitelist);
     writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
@@ -6121,18 +6518,132 @@
     writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
     writeJsonValue(STORAGE.opedSkips, state.opedSkips);
     writeValue(STORAGE.opedSkipHotkey, state.opedSkipHotkey);
-    state.settingsOpen = false;
-    removeModal();
-    state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
-    state.error = "";
-    if (state.longVideoEpisodeGuessEnabled) {
-      state.longVideoIdentifyDismissedKey = "";
-      clearLongVideoBindingPrompt();
-      maybeOfferLongVideoAutoIdentify();
+
+    if (longVideoSettingsChanged) {
+      state.longVideoDetectionCache = null;
+      resetAutoWatchObservationState();
+      if (state.longVideoEpisodeGuessEnabled) {
+        state.longVideoIdentifyDismissedKey = "";
+        clearLongVideoBindingPrompt();
+        maybeOfferLongVideoAutoIdentify();
+      }
     }
-    render();
+
+    if (tokenInput && hasValidReplacementToken) tokenInput.value = "";
+    refreshSettingsTokenHelp(settings, {
+      invalidToken: hasInvalidReplacementToken,
+      draftToken: hasInvalidReplacementToken ? replacementToken : "",
+    });
+    if (autoWatchThresholdInput) {
+      autoWatchThresholdInput.value = String(nextAutoWatchThreshold);
+      updateAutoWatchThresholdPreview(settings);
+    }
+    if (opedSkipSecondsInput) opedSkipSecondsInput.value = String(nextOpedSkipSeconds);
+
+    if (characterStripChanged || subjectInfoPanelChanged || officialLayoutChanged) {
+      syncSubjectInfoPanel();
+      syncCharacterStrip();
+      layoutPanelWithoutOwningBiliDom();
+    }
     refreshOpedSkipButton();
-    if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
+    state.error = "";
+    if (tokenChanged && shouldRenderFullPanel() && state.subjectId) {
+      loadSubjectBundle().catch(showError);
+    }
+    return true;
+  }
+
+  function normalizeAccessTokenInput(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function isValidAccessToken(value) {
+    const token = normalizeAccessTokenInput(value);
+    // Bangumi stores access tokens as varchar(40); reject short/partial input.
+    return token.length === BANGUMI_ACCESS_TOKEN_LENGTH && !/\s/.test(token);
+  }
+
+  function resetSettingsToDefaults() {
+    if (!window.confirm("将界面相关设置恢复为默认值？\nAccess Token 与白名单不会被清除。")) return;
+
+    state.characterStripEnabled = DEFAULT_CHARACTER_STRIP_ENABLED;
+    state.subjectInfoPanelEnabled = DEFAULT_SUBJECT_INFO_PANEL_ENABLED;
+    state.officialBangumiLayoutEnabled = DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED;
+    state.longVideoEpisodeGuessEnabled = false;
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    setAutoWatchThreshold(DEFAULT_AUTO_WATCH_THRESHOLD);
+    if (state.subjectId) setOpedSkipConfig(true, DEFAULT_OPED_SKIP_SECONDS);
+    state.opedSkipHotkey = DEFAULT_OPED_SKIP_HOTKEY;
+
+    writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
+    writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
+    writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
+    writeValue(STORAGE.longVideoEpisodeGuess, "0");
+    writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
+    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
+    writeValue(STORAGE.opedSkipHotkey, state.opedSkipHotkey);
+
+    state.message = "已恢复默认设置。";
+    state.error = "";
+    remountSettingsDialog();
+    syncSubjectInfoPanel();
+    syncCharacterStrip();
+    layoutPanelWithoutOwningBiliDom();
+    refreshOpedSkipButton();
+    render();
+  }
+
+  function remountSettingsDialog() {
+    if (!state.settingsOpen) return;
+    removeModal();
+    mountModal("settings-cancel", renderSettingsDialog());
+  }
+
+  function refreshSettingsTokenHelp(settings, options = {}) {
+    const help = settings && settings.querySelector("[data-role='settings-token-help']");
+    const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
+    const draftToken = normalizeAccessTokenInput(options.draftToken);
+    const invalidToken = Boolean(options.invalidToken) || (Boolean(draftToken) && !isValidAccessToken(draftToken));
+    if (help) {
+      if (invalidToken) {
+        const length = draftToken.length;
+        help.textContent = `Token 长度应为 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位（当前 ${length} 位），未保存。请粘贴完整 Access Token。`;
+        help.classList.add("warning");
+      } else {
+        help.textContent = state.token
+          ? `已保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换。清除时需要点击按钮并确认。`
+          : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`;
+        help.classList.remove("warning");
+      }
+    }
+    if (tokenInput) {
+      tokenInput.placeholder = state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token";
+    }
+    const clearButton = settings && settings.querySelector("[data-role='settings-token-clear-button']");
+    if (clearButton) clearButton.disabled = !state.token;
+  }
+
+  function clearSavedAccessToken() {
+    if (!state.token) return;
+    if (!window.confirm("确定清除已保存的 Access Token 吗？\n清除后需要重新填写 Token 才能访问需要登录的 Bangumi 功能。")) return;
+    state.token = "";
+    state.username = "";
+    state.collection = null;
+    state.episodeCollections = [];
+    pendingRequests.clear();
+    writeValue(STORAGE.token, "");
+
+    const settings = document.getElementById(SETTINGS_ID);
+    const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
+    if (tokenInput) tokenInput.value = "";
+    refreshSettingsTokenHelp(settings);
+    state.message = "已清除 Access Token。";
+    state.error = "";
+    render();
+    if (shouldRenderFullPanel() && state.subjectId) {
+      loadSubjectBundle().catch(showError);
+    }
   }
 
   function openWhitelistSpace(target) {
@@ -6189,6 +6700,7 @@
       pageKey: state.pageKey,
       routeSeq: routeRefreshSeq,
     };
+    state.collectionDeleteConfirmSubjectId = null;
     state.collectionEditorOpen = true;
     state.settingsOpen = false;
     state.error = "";
@@ -6295,7 +6807,10 @@
 
     const autoWatchThresholdInput = wrapper.querySelector("[data-role='settings-auto-watch-threshold']");
     if (autoWatchThresholdInput) {
-      autoWatchThresholdInput.addEventListener("input", () => updateAutoWatchThresholdPreview(wrapper));
+      autoWatchThresholdInput.addEventListener("input", () => {
+        updateAutoWatchThresholdPreview(wrapper);
+        applySettingsFromDialog();
+      });
       updateAutoWatchThresholdPreview(wrapper);
     }
 
@@ -6309,6 +6824,60 @@
         opedSkipHotkeyInput.placeholder = "点击后按下快捷键";
       });
       opedSkipHotkeyInput.addEventListener("keydown", captureOpedSkipHotkeyInput, true);
+    }
+
+    bindSettingsAutoSave(wrapper);
+  }
+
+  function isSettingsDialogOpen(root = document.getElementById(SETTINGS_ID)) {
+    return Boolean(root && root.querySelector(".biligumi-settings-dialog") && !root.querySelector(".biligumi-collection-dialog"));
+  }
+
+  function bindSettingsAutoSave(wrapper) {
+    if (!isSettingsDialogOpen(wrapper)) return;
+
+    const autoSave = () => applySettingsFromDialog();
+    const changeRoles = [
+      "settings-character-strip",
+      "settings-subject-info-panel",
+      "settings-official-bangumi-layout",
+      "settings-long-video-episode-guess",
+      "settings-oped-skip-enabled",
+    ];
+    changeRoles.forEach((role) => {
+      const input = wrapper.querySelector(`[data-role='${role}']`);
+      if (input) input.addEventListener("change", autoSave);
+    });
+
+    const tokenInput = wrapper.querySelector("[data-role='settings-token']");
+    if (tokenInput) {
+      const handleTokenDraft = () => {
+        const draft = normalizeAccessTokenInput(tokenInput.value);
+        if (!draft) {
+          refreshSettingsTokenHelp(wrapper);
+          return;
+        }
+        if (isValidAccessToken(draft)) {
+          applySettingsFromDialog();
+          return;
+        }
+        refreshSettingsTokenHelp(wrapper, { invalidToken: true, draftToken: draft });
+      };
+      tokenInput.addEventListener("input", handleTokenDraft);
+      tokenInput.addEventListener("change", handleTokenDraft);
+      tokenInput.addEventListener("blur", handleTokenDraft);
+    }
+
+    const opedSkipSecondsInput = wrapper.querySelector("[data-role='settings-oped-skip-seconds']");
+    if (opedSkipSecondsInput) {
+      opedSkipSecondsInput.addEventListener("change", autoSave);
+      opedSkipSecondsInput.addEventListener("blur", autoSave);
+    }
+
+    const longVideoOffsetInput = wrapper.querySelector("[data-role='settings-long-video-offset']");
+    if (longVideoOffsetInput) {
+      longVideoOffsetInput.addEventListener("change", autoSave);
+      longVideoOffsetInput.addEventListener("blur", autoSave);
     }
   }
 
@@ -6924,7 +7493,7 @@
 
   function normalizeAutoWatchThreshold(value) {
     const raw = Number(value);
-    if (!Number.isFinite(raw)) return 50;
+    if (!Number.isFinite(raw)) return DEFAULT_AUTO_WATCH_THRESHOLD;
     return Math.max(10, Math.min(100, Math.round(raw / 10) * 10));
   }
 
@@ -6975,10 +7544,16 @@
     if (input) setOpedSkipHotkeyInputValue(input, "");
   }
 
+  function resetOpedSkipHotkeyInput() {
+    const input = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-hotkey']`);
+    if (input) setOpedSkipHotkeyInputValue(input, DEFAULT_OPED_SKIP_HOTKEY);
+  }
+
   function setOpedSkipHotkeyInputValue(input, hotkey) {
     const normalized = normalizeHotkey(hotkey);
     input.dataset.hotkey = normalized;
     input.value = formatHotkey(normalized);
+    applySettingsFromDialog();
   }
 
   function getKeyboardEventHotkey(event) {
