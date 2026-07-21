@@ -1475,6 +1475,46 @@
       color: #d03030;
       font-weight: 600;
     }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: fit-content;
+      min-height: 32px;
+      margin-top: 8px;
+      padding: 5px 12px;
+      border-color: #f0c2cc;
+      border-radius: 6px;
+      background: linear-gradient(180deg, #fffafb 0%, #fff3f6 100%);
+      box-shadow: 0 1px 2px rgba(190, 75, 101, .08);
+      color: #bd5269;
+      font-size: 12px;
+      font-weight: 650;
+      line-height: 1.2;
+      white-space: nowrap;
+      transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:not(:disabled):hover {
+      border-color: #e68aa2;
+      background: #ffedf2;
+      box-shadow: 0 4px 10px rgba(190, 75, 101, .14);
+      color: #a93d57;
+      transform: translateY(-1px);
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:not(:disabled):active {
+      box-shadow: 0 1px 3px rgba(190, 75, 101, .12);
+      transform: translateY(0);
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:focus-visible {
+      outline: 2px solid rgba(234, 143, 163, .35);
+      outline-offset: 2px;
+    }
+    #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:disabled {
+      border-color: #e2e6eb;
+      background: #f7f8fa;
+      box-shadow: none;
+      color: #a6afb9;
+    }
     #${SETTINGS_ID} .biligumi-settings-check {
       display: flex;
       align-items: flex-start;
@@ -3301,11 +3341,8 @@
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
             <input id="biligumi-token-input" data-role="settings-token" type="password" value="" autocomplete="off" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-token-clear" ${state.token ? "" : "disabled"}>
-              <span>清除已保存的 Token</span>
-            </label>
-            <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换，勾选清除选项可立即删除。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
+            <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换；清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
+            <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
@@ -3740,6 +3777,7 @@
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
+    if (action === "clear-settings-token") queueClearSavedAccessToken();
     if (action === "open-whitelist-space") openWhitelistSpace(target);
     if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
@@ -5582,7 +5620,6 @@
     if (!isSettingsDialogOpen(settings)) return false;
 
     const tokenInput = settings.querySelector("[data-role='settings-token']");
-    const tokenClearInput = settings.querySelector("[data-role='settings-token-clear']");
     const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
     const characterStripInput = settings.querySelector("[data-role='settings-character-strip']");
     const subjectInfoPanelInput = settings.querySelector("[data-role='settings-subject-info-panel']");
@@ -5591,12 +5628,9 @@
     const opedSkipEnabledInput = settings.querySelector("[data-role='settings-oped-skip-enabled']");
     const opedSkipSecondsInput = settings.querySelector("[data-role='settings-oped-skip-seconds']");
     const replacementToken = normalizeAccessTokenInput(tokenInput && tokenInput.value);
-    const clearToken = Boolean(tokenClearInput && tokenClearInput.checked);
     const hasValidReplacementToken = isValidAccessToken(replacementToken);
     const hasInvalidReplacementToken = Boolean(replacementToken) && !hasValidReplacementToken;
-    let nextToken = state.token;
-    if (clearToken) nextToken = "";
-    else if (hasValidReplacementToken) nextToken = replacementToken;
+    const nextToken = hasValidReplacementToken ? replacementToken : state.token;
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -5633,11 +5667,7 @@
       writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
     ]);
 
-    if (tokenInput && (clearToken || hasValidReplacementToken)) tokenInput.value = "";
-    if (tokenClearInput) {
-      tokenClearInput.checked = false;
-      tokenClearInput.disabled = !state.token;
-    }
+    if (tokenInput && hasValidReplacementToken) tokenInput.value = "";
     refreshSettingsTokenHelp(settings, {
       invalidToken: hasInvalidReplacementToken,
       draftToken: hasInvalidReplacementToken ? replacementToken : "",
@@ -5716,13 +5746,45 @@
         help.classList.add("warning");
       } else {
         help.textContent = state.token
-          ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换，勾选清除选项可立即删除。`
+          ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换；清除时需要点击按钮并确认。`
           : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`;
         help.classList.remove("warning");
       }
     }
     if (tokenInput) {
       tokenInput.placeholder = state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token";
+    }
+    const clearButton = settings && settings.querySelector("[data-role='settings-token-clear-button']");
+    if (clearButton) clearButton.disabled = !state.token;
+  }
+
+  function queueClearSavedAccessToken() {
+    if (!state.token) return settingsPersistQueue;
+    if (!window.confirm("确定清除已保存的 Access Token 吗？\n清除后需要重新填写 Token 才能访问需要登录的 Bangumi 功能。")) return settingsPersistQueue;
+    settingsPersistQueue = settingsPersistQueue
+      .then(() => clearSavedAccessToken())
+      .catch(showError);
+    return settingsPersistQueue;
+  }
+
+  async function clearSavedAccessToken() {
+    if (!state.token) return;
+    state.token = "";
+    state.username = "";
+    state.collection = null;
+    state.episodeCollections = [];
+    pendingRequests.clear();
+    await writeValueAsync(STORAGE.token, "");
+
+    const settings = document.getElementById(SETTINGS_ID);
+    const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
+    if (tokenInput) tokenInput.value = "";
+    refreshSettingsTokenHelp(settings);
+    state.message = "已清除 Access Token。";
+    state.error = "";
+    render();
+    if (shouldRenderFullPanel() && state.subjectId) {
+      loadSubjectBundle().catch(showError);
     }
   }
 
@@ -5915,7 +5977,6 @@
       queueApplySettingsFromDialog();
     };
     const changeRoles = [
-      "settings-token-clear",
       "settings-character-strip",
       "settings-subject-info-panel",
       "settings-official-bangumi-layout",
