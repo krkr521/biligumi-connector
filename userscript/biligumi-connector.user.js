@@ -1423,6 +1423,10 @@
       height: 34px;
       padding: 4px 9px;
     }
+    /* Keep this a text field so Chrome does not treat the page as a login form. */
+    #${SETTINGS_ID} .biligumi-secret-input {
+      -webkit-text-security: disc;
+    }
     #${SETTINGS_ID} .biligumi-settings-field textarea {
       min-height: 112px;
       resize: vertical;
@@ -3370,7 +3374,7 @@
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" type="password" autocomplete="off" data-role="settings-token" value="" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
+            <input id="biligumi-token-input" class="biligumi-secret-input" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" data-role="settings-token" value="" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
             <label class="biligumi-settings-check">
               <input type="checkbox" data-role="settings-token-clear" ${state.token ? "" : "disabled"}>
               <span>清除已保存的 Access Token</span>
