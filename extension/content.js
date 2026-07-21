@@ -30,7 +30,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.10";
+  const SCRIPT_VERSION = "0.6.12";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -101,8 +101,14 @@
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
+  const DEFAULT_AUTO_WATCH_THRESHOLD = 50;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Alt+Shift+ArrowRight";
+  const DEFAULT_CHARACTER_STRIP_ENABLED = true;
+  const DEFAULT_SUBJECT_INFO_PANEL_ENABLED = false;
+  const DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED = true;
+  // Bangumi chii_oauth_access_tokens.access_token is varchar(40).
+  const BANGUMI_ACCESS_TOKEN_LENGTH = 40;
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
   const DANMAKU_FAVORITE_BUTTON_CLASS = "biligumi-danmaku-fav-btn";
   const DANMAKU_HOVER_BAR_CLASS = "biligumi-danmaku-hover-bar";
@@ -3294,12 +3300,12 @@
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-field">
             <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" data-role="settings-token" type="password" value="" autocomplete="off" placeholder="${state.token ? "留空以保留已保存的 Token" : "粘贴 Bangumi Access Token"}">
+            <input id="biligumi-token-input" data-role="settings-token" type="password" value="" autocomplete="off" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
             <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-token-clear">
+              <input type="checkbox" data-role="settings-token-clear" ${state.token ? "" : "disabled"}>
               <span>清除已保存的 Token</span>
             </label>
-            <div class="biligumi-settings-help">${state.token ? "已保存 Token；出于安全考虑不会回填到网页。留空会保留原值，勾选上方选项才会清除。" : "尚未保存 Token；可在 next.bgm.tv/demo/access-token 生成。"}</div>
+            <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换，勾选清除选项可立即删除。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-whitelist-input">Bilibili 白名单</label>
@@ -3354,8 +3360,7 @@
           </div>
         </div>
         <div class="biligumi-settings-actions">
-          <button class="biligumi-button" data-action="settings-cancel">取消</button>
-          <button class="biligumi-button primary" data-action="settings-save">保存</button>
+          <button class="biligumi-button" data-action="settings-reset">恢复默认</button>
         </div>
       </div>
     `;
@@ -3734,7 +3739,7 @@
     if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
-    if (action === "settings-save") saveSettings().catch(showError);
+    if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
     if (action === "open-whitelist-space") openWhitelistSpace(target);
     if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
@@ -5572,44 +5577,51 @@
     render();
   }
 
-  async function saveSettings() {
-    const tokenInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token']`);
-    const tokenClearInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-token-clear']`);
-    const whitelistInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-whitelist']`);
-    const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
-    const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
-    const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
-    const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
-    const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
-    const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
-    const replacementToken = String(tokenInput && tokenInput.value || "").trim();
+  async function applySettingsFromDialog() {
+    const settings = document.getElementById(SETTINGS_ID);
+    if (!isSettingsDialogOpen(settings)) return false;
+
+    const tokenInput = settings.querySelector("[data-role='settings-token']");
+    const tokenClearInput = settings.querySelector("[data-role='settings-token-clear']");
+    const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
+    const characterStripInput = settings.querySelector("[data-role='settings-character-strip']");
+    const subjectInfoPanelInput = settings.querySelector("[data-role='settings-subject-info-panel']");
+    const officialBangumiLayoutInput = settings.querySelector("[data-role='settings-official-bangumi-layout']");
+    const autoWatchThresholdInput = settings.querySelector("[data-role='settings-auto-watch-threshold']");
+    const opedSkipEnabledInput = settings.querySelector("[data-role='settings-oped-skip-enabled']");
+    const opedSkipSecondsInput = settings.querySelector("[data-role='settings-oped-skip-seconds']");
+    const replacementToken = normalizeAccessTokenInput(tokenInput && tokenInput.value);
     const clearToken = Boolean(tokenClearInput && tokenClearInput.checked);
-    const nextToken = clearToken ? "" : (replacementToken || state.token);
+    const hasValidReplacementToken = isValidAccessToken(replacementToken);
+    const hasInvalidReplacementToken = Boolean(replacementToken) && !hasValidReplacementToken;
+    let nextToken = state.token;
+    if (clearToken) nextToken = "";
+    else if (hasValidReplacementToken) nextToken = replacementToken;
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
     const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
-    if (nextToken !== state.token) {
+    const tokenChanged = nextToken !== state.token;
+    const characterStripChanged = nextCharacterStripEnabled !== state.characterStripEnabled;
+    const subjectInfoPanelChanged = nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled;
+    const officialLayoutChanged = nextOfficialBangumiLayoutEnabled !== state.officialBangumiLayoutEnabled;
+
+    if (tokenChanged) {
       state.username = "";
       pendingRequests.clear();
     }
     state.token = nextToken;
     state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
+    state.characterStripEnabled = nextCharacterStripEnabled;
+    state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
     const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
     state.whitelist = parsedWhitelist.items;
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
     setAutoWatchThreshold(nextAutoWatchThreshold);
     if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
-    if (nextCharacterStripEnabled !== state.characterStripEnabled) {
-      state.characterStripEnabled = nextCharacterStripEnabled;
-      if (!state.characterStripEnabled) removeCharacterStrip();
-    }
-    if (nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled) {
-      state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
-      if (!state.subjectInfoPanelEnabled) removeSubjectInfoPanel();
-    }
+
     await Promise.all([
       writeValueAsync(STORAGE.token, state.token),
       writeListValueAsync(STORAGE.whitelist, state.whitelist),
@@ -5620,13 +5632,98 @@
       writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
       writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
     ]);
-    state.settingsOpen = false;
-    removeModal();
-    state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
-    state.error = "";
-    render();
+
+    if (tokenInput && (clearToken || hasValidReplacementToken)) tokenInput.value = "";
+    if (tokenClearInput) {
+      tokenClearInput.checked = false;
+      tokenClearInput.disabled = !state.token;
+    }
+    refreshSettingsTokenHelp(settings, {
+      invalidToken: hasInvalidReplacementToken,
+      draftToken: hasInvalidReplacementToken ? replacementToken : "",
+    });
+    if (autoWatchThresholdInput) {
+      autoWatchThresholdInput.value = String(nextAutoWatchThreshold);
+      updateAutoWatchThresholdPreview(settings);
+    }
+    if (opedSkipSecondsInput) opedSkipSecondsInput.value = String(nextOpedSkipSeconds);
+
+    if (characterStripChanged || subjectInfoPanelChanged || officialLayoutChanged) {
+      syncSubjectInfoPanel();
+      syncCharacterStrip();
+      layoutPanelWithoutOwningBiliDom();
+    }
     refreshOpedSkipButton();
-    if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
+    state.error = "";
+    if (tokenChanged && shouldRenderFullPanel() && state.subjectId) {
+      loadSubjectBundle().catch(showError);
+    }
+    return true;
+  }
+
+  function normalizeAccessTokenInput(value) {
+    return String(value == null ? "" : value).trim();
+  }
+
+  function isValidAccessToken(value) {
+    const token = normalizeAccessTokenInput(value);
+    // Bangumi stores access tokens as varchar(40); reject short/partial input.
+    return token.length === BANGUMI_ACCESS_TOKEN_LENGTH && !/\s/.test(token);
+  }
+
+  async function resetSettingsToDefaults() {
+    if (!window.confirm("将界面相关设置恢复为默认值？\nAccess Token 与白名单不会被清除。\n浏览器级 OP/ED 快捷键请到扩展快捷键页修改。")) return;
+
+    state.characterStripEnabled = DEFAULT_CHARACTER_STRIP_ENABLED;
+    state.subjectInfoPanelEnabled = DEFAULT_SUBJECT_INFO_PANEL_ENABLED;
+    state.officialBangumiLayoutEnabled = DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED;
+    setAutoWatchThreshold(DEFAULT_AUTO_WATCH_THRESHOLD);
+    if (state.subjectId) setOpedSkipConfig(true, DEFAULT_OPED_SKIP_SECONDS);
+
+    await Promise.all([
+      writeValueAsync(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0"),
+      writeValueAsync(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0"),
+      writeValueAsync(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0"),
+      writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
+      writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
+    ]);
+
+    state.message = "已恢复默认设置。";
+    state.error = "";
+    remountSettingsDialog();
+    syncSubjectInfoPanel();
+    syncCharacterStrip();
+    layoutPanelWithoutOwningBiliDom();
+    refreshOpedSkipButton();
+    render();
+  }
+
+  function remountSettingsDialog() {
+    if (!state.settingsOpen) return;
+    removeModal();
+    mountModal("settings-cancel", renderSettingsDialog());
+  }
+
+  function refreshSettingsTokenHelp(settings, options = {}) {
+    const help = settings && settings.querySelector("[data-role='settings-token-help']");
+    const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
+    const draftToken = normalizeAccessTokenInput(options.draftToken);
+    const invalidToken = Boolean(options.invalidToken) || (Boolean(draftToken) && !isValidAccessToken(draftToken));
+    if (help) {
+      if (invalidToken) {
+        const length = draftToken.length;
+        help.textContent = `Token 长度应为 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位（当前 ${length} 位），未保存。请粘贴完整 Access Token。`;
+        help.classList.add("warning");
+      } else {
+        help.textContent = state.token
+          ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换，勾选清除选项可立即删除。`
+          : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`;
+        help.classList.remove("warning");
+      }
+    }
+    if (tokenInput) {
+      tokenInput.placeholder = state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token";
+    }
   }
 
   function openWhitelistSpace(target) {
@@ -5788,10 +5885,71 @@
 
     const autoWatchThresholdInput = wrapper.querySelector("[data-role='settings-auto-watch-threshold']");
     if (autoWatchThresholdInput) {
-      autoWatchThresholdInput.addEventListener("input", () => updateAutoWatchThresholdPreview(wrapper));
+      autoWatchThresholdInput.addEventListener("input", () => {
+        updateAutoWatchThresholdPreview(wrapper);
+        queueApplySettingsFromDialog();
+      });
       updateAutoWatchThresholdPreview(wrapper);
     }
 
+    bindSettingsAutoSave(wrapper);
+  }
+
+  function isSettingsDialogOpen(root = document.getElementById(SETTINGS_ID)) {
+    return Boolean(root && root.querySelector(".biligumi-settings-dialog") && !root.querySelector(".biligumi-collection-dialog"));
+  }
+
+  let settingsPersistQueue = Promise.resolve();
+
+  function queueApplySettingsFromDialog() {
+    settingsPersistQueue = settingsPersistQueue
+      .then(() => applySettingsFromDialog())
+      .catch(showError);
+    return settingsPersistQueue;
+  }
+
+  function bindSettingsAutoSave(wrapper) {
+    if (!isSettingsDialogOpen(wrapper)) return;
+
+    const autoSave = () => {
+      queueApplySettingsFromDialog();
+    };
+    const changeRoles = [
+      "settings-token-clear",
+      "settings-character-strip",
+      "settings-subject-info-panel",
+      "settings-official-bangumi-layout",
+      "settings-oped-skip-enabled",
+    ];
+    changeRoles.forEach((role) => {
+      const input = wrapper.querySelector(`[data-role='${role}']`);
+      if (input) input.addEventListener("change", autoSave);
+    });
+
+    const tokenInput = wrapper.querySelector("[data-role='settings-token']");
+    if (tokenInput) {
+      const handleTokenDraft = () => {
+        const draft = normalizeAccessTokenInput(tokenInput.value);
+        if (!draft) {
+          refreshSettingsTokenHelp(wrapper);
+          return;
+        }
+        if (isValidAccessToken(draft)) {
+          queueApplySettingsFromDialog();
+          return;
+        }
+        refreshSettingsTokenHelp(wrapper, { invalidToken: true, draftToken: draft });
+      };
+      tokenInput.addEventListener("input", handleTokenDraft);
+      tokenInput.addEventListener("change", handleTokenDraft);
+      tokenInput.addEventListener("blur", handleTokenDraft);
+    }
+
+    const opedSkipSecondsInput = wrapper.querySelector("[data-role='settings-oped-skip-seconds']");
+    if (opedSkipSecondsInput) {
+      opedSkipSecondsInput.addEventListener("change", autoSave);
+      opedSkipSecondsInput.addEventListener("blur", autoSave);
+    }
   }
 
   function handleModalPointerDown(event) {
@@ -6406,7 +6564,7 @@
 
   function normalizeAutoWatchThreshold(value) {
     const raw = Number(value);
-    if (!Number.isFinite(raw)) return 50;
+    if (!Number.isFinite(raw)) return DEFAULT_AUTO_WATCH_THRESHOLD;
     return Math.max(10, Math.min(100, Math.round(raw / 10) * 10));
   }
 
