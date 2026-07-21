@@ -163,6 +163,7 @@
     settingsOpen: false,
     collectionEditorOpen: false,
     collectionEditorContext: null,
+    collectionDeleteConfirmSubjectId: null,
     pendingCollection: null,
     message: "",
     error: "",
@@ -957,6 +958,54 @@
     #${PANEL_ID} .biligumi-current-meta {
       color: #7b8794;
       font-size: 13px;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-confirm {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-top: 9px;
+      padding: 9px 10px;
+      border: 1px solid #efc4cc;
+      border-radius: 8px;
+      background: #fff7f9;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-copy {
+      min-width: 0;
+      flex: 1 1 190px;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-title {
+      color: #bd2441;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-detail {
+      margin-top: 2px;
+      color: #7b5962;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions {
+      display: flex;
+      gap: 6px;
+      margin-left: auto;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 9px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .danger {
+      border-color: #d96363;
+      background: #d96363;
+      color: #fff;
+    }
+    #${PANEL_ID} .biligumi-collection-delete-actions .danger:hover {
+      border-color: #c94e4e;
+      background: #c94e4e;
+      color: #fff;
     }
     #${PANEL_ID} .biligumi-collection-box {
       display: grid;
@@ -2060,6 +2109,7 @@
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
+    state.collectionDeleteConfirmSubjectId = null;
     removeModal();
     state.busy = true;
     state.message = "正在等待 B站页面更新...";
@@ -2095,6 +2145,7 @@
     state.collection = null;
     state.episodes = [];
     state.episodeCollections = [];
+    state.collectionDeleteConfirmSubjectId = null;
     state.busy = false;
     state.message = state.bindingGuardMessage || "";
     state.standaloneSearchExpanded = false;
@@ -3210,14 +3261,29 @@
         </div>
       `;
     }
+    const isDeleteConfirming = Number(state.collectionDeleteConfirmSubjectId) === Number(state.subjectId);
     return `
       <div class="biligumi-row">
         <div class="biligumi-current">
           ${escapeHtml(getCollectionSentence())}
-          <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
-          <button data-action="delete-collection" title="删除 Bangumi 收藏记录">删除</button>
+          ${isDeleteConfirming ? "" : `
+            <button data-action="edit-collection" title="修改 Bangumi 记录">修改</button>
+            <button data-action="delete-collection" title="删除 Bangumi 收藏记录">删除</button>
+          `}
         </div>
         <div class="biligumi-current-meta">${escapeHtml(getCollectionUpdatedText())}</div>
+        ${isDeleteConfirming ? `
+          <div class="biligumi-collection-delete-confirm" role="group" aria-label="确认删除收藏记录">
+            <div class="biligumi-collection-delete-copy">
+              <div class="biligumi-collection-delete-title">确认删除这条 Bangumi 收藏记录？</div>
+              <div class="biligumi-collection-delete-detail">评分、标签、吐槽和章节进度会一起移除。</div>
+            </div>
+            <div class="biligumi-collection-delete-actions">
+              <button class="biligumi-button" data-action="cancel-delete-collection">取消</button>
+              <button class="biligumi-button danger" data-action="confirm-delete-collection" ${state.busy ? "disabled" : ""}>确认删除</button>
+            </div>
+          </div>
+        ` : ""}
       </div>
       <div class="biligumi-row">
         <div class="biligumi-label">我的评价 <span class="biligumi-rate-text" data-role="rate-preview">${escapeHtml(formatRatePreview(getRate()))}</span></div>
@@ -3742,6 +3808,10 @@
     event.stopPropagation();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
 
+    if (state.collectionDeleteConfirmSubjectId !== null && action !== "confirm-delete-collection" && action !== "cancel-delete-collection") {
+      state.collectionDeleteConfirmSubjectId = null;
+    }
+
     if (action === "toggle-panel") togglePanelCollapsed();
     if (action === "toggle-standalone-search") toggleStandaloneSearchExpanded();
     if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
@@ -3764,7 +3834,9 @@
     if (action === "collection-cancel") closeCollectionEditor();
     if (action === "collection-save") saveCollectionEditor().catch(showError);
     if (action === "set-collection-type") updateCollection({ type: Number(target.dataset.type) }).catch(showError);
-    if (action === "delete-collection") deleteCollection().catch(showError);
+    if (action === "delete-collection") showCollectionDeleteConfirmation();
+    if (action === "cancel-delete-collection") cancelCollectionDeleteConfirmation();
+    if (action === "confirm-delete-collection") confirmDeleteCollection().catch(showError);
     if (action === "cycle-type") cycleCollectionType().catch(showError);
     if (action === "rate-star") rateSubject(Number(target.dataset.rate)).catch(showError);
     if (action === "rate-clear") rateSubject(0).catch(showError);
@@ -4047,6 +4119,7 @@
     if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.bindingGuardMessage = "";
     state.subjectId = subjectId;
+    state.collectionDeleteConfirmSubjectId = null;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.characters = [];
@@ -4084,6 +4157,7 @@
     });
     if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.subjectId = null;
+    state.collectionDeleteConfirmSubjectId = null;
     state.subject = null;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
@@ -4387,18 +4461,47 @@
     }
   }
 
-  async function deleteCollection() {
+  function showCollectionDeleteConfirmation() {
+    if (!state.subjectId || !hasCollection() || state.busy) return;
+    state.collectionDeleteConfirmSubjectId = Number(state.subjectId);
+    state.error = "";
+    render();
+    const confirmButton = document.querySelector(`#${PANEL_ID} [data-action='confirm-delete-collection']`);
+    if (confirmButton) confirmButton.focus();
+  }
+
+  function cancelCollectionDeleteConfirmation() {
+    state.collectionDeleteConfirmSubjectId = null;
+    render();
+    const deleteButton = document.querySelector(`#${PANEL_ID} [data-action='delete-collection']`);
+    if (deleteButton) deleteButton.focus();
+  }
+
+  async function confirmDeleteCollection() {
+    if (state.busy) return;
+    const subjectId = Number(state.subjectId);
+    if (!subjectId || Number(state.collectionDeleteConfirmSubjectId) !== subjectId) return;
+    state.collectionDeleteConfirmSubjectId = null;
+    try {
+      await deleteCollection(subjectId);
+    } catch (error) {
+      if (Number(state.subjectId) === subjectId) state.collectionDeleteConfirmSubjectId = subjectId;
+      throw error;
+    }
+  }
+
+  async function deleteCollection(expectedSubjectId) {
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    if (Number(state.subjectId) !== Number(expectedSubjectId)) {
+      throw new Error("当前番剧已经切换，请重新点击删除。");
+    }
     if (!hasCollection()) {
       state.message = "这个条目当前没有 Bangumi 收藏记录。";
       state.error = "";
       render();
       return;
     }
-    const ok = window.confirm("确定删除这个 Bangumi 收藏记录吗？评分、标签、吐槽和章节进度会一起移除。");
-    if (!ok) return;
-
     setBusy("正在删除 Bangumi 收藏记录...");
     const subjectId = Number(state.subjectId);
     const tokenUsername = await getCurrentUsername();
@@ -5918,6 +6021,7 @@
       showError(new Error("请先绑定 Bangumi 条目"));
       return;
     }
+    state.collectionDeleteConfirmSubjectId = null;
     state.collectionEditorOpen = true;
     state.collectionEditorContext = {
       ...captureRouteContext(),
