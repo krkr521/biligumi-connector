@@ -106,7 +106,7 @@ const sandbox = {
   LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS: 5 * 60,
   STORAGE: { longVideoEpisodeModes: "biligumi.longVideoEpisodeModes" },
   state: {
-    longVideoEpisodeGuessEnabled: true,
+    longVideoEpisodeGuessEnabled: false, // default: prompt; enable for auto-accept tests
     longVideoEpisodeOffsets: { "mid:42": 2 * 60 * 60 },
     longVideoEpisodeModes: { "bvid:BV1TEST": true },
     rawTitle: "普通超长视频",
@@ -144,6 +144,7 @@ vm.runInContext(`${userscriptLogic}\n;globalThis.logic = {
   getLongVideoEpisodeModeDecision,
   getLongVideoDurationSeconds,
   shouldOfferLongVideoBindingPrompt,
+  getLongVideoBindReadiness,
   parseLongVideoPartTitle,
   selectLongVideoEpisodeSegment,
   getCurrentVideoPartContext,
@@ -269,20 +270,40 @@ sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 }), false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 + 1 }), true);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 2 * 60 * 60 + 1 }).action, "prompt", "Default (auto-identify off) should prompt");
+assert.equal(logic.getLongVideoBindReadiness({ duration: 90 * 60 }).action, "bind");
+assert.equal(logic.getLongVideoBindReadiness({ duration: 0 }).action, "wait");
+assert.equal(logic.getLongVideoBindReadiness({ duration: Number.NaN }).action, "wait");
+assert.equal(logic.getLongVideoBindReadiness(null).action, "wait");
+assert.match(logic.getLongVideoBindReadiness(null).statusText, /时长/);
+sandbox.state.longVideoEpisodeGuessEnabled = true;
+assert.equal(logic.getLongVideoBindReadiness({ duration: 7 * 60 * 60 }).action, "auto", "Enabled auto-identify should skip the multi-episode confirmation");
+assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 7 * 60 * 60 }), false, "Auto path should not surface the confirmation prompt");
+sandbox.state.longVideoEpisodeGuessEnabled = false;
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": false };
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 7 * 60 * 60 }), false);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 7 * 60 * 60 }).action, "bind", "Known false decision should bind without waiting");
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, true);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 7 * 60 * 60 }).action, "bind", "Known true decision should bind without re-prompt");
 
 sandbox.location.pathname = "/video/BV2TEST";
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 7 * 60 * 60 }), true, "Long-video decision must be scoped to the current BV");
+assert.equal(logic.getLongVideoBindReadiness({ duration: 0 }).action, "wait", "Unknown duration on a new BV should wait instead of binding as normal");
+sandbox.state.longVideoEpisodeGuessEnabled = true;
+assert.equal(logic.getLongVideoBindReadiness({ duration: 7 * 60 * 60 }).action, "auto");
+sandbox.state.longVideoEpisodeGuessEnabled = false;
 sandbox.location.pathname = "/video/BV1TEST";
 
 sandbox.state.longVideoEpisodeModes = {};
 sandbox.window.__INITIAL_STATE__.videoData.duration = 8000;
 assert.equal(logic.getLongVideoDurationSeconds(null), 8000);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt(null), true);
+assert.equal(logic.getLongVideoBindReadiness(null).action, "prompt");
+sandbox.state.longVideoEpisodeGuessEnabled = true;
+assert.equal(logic.getLongVideoBindReadiness(null).action, "auto");
+sandbox.state.longVideoEpisodeGuessEnabled = false;
 delete sandbox.window.__INITIAL_STATE__.videoData.duration;
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
 

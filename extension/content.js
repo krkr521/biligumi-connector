@@ -30,7 +30,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.10";
+  const SCRIPT_VERSION = "0.6.11";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -109,6 +109,8 @@
   const DEFAULT_EPISODE_DURATION_SECONDS = 24 * 60;
   const LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS = 45 * 60;
   const LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS = 5 * 60;
+  const LONG_VIDEO_BIND_WAIT_TIMEOUT_MS = 8 * 1000;
+  const LONG_VIDEO_BIND_WAIT_POLL_MS = 400;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Alt+Shift+ArrowRight";
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
@@ -170,13 +172,14 @@
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
-    longVideoEpisodeGuessEnabled: readValue(STORAGE.longVideoEpisodeGuess, "1") !== "0",
+    longVideoEpisodeGuessEnabled: readValue(STORAGE.longVideoEpisodeGuess, "0") === "1",
     longVideoEpisodeOffsets: readJsonValue(STORAGE.longVideoEpisodeOffsets, {}),
     longVideoEpisodeModes: readJsonValue(STORAGE.longVideoEpisodeModes, {}),
     longVideoEpisodeGuess: null,
     longVideoEpisodeRenderKey: "",
     longVideoDetectionCache: null,
     longVideoBindingPrompt: null,
+    longVideoIdentifyDismissedKey: "",
     nonMainResults: [],
     nonMainKeyword: "",
     nonMainBusy: false,
@@ -722,6 +725,20 @@
       justify-content: flex-end;
       gap: 7px;
       margin-top: 9px;
+    }
+    .biligumi-long-video-wait-indicator {
+      display: inline-block;
+      width: 0.7em;
+      height: 0.7em;
+      margin-right: 6px;
+      border: 2px solid #e8a3b2;
+      border-top-color: #c45a78;
+      border-radius: 50%;
+      vertical-align: -0.05em;
+      animation: biligumi-long-video-spin 0.8s linear infinite;
+    }
+    @keyframes biligumi-long-video-spin {
+      to { transform: rotate(360deg); }
     }
     .biligumi-search-results {
       display: grid;
@@ -2050,6 +2067,8 @@
   `);
 
   let routeRefreshSeq = 0;
+  let longVideoBindWaitSeq = 0;
+  let longVideoBindWaitTimer = 0;
   let episodeContextRefreshSeq = 0;
   let episodeContextRefreshTimer = 0;
   let episodeContextObserver = null;
@@ -2145,7 +2164,8 @@
     state.longVideoEpisodeGuess = null;
     state.longVideoEpisodeRenderKey = "";
     state.longVideoDetectionCache = null;
-    state.longVideoBindingPrompt = null;
+    clearLongVideoBindingPrompt();
+    state.longVideoIdentifyDismissedKey = "";
     refreshOpedSkipButton();
     refreshDanmakuFavoriteButtons();
     injectWhenReady(true);
@@ -3394,14 +3414,14 @@
           <div class="biligumi-settings-field">
             <label class="biligumi-settings-check">
               <input type="checkbox" data-role="settings-long-video-episode-guess" ${state.longVideoEpisodeGuessEnabled ? "checked" : ""}>
-              <span>实验：推测“一个视频包含多集正片”的长视频当前播放到第几集。</span>
+              <span>遇到长视频时自动识别</span>
             </label>
             <div class="biligumi-threshold-line biligumi-long-video-offset-line">
               <input id="biligumi-long-video-offset" type="text" inputmode="numeric" data-role="settings-long-video-offset" value="${escapeHtml(formatTimecode(longVideoContext.offsetSeconds))}" placeholder="02:00:00" ${longVideoContext.ownerKey ? "" : "disabled"}>
               <span class="biligumi-threshold-value">首集开始</span>
             </div>
             <div class="biligumi-settings-help">${longVideoContext.ownerKey ? `当前 UP：${escapeHtml(longVideoContext.ownerLabel)}。首集开始时间按 UP 单独保存，可填 02:00:00、120:00 或 120 分钟。` : "暂未识别当前 UP，无法保存专属首集开始时间。"}</div>
-            <div class="biligumi-settings-help">普通 B站视频超过 2 小时后，会在绑定 Bangumi 条目时询问是否为“一个视频内包含多集正片”；只有选择“是”才启用。${escapeHtml(longVideoContext.statusText)}</div>
+            <div class="biligumi-settings-help">默认关闭。关闭时，普通 B站视频超过 2 小时会弹出确认，询问是否为“一个视频内包含多集正片”。勾选后遇到超长视频将不再询问，直接按多集长视频处理并启用分集推测。${escapeHtml(longVideoContext.statusText)}</div>
             <div class="biligumi-settings-help warning">这是基于 Bangumi 分集时长和人工偏移的估算；视频中插入额外片段时可能发生偏移。</div>
           </div>
           <div class="biligumi-settings-field">
@@ -3564,14 +3584,47 @@
   function renderLongVideoBindingPrompt() {
     const pending = state.longVideoBindingPrompt;
     if (!pending) return "";
-    const durationText = formatTimecode(pending.durationSeconds || 0);
     const subjectText = pending.subjectName ? `准备绑定「${pending.subjectName}」。` : "";
     const partText = pending.partTitle ? `当前分P为「${pending.partTitle}」。` : "";
+    const phase = pending.phase || "prompt";
+    const settingsHint = "勾选设置中的「遇到长视频时自动识别」后，将不再询问并直接按多集处理。";
+    const isIdentify = pending.mode === "identify";
+    if (phase === "waiting") {
+      return `
+      <div class="biligumi-row biligumi-long-video-bind-prompt">
+        <div class="biligumi-label">${isIdentify ? "识别长视频" : "准备绑定"}</div>
+        <div class="biligumi-long-video-bind-prompt-text"><span class="biligumi-long-video-wait-indicator" aria-hidden="true"></span>${escapeHtml(pending.statusText || "正在读取视频时长…")}${subjectText ? ` ${escapeHtml(subjectText)}` : ""}</div>
+        <div class="biligumi-long-video-bind-prompt-help">当前页面可能是超长合集视频。正在确认视频时长后，再询问是否为多集合一。${escapeHtml(partText)}</div>
+        <div class="biligumi-long-video-bind-prompt-help">${escapeHtml(settingsHint)}</div>
+        <div class="biligumi-long-video-bind-prompt-actions">
+          <button class="biligumi-button" data-action="cancel-long-video-bind">取消</button>
+        </div>
+      </div>
+    `;
+    }
+    if (phase === "timeout") {
+      return `
+      <div class="biligumi-row biligumi-long-video-bind-prompt">
+        <div class="biligumi-label">暂时无法确认视频时长</div>
+        <div class="biligumi-long-video-bind-prompt-text">${escapeHtml(pending.statusText || "暂时读取不到视频时长。")}${subjectText ? ` ${escapeHtml(subjectText)}` : ""}${partText ? ` ${escapeHtml(partText)}` : ""}</div>
+        <div class="biligumi-long-video-bind-prompt-help">可以再等一会，或手动选择处理方式。选择“仍按多集长视频”后，若后续读到时长会再尝试推测。</div>
+        <div class="biligumi-long-video-bind-prompt-help">${escapeHtml(settingsHint)}</div>
+        <div class="biligumi-long-video-bind-prompt-actions">
+          <button class="biligumi-button" data-action="cancel-long-video-bind">取消</button>
+          <button class="biligumi-button" data-action="retry-long-video-bind-wait">再等一会</button>
+          <button class="biligumi-button" data-action="decline-long-video-bind">${isIdentify ? "按普通视频处理" : "按普通视频绑定"}</button>
+          <button class="biligumi-button primary" data-action="confirm-long-video-bind">${isIdentify ? "仍按多集长视频处理" : "仍按多集长视频绑定"}</button>
+        </div>
+      </div>
+    `;
+    }
+    const durationText = formatTimecode(pending.durationSeconds || 0);
     return `
       <div class="biligumi-row biligumi-long-video-bind-prompt">
         <div class="biligumi-label">检测到超长视频</div>
         <div class="biligumi-long-video-bind-prompt-text">当前视频时长为 ${escapeHtml(durationText)}。${escapeHtml(partText)}${escapeHtml(subjectText)}这个视频是否在一个视频内连续包含多集正片？</div>
         <div class="biligumi-long-video-bind-prompt-help">选择“是”后，会根据首集开始时间和 Bangumi 分集时长推测当前集；选择“否”则继续按普通视频处理。</div>
+        <div class="biligumi-long-video-bind-prompt-help">${escapeHtml(settingsHint)}</div>
         <div class="biligumi-long-video-bind-prompt-actions">
           <button class="biligumi-button" data-action="decline-long-video-bind">否，按普通视频</button>
           <button class="biligumi-button primary" data-action="confirm-long-video-bind">是，启用分集推测</button>
@@ -3844,6 +3897,8 @@
     if (action === "bind") requestBindSubject(Number(target.dataset.subjectId)).catch(showError);
     if (action === "confirm-long-video-bind") resolveLongVideoBindingPrompt(true).catch(showError);
     if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
+    if (action === "retry-long-video-bind-wait") retryLongVideoBindingWait();
+    if (action === "cancel-long-video-bind") cancelLongVideoBindingPrompt();
     if (action === "unbind") unbindSubject().catch(showError);
     if (action === "edit-collection") openCollectionEditor();
     if (action === "collection-cancel") closeCollectionEditor();
@@ -3990,7 +4045,7 @@
   }
 
   async function searchSubjects(options = {}) {
-    state.longVideoBindingPrompt = null;
+    clearLongVideoBindingPrompt();
     const keyword = getSearchKeywordFromInput({ allowFallback: options.allowFallback !== false });
     if (!keyword) throw new Error("请输入番名再搜索");
     if (options.openWeb) openBangumiSearch(keyword);
@@ -4017,7 +4072,7 @@
 
   function clearSearchResults() {
     state.searchResults = [];
-    state.longVideoBindingPrompt = null;
+    clearLongVideoBindingPrompt();
     state.message = "";
     state.error = "";
     state.busy = false;
@@ -4124,38 +4179,252 @@
   async function requestBindSubject(subjectId, routeContext = captureRouteContext()) {
     const safeSubjectId = Number(subjectId);
     if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isRouteContextCurrent(routeContext)) return;
-    const video = getActiveVideoElement();
-    if (shouldOfferLongVideoBindingPrompt(video)) {
-      const durationSeconds = getLongVideoDurationSeconds(video);
-      const subject = state.searchResults.find((item) => Number(item && item.id) === safeSubjectId)
-        || (state.subject && Number(state.subject.id) === safeSubjectId ? state.subject : null);
-      state.longVideoBindingPrompt = {
-        subjectId: safeSubjectId,
-        subjectName: subject ? displaySubjectName(subject) : "",
-        partTitle: String(getCurrentVideoPartContext()?.title || ""),
-        durationSeconds,
-        bindingContext: routeContext,
-      };
-      state.message = "";
-      state.error = "";
-      state.busy = false;
-      render();
+    const readiness = getLongVideoBindReadiness(getActiveVideoElement());
+    if (readiness.action === "prompt") {
+      showLongVideoBindingPrompt(safeSubjectId, routeContext, {
+        phase: "prompt",
+        durationSeconds: readiness.durationSeconds,
+      });
+      return;
+    }
+    if (readiness.action === "wait") {
+      beginLongVideoBindingWait(safeSubjectId, routeContext);
+      return;
+    }
+    if (readiness.action === "auto") {
+      await setLongVideoEpisodeModeDecision(true);
+      if (!isRouteContextCurrent(routeContext)) return;
+      await bindSubject(safeSubjectId, routeContext);
       return;
     }
     await bindSubject(safeSubjectId, routeContext);
+  }
+
+  async function applyLongVideoAutoAccept(subjectId, routeContext, mode = "bind") {
+    await setLongVideoEpisodeModeDecision(true);
+    if (mode === "identify" && Number(state.subjectId) === Number(subjectId)) {
+      state.message = "已自动识别为多集长视频。";
+      state.error = "";
+      render();
+      refreshLongVideoEpisodeGuess(getActiveVideoElement());
+      checkAutoWatchProgress().catch(showError);
+      return;
+    }
+    if (!isRouteContextCurrent(routeContext)) return;
+    await bindSubject(Number(subjectId), routeContext);
+  }
+
+  function resolveLongVideoBindingSubject(subjectId) {
+    return state.searchResults.find((item) => Number(item && item.id) === Number(subjectId))
+      || (state.subject && Number(state.subject.id) === Number(subjectId) ? state.subject : null);
+  }
+
+  function buildLongVideoBindingPromptState(subjectId, routeContext, extras = {}) {
+    const subject = resolveLongVideoBindingSubject(subjectId);
+    return {
+      subjectId: Number(subjectId),
+      subjectName: extras.subjectName || (subject ? displaySubjectName(subject) : ""),
+      partTitle: extras.partTitle !== undefined ? String(extras.partTitle || "") : String(getCurrentVideoPartContext()?.title || ""),
+      durationSeconds: Number(extras.durationSeconds) || 0,
+      bindingContext: routeContext,
+      mode: extras.mode === "identify" ? "identify" : "bind",
+      phase: extras.phase || "prompt",
+      waitingFor: extras.waitingFor || "",
+      statusText: extras.statusText || "",
+    };
+  }
+
+  function getLongVideoIdentifyDismissKey() {
+    return `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}`;
+  }
+
+  function maybeOfferLongVideoAutoIdentify() {
+    if (!state.subjectId) return false;
+    if (state.longVideoBindingPrompt) return false;
+    if (state.longVideoIdentifyDismissedKey === getLongVideoIdentifyDismissKey()) return false;
+    if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
+    const readiness = getLongVideoBindReadiness(getActiveVideoElement());
+    if (readiness.action === "auto") {
+      applyLongVideoAutoAccept(state.subjectId, captureRouteContext(), "identify").catch(showError);
+      return true;
+    }
+    if (readiness.action === "prompt") {
+      showLongVideoBindingPrompt(state.subjectId, captureRouteContext(), {
+        phase: "prompt",
+        mode: "identify",
+        durationSeconds: readiness.durationSeconds,
+        subjectName: state.subject ? displaySubjectName(state.subject) : "",
+      });
+      return true;
+    }
+    if (readiness.action === "wait") {
+      beginLongVideoBindingWait(state.subjectId, captureRouteContext(), {
+        mode: "identify",
+        subjectName: state.subject ? displaySubjectName(state.subject) : "",
+      });
+      return true;
+    }
+    return false;
+  }
+
+  function cancelLongVideoBindingPrompt() {
+    const pending = state.longVideoBindingPrompt;
+    if (pending && pending.mode === "identify") {
+      state.longVideoIdentifyDismissedKey = getLongVideoIdentifyDismissKey();
+    }
+    clearLongVideoBindingPrompt({ render: true });
+  }
+
+  function showLongVideoBindingPrompt(subjectId, routeContext, extras = {}) {
+    stopLongVideoBindingWaitLoop();
+    state.longVideoBindingPrompt = buildLongVideoBindingPromptState(subjectId, routeContext, extras);
+    state.message = "";
+    state.error = "";
+    state.busy = false;
+    render();
+  }
+
+  function stopLongVideoBindingWaitLoop() {
+    longVideoBindWaitSeq += 1;
+    if (longVideoBindWaitTimer) {
+      window.clearInterval(longVideoBindWaitTimer);
+      longVideoBindWaitTimer = 0;
+    }
+  }
+
+  function clearLongVideoBindingPrompt(options = {}) {
+    stopLongVideoBindingWaitLoop();
+    const hadPrompt = Boolean(state.longVideoBindingPrompt);
+    state.longVideoBindingPrompt = null;
+    if (options.render && hadPrompt) render();
+  }
+
+  function beginLongVideoBindingWait(subjectId, routeContext, seed = {}) {
+    const safeSubjectId = Number(subjectId);
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isRouteContextCurrent(routeContext)) return;
+    stopLongVideoBindingWaitLoop();
+    const seq = ++longVideoBindWaitSeq;
+    const startedAt = Date.now();
+    state.longVideoBindingPrompt = buildLongVideoBindingPromptState(safeSubjectId, routeContext, {
+      ...seed,
+      phase: "waiting",
+      waitingFor: "duration",
+      statusText: seed.statusText || "正在读取视频时长…",
+      durationSeconds: 0,
+    });
+    state.message = "";
+    state.error = "";
+    state.busy = false;
+    render();
+
+    const poll = () => {
+      if (seq !== longVideoBindWaitSeq) return;
+      if (!isRouteContextCurrent(routeContext)) {
+        clearLongVideoBindingPrompt({ render: true });
+        return;
+      }
+      const readiness = getLongVideoBindReadiness(getActiveVideoElement());
+      const promptMode = (state.longVideoBindingPrompt && state.longVideoBindingPrompt.mode) || seed.mode || "bind";
+      if (readiness.action === "prompt") {
+        showLongVideoBindingPrompt(safeSubjectId, routeContext, {
+          phase: "prompt",
+          mode: promptMode,
+          durationSeconds: readiness.durationSeconds,
+          subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
+        });
+        return;
+      }
+      if (readiness.action === "auto") {
+        clearLongVideoBindingPrompt();
+        applyLongVideoAutoAccept(safeSubjectId, routeContext, promptMode).catch(showError);
+        return;
+      }
+      if (readiness.action === "bind") {
+        const wasIdentify = promptMode === "identify";
+        clearLongVideoBindingPrompt();
+        if (wasIdentify) {
+          render();
+          refreshLongVideoEpisodeGuess(getActiveVideoElement());
+          return;
+        }
+        bindSubject(safeSubjectId, routeContext).catch(showError);
+        return;
+      }
+      if (Date.now() - startedAt >= LONG_VIDEO_BIND_WAIT_TIMEOUT_MS) {
+        stopLongVideoBindingWaitLoop();
+        state.longVideoBindingPrompt = buildLongVideoBindingPromptState(safeSubjectId, routeContext, {
+          subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
+          mode: promptMode,
+          phase: "timeout",
+          waitingFor: readiness.waitingFor || "duration",
+          statusText: "暂时读取不到视频时长。",
+          durationSeconds: 0,
+        });
+        render();
+        return;
+      }
+      const nextStatus = readiness.statusText || "正在读取视频时长…";
+      const nextPartTitle = String(getCurrentVideoPartContext()?.title || "");
+      const pending = state.longVideoBindingPrompt;
+      if (pending && pending.phase === "waiting"
+        && (pending.statusText !== nextStatus || pending.partTitle !== nextPartTitle)) {
+        state.longVideoBindingPrompt = {
+          ...pending,
+          statusText: nextStatus,
+          partTitle: nextPartTitle,
+          waitingFor: readiness.waitingFor || "duration",
+        };
+        render();
+      }
+    };
+
+    longVideoBindWaitTimer = window.setInterval(poll, LONG_VIDEO_BIND_WAIT_POLL_MS);
+    const video = getActiveVideoElement();
+    if (video) {
+      const onMeta = () => {
+        if (seq === longVideoBindWaitSeq) poll();
+      };
+      video.addEventListener("loadedmetadata", onMeta, { once: true });
+      video.addEventListener("durationchange", onMeta, { once: true });
+    }
+    poll();
+  }
+
+  function retryLongVideoBindingWait() {
+    const pending = state.longVideoBindingPrompt;
+    if (!pending || !pending.bindingContext) return;
+    if (!isRouteContextCurrent(pending.bindingContext)) {
+      clearLongVideoBindingPrompt({ render: true });
+      return;
+    }
+    beginLongVideoBindingWait(pending.subjectId, pending.bindingContext, {
+      subjectName: pending.subjectName,
+      mode: pending.mode,
+    });
   }
 
   async function resolveLongVideoBindingPrompt(enabled) {
     const pending = state.longVideoBindingPrompt;
     if (!pending) return;
     if (!isRouteContextCurrent(pending.bindingContext)) {
-      state.longVideoBindingPrompt = null;
-      render();
+      clearLongVideoBindingPrompt({ render: true });
       return;
     }
+    stopLongVideoBindingWaitLoop();
     await setLongVideoEpisodeModeDecision(Boolean(enabled));
+    const subjectId = Number(pending.subjectId);
+    const mode = pending.mode || "bind";
     state.longVideoBindingPrompt = null;
-    await bindSubject(Number(pending.subjectId), pending.bindingContext);
+    state.longVideoIdentifyDismissedKey = "";
+    if (mode === "identify" && Number(state.subjectId) === subjectId) {
+      state.message = enabled ? "已启用长视频分集推测。" : "已按普通视频处理。";
+      state.error = "";
+      render();
+      refreshLongVideoEpisodeGuess(getActiveVideoElement());
+      checkAutoWatchProgress().catch(showError);
+      return;
+    }
+    await bindSubject(subjectId, pending.bindingContext);
   }
 
   async function bindSubject(subjectId, routeContext = captureRouteContext()) {
@@ -4685,6 +4954,7 @@
 
   async function checkAutoWatchProgress() {
     const video = getActiveVideoElement();
+    maybeOfferLongVideoAutoIdentify();
     const longVideoGuess = video ? refreshLongVideoEpisodeGuess(video) : null;
     const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
     if (!state.token || !state.subjectId || !hasCollection() || state.autoEpisodeSyncing) return;
@@ -5808,7 +6078,11 @@
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
     state.error = "";
-    if (!state.longVideoEpisodeGuessEnabled) resetLongVideoEpisodeGuess();
+    if (state.longVideoEpisodeGuessEnabled) {
+      state.longVideoIdentifyDismissedKey = "";
+      clearLongVideoBindingPrompt();
+      maybeOfferLongVideoAutoIdentify();
+    }
     render();
     refreshOpedSkipButton();
     if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
@@ -7511,11 +7785,45 @@
   }
 
   function shouldOfferLongVideoBindingPrompt(video) {
-    if (!state.longVideoEpisodeGuessEnabled || isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
+    return getLongVideoBindReadiness(video).action === "prompt";
+  }
+
+  function getLongVideoBindReadiness(video) {
+    if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) {
+      return { action: "bind", reason: "not_applicable" };
+    }
+    if (getLongVideoEpisodeModeDecision() !== null) {
+      return { action: "bind", reason: "decision_known" };
+    }
     const duration = getLongVideoDurationSeconds(video);
-    return Number.isFinite(duration)
-      && duration > LONG_VIDEO_MIN_DURATION_SECONDS
-      && getLongVideoEpisodeModeDecision() === null;
+    if (!Number.isFinite(duration) || duration <= 0) {
+      return {
+        action: "wait",
+        reason: "duration_unknown",
+        waitingFor: "duration",
+        statusText: "正在读取视频时长…",
+        durationSeconds: 0,
+      };
+    }
+    if (duration > LONG_VIDEO_MIN_DURATION_SECONDS) {
+      if (state.longVideoEpisodeGuessEnabled) {
+        return {
+          action: "auto",
+          reason: "auto_identify",
+          durationSeconds: duration,
+        };
+      }
+      return {
+        action: "prompt",
+        reason: "long_duration",
+        durationSeconds: duration,
+      };
+    }
+    return {
+      action: "bind",
+      reason: "short_duration",
+      durationSeconds: duration,
+    };
   }
 
   async function setLongVideoEpisodeModeDecision(enabled) {
@@ -7541,7 +7849,6 @@
   }
 
   function getLongVideoDetection(video, options = {}) {
-    if (!options.ignoreEnabled && !state.longVideoEpisodeGuessEnabled) return { active: false, reason: "实验开关未开启。" };
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
     const duration = getLongVideoDurationSeconds(video);
     if (!Number.isFinite(duration) || duration <= 0) return { active: false, reason: "正在等待播放器时长。" };
@@ -7662,10 +7969,6 @@
   }
 
   function refreshLongVideoEpisodeGuess(video) {
-    if (!state.longVideoEpisodeGuessEnabled) {
-      if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(true);
-      return null;
-    }
     const decision = getLongVideoEpisodeModeDecision();
     const detectionCacheKey = `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}|${state.episodes.length}|${Math.round(getLongVideoDurationSeconds(video))}|${decision}`;
     const cachedDetection = state.longVideoDetectionCache;
