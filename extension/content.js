@@ -48,6 +48,9 @@
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
     danmakuFavorites: "biligumi.danmakuFavorites",
+    longVideoEpisodeGuess: "biligumi.longVideoEpisodeGuess",
+    longVideoEpisodeOffsets: "biligumi.longVideoEpisodeOffsets",
+    longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
   };
 
   const SUBJECT_TYPES = {
@@ -101,6 +104,11 @@
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
+  const LONG_VIDEO_MIN_DURATION_SECONDS = 2 * 60 * 60;
+  const DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS = 2 * 60 * 60;
+  const DEFAULT_EPISODE_DURATION_SECONDS = 24 * 60;
+  const LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS = 45 * 60;
+  const LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS = 5 * 60;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Alt+Shift+ArrowRight";
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
@@ -162,6 +170,13 @@
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
+    longVideoEpisodeGuessEnabled: readValue(STORAGE.longVideoEpisodeGuess, "1") !== "0",
+    longVideoEpisodeOffsets: readJsonValue(STORAGE.longVideoEpisodeOffsets, {}),
+    longVideoEpisodeModes: readJsonValue(STORAGE.longVideoEpisodeModes, {}),
+    longVideoEpisodeGuess: null,
+    longVideoEpisodeRenderKey: "",
+    longVideoDetectionCache: null,
+    longVideoBindingPrompt: null,
     nonMainResults: [],
     nonMainKeyword: "",
     nonMainBusy: false,
@@ -674,6 +689,39 @@
     .biligumi-episode.current {
       outline: 2px solid var(--bgm-pink);
       outline-offset: 1px;
+    }
+    .biligumi-long-video-hint {
+      margin-bottom: 7px;
+      padding: 6px 8px;
+      border: 1px dashed #e8a3b2;
+      border-radius: 6px;
+      background: #fff7f9;
+      color: #925368;
+      font-size: 12px;
+      line-height: 1.35;
+    }
+    .biligumi-long-video-bind-prompt {
+      border: 1px solid #e8a3b2;
+      border-radius: 8px;
+      background: #fff7f9;
+    }
+    .biligumi-long-video-bind-prompt-text {
+      color: var(--bgm-ink);
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .biligumi-long-video-bind-prompt-help {
+      margin-top: 5px;
+      color: var(--bgm-muted);
+      font-size: 12px;
+      line-height: 1.4;
+    }
+    .biligumi-long-video-bind-prompt-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 9px;
     }
     .biligumi-search-results {
       display: grid;
@@ -1507,6 +1555,12 @@
       gap: 8px;
       margin-top: 8px;
     }
+    #${SETTINGS_ID} .biligumi-long-video-offset-line {
+      grid-template-columns: minmax(120px, 170px) auto;
+      justify-content: start;
+      gap: 8px;
+      margin-top: 8px;
+    }
     #${SETTINGS_ID} .biligumi-oped-seconds-line input {
       width: 100%;
       height: 32px;
@@ -2087,7 +2141,11 @@
     state.standaloneSearchExpanded = false;
     state.autoEpisodeSyncing = false;
     state.autoEpisodeSyncLastKey = "";
-    state.autoWatchBlockedKey = "";
+    resetAutoWatchObservationState();
+    state.longVideoEpisodeGuess = null;
+    state.longVideoEpisodeRenderKey = "";
+    state.longVideoDetectionCache = null;
+    state.longVideoBindingPrompt = null;
     refreshOpedSkipButton();
     refreshDanmakuFavoriteButtons();
     injectWhenReady(true);
@@ -2128,6 +2186,7 @@
         return state.bindings[key];
       }
     }
+    if (getCurrentLongVideoPartBindingKey()) return null;
     const titleKey = getTitleBindingKey();
     const sameOwnerSubjectId = titleKey && state.bindings[titleKey];
     if (sameOwnerSubjectId && canReuseTitleBinding(sameOwnerSubjectId)) {
@@ -2427,7 +2486,7 @@
       removeSubjectInfoPanel();
       removeCharacterStrip();
       const nonMainKeyword = getNonMainPreviewKeyword();
-      const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded;
+      const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt;
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}`;
       panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
@@ -3097,6 +3156,7 @@
             })}
           </div>
           ${renderInlineAutoPreview()}
+          ${renderLongVideoBindingPrompt()}
           ${renderSearchResults()}
           ${state.subjectId ? `<div class="biligumi-row"><button class="biligumi-button" data-action="unbind">解绑当前页面</button></div>` : ""}
         </div>
@@ -3129,11 +3189,12 @@
         </div>
       `
       : "";
-    const body = state.standaloneSearchExpanded || nonMainKeyword
+    const body = state.standaloneSearchExpanded || nonMainKeyword || state.longVideoBindingPrompt
       ? `
         <div class="biligumi-search-pane">
           ${searchForm}
           ${nonMainKeyword ? renderInlineAutoPreview(nonMainKeyword) : ""}
+          ${renderLongVideoBindingPrompt()}
         </div>
         <div class="biligumi-foot">
           <span>${state.busy ? "处理中..." : "可直接搜索 Bangumi"} · v${SCRIPT_VERSION}</span>
@@ -3285,6 +3346,7 @@
     const autoWatchThreshold = getAutoWatchThreshold();
     const autoWatchScopeLabel = getAutoWatchScopeLabel();
     const opedSkipConfig = getOpedSkipConfig();
+    const longVideoContext = getLongVideoSettingsContext();
     const opedSkipSubjectLabel = state.subjectId
       ? (state.subject ? displaySubjectName(state.subject) : `subject ${state.subjectId}`)
       : "";
@@ -3328,6 +3390,19 @@
               <span>实验兼容 Bilibili 官方番剧页右侧布局，把 PV / 相关推荐列表下移给面板让位。</span>
             </label>
             <div class="biligumi-settings-help">官方源不是推荐使用场景；如果页面布局异常，可以关闭这个开关。</div>
+          </div>
+          <div class="biligumi-settings-field">
+            <label class="biligumi-settings-check">
+              <input type="checkbox" data-role="settings-long-video-episode-guess" ${state.longVideoEpisodeGuessEnabled ? "checked" : ""}>
+              <span>实验：推测“一个视频包含多集正片”的长视频当前播放到第几集。</span>
+            </label>
+            <div class="biligumi-threshold-line biligumi-long-video-offset-line">
+              <input id="biligumi-long-video-offset" type="text" inputmode="numeric" data-role="settings-long-video-offset" value="${escapeHtml(formatTimecode(longVideoContext.offsetSeconds))}" placeholder="02:00:00" ${longVideoContext.ownerKey ? "" : "disabled"}>
+              <span class="biligumi-threshold-value">首集开始</span>
+            </div>
+            <div class="biligumi-settings-help">${longVideoContext.ownerKey ? `当前 UP：${escapeHtml(longVideoContext.ownerLabel)}。首集开始时间按 UP 单独保存，可填 02:00:00、120:00 或 120 分钟。` : "暂未识别当前 UP，无法保存专属首集开始时间。"}</div>
+            <div class="biligumi-settings-help">普通 B站视频超过 2 小时后，会在绑定 Bangumi 条目时询问是否为“一个视频内包含多集正片”；只有选择“是”才启用。${escapeHtml(longVideoContext.statusText)}</div>
+            <div class="biligumi-settings-help warning">这是基于 Bangumi 分集时长和人工偏移的估算；视频中插入额外片段时可能发生偏移。</div>
           </div>
           <div class="biligumi-settings-field">
             <label for="biligumi-auto-watch-threshold">自动标记本集已看</label>
@@ -3486,6 +3561,25 @@
     return renderNonMainCandidate(subject, { canBind: true, canOpen: true });
   }
 
+  function renderLongVideoBindingPrompt() {
+    const pending = state.longVideoBindingPrompt;
+    if (!pending) return "";
+    const durationText = formatTimecode(pending.durationSeconds || 0);
+    const subjectText = pending.subjectName ? `准备绑定「${pending.subjectName}」。` : "";
+    const partText = pending.partTitle ? `当前分P为「${pending.partTitle}」。` : "";
+    return `
+      <div class="biligumi-row biligumi-long-video-bind-prompt">
+        <div class="biligumi-label">检测到超长视频</div>
+        <div class="biligumi-long-video-bind-prompt-text">当前视频时长为 ${escapeHtml(durationText)}。${escapeHtml(partText)}${escapeHtml(subjectText)}这个视频是否在一个视频内连续包含多集正片？</div>
+        <div class="biligumi-long-video-bind-prompt-help">选择“是”后，会根据首集开始时间和 Bangumi 分集时长推测当前集；选择“否”则继续按普通视频处理。</div>
+        <div class="biligumi-long-video-bind-prompt-actions">
+          <button class="biligumi-button" data-action="decline-long-video-bind">否，按普通视频</button>
+          <button class="biligumi-button primary" data-action="confirm-long-video-bind">是，启用分集推测</button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderScoreBox() {
     const rating = state.subject && state.subject.rating ? state.subject.rating : {};
     const mode = normalizeScoreDetailMode(state.scoreDetailMode);
@@ -3632,6 +3726,7 @@
   function renderEpisodeGrid() {
     const episodes = getNormalEpisodes();
     const progress = getProgressInfo();
+    const longVideoHint = renderLongVideoEpisodeHint();
     if (!episodes.length) {
       return `
         <div class="biligumi-row">
@@ -3644,6 +3739,7 @@
     }
     return `
       <div class="biligumi-row">
+        ${longVideoHint}
         <div class="biligumi-episode-head">
           <div class="biligumi-label">我的完成度</div>
           <span class="biligumi-progress-summary">${escapeHtml(progress.summary)}</span>
@@ -3745,7 +3841,9 @@
     if (action === "search") searchSubjects().catch(showError);
     if (action === "open-bangumi-search") openBangumiSearchFromInput();
     if (action === "clear-search") clearSearchResults();
-    if (action === "bind") bindSubject(Number(target.dataset.subjectId)).catch(showError);
+    if (action === "bind") requestBindSubject(Number(target.dataset.subjectId)).catch(showError);
+    if (action === "confirm-long-video-bind") resolveLongVideoBindingPrompt(true).catch(showError);
+    if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
     if (action === "unbind") unbindSubject().catch(showError);
     if (action === "edit-collection") openCollectionEditor();
     if (action === "collection-cancel") closeCollectionEditor();
@@ -3892,6 +3990,7 @@
   }
 
   async function searchSubjects(options = {}) {
+    state.longVideoBindingPrompt = null;
     const keyword = getSearchKeywordFromInput({ allowFallback: options.allowFallback !== false });
     if (!keyword) throw new Error("请输入番名再搜索");
     if (options.openWeb) openBangumiSearch(keyword);
@@ -3918,6 +4017,7 @@
 
   function clearSearchResults() {
     state.searchResults = [];
+    state.longVideoBindingPrompt = null;
     state.message = "";
     state.error = "";
     state.busy = false;
@@ -4018,7 +4118,44 @@
     state.error = "";
     state.subject = subject;
     await rememberBindingSubject(subject);
-    await bindSubject(subjectId, routeContext);
+    await requestBindSubject(subjectId, routeContext);
+  }
+
+  async function requestBindSubject(subjectId, routeContext = captureRouteContext()) {
+    const safeSubjectId = Number(subjectId);
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isRouteContextCurrent(routeContext)) return;
+    const video = getActiveVideoElement();
+    if (shouldOfferLongVideoBindingPrompt(video)) {
+      const durationSeconds = getLongVideoDurationSeconds(video);
+      const subject = state.searchResults.find((item) => Number(item && item.id) === safeSubjectId)
+        || (state.subject && Number(state.subject.id) === safeSubjectId ? state.subject : null);
+      state.longVideoBindingPrompt = {
+        subjectId: safeSubjectId,
+        subjectName: subject ? displaySubjectName(subject) : "",
+        partTitle: String(getCurrentVideoPartContext()?.title || ""),
+        durationSeconds,
+        bindingContext: routeContext,
+      };
+      state.message = "";
+      state.error = "";
+      state.busy = false;
+      render();
+      return;
+    }
+    await bindSubject(safeSubjectId, routeContext);
+  }
+
+  async function resolveLongVideoBindingPrompt(enabled) {
+    const pending = state.longVideoBindingPrompt;
+    if (!pending) return;
+    if (!isRouteContextCurrent(pending.bindingContext)) {
+      state.longVideoBindingPrompt = null;
+      render();
+      return;
+    }
+    await setLongVideoEpisodeModeDecision(Boolean(enabled));
+    state.longVideoBindingPrompt = null;
+    await bindSubject(Number(pending.subjectId), pending.bindingContext);
   }
 
   async function bindSubject(subjectId, routeContext = captureRouteContext()) {
@@ -4085,6 +4222,7 @@
     state.collection = null;
     state.episodes = [];
     state.episodeCollections = [];
+    await clearLongVideoEpisodeModeDecision();
     state.message = "已解除当前 B站页面和 Bangumi 条目的绑定。";
     state.error = "";
     removeSubjectInfoPanel();
@@ -4093,6 +4231,8 @@
   }
 
   function getBindingKeysForCurrentPage() {
+    const longVideoPartKey = getCurrentLongVideoPartBindingKey();
+    if (longVideoPartKey) return [longVideoPartKey];
     return [
       ...getDirectBindingKeysForCurrentPage(),
       getTitleBindingKey(),
@@ -4100,6 +4240,8 @@
   }
 
   function getDirectBindingKeysForCurrentPage() {
+    const longVideoPartKey = getCurrentLongVideoPartBindingKey();
+    if (longVideoPartKey) return [longVideoPartKey];
     return [
       state.pageKey,
       getStableBiliSubjectKey(),
@@ -4141,6 +4283,7 @@
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
+    state.longVideoDetectionCache = null;
     state.characters = charactersResult.characters;
     state.characterError = charactersResult.error;
     state.collection = mergePendingCollection(collection);
@@ -4172,6 +4315,7 @@
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.episodes = episodes.data || [];
+    state.longVideoDetectionCache = null;
     state.characters = charactersResult.characters;
     state.characterError = charactersResult.error;
     state.collection = mergePendingCollection(collection);
@@ -4540,13 +4684,17 @@
   }
 
   async function checkAutoWatchProgress() {
+    const video = getActiveVideoElement();
+    const longVideoGuess = video ? refreshLongVideoEpisodeGuess(video) : null;
+    const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
     if (!state.token || !state.subjectId || !hasCollection() || state.autoEpisodeSyncing) return;
+    if (longVideoModeEnabled && (!longVideoGuess || !longVideoGuess.active || !longVideoGuess.episode || !longVideoGuess.autoMarkSafe)) return;
     const currentEpisode = getCurrentNormalEpisode();
     if (!currentEpisode || getEpisodeCollectionType(currentEpisode.id) === 2) return;
-    const video = getActiveVideoElement();
     if (!video) return;
-    const duration = Number(video.duration);
-    const currentTime = Number(video.currentTime);
+    if (longVideoGuess && longVideoGuess.active && (!longVideoGuess.episode || !longVideoGuess.autoMarkSafe)) return;
+    const duration = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeDuration) : Number(video.duration);
+    const currentTime = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeElapsed) : Number(video.currentTime);
     if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime) || currentTime <= 0) return;
     const watchedPercent = Math.floor((currentTime / duration) * 100);
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
@@ -5509,12 +5657,15 @@
     const end = Number(video.currentTime);
     state.autoWatchSeekStartTime = null;
     if (!Number.isFinite(start) || !Number.isFinite(end)) return;
+    const longVideoGuess = refreshLongVideoEpisodeGuess(video);
+    if (getLongVideoEpisodeModeDecision() === true && (!longVideoGuess || !longVideoGuess.active || !longVideoGuess.episode || !longVideoGuess.autoMarkSafe)) return;
     const currentEpisode = getCurrentNormalEpisode();
     if (!currentEpisode) return;
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
-    const duration = Number(video.duration);
+    const duration = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeDuration) : Number(video.duration);
     const threshold = getAutoWatchThreshold();
-    const watchedPercent = Number.isFinite(duration) && duration > 0 ? Math.floor((end / duration) * 100) : 0;
+    const progressTime = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeElapsed) : end;
+    const watchedPercent = Number.isFinite(duration) && duration > 0 ? Math.floor((progressTime / duration) * 100) : 0;
     if (end - start >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS && watchedPercent >= threshold) {
       state.autoWatchBlockedKey = syncKey;
     }
@@ -5537,6 +5688,13 @@
     }
     state.autoWatchLastVideoKey = syncKey;
     state.autoWatchLastVideoTime = currentTime;
+  }
+
+  function resetAutoWatchObservationState() {
+    state.autoWatchLastVideoKey = "";
+    state.autoWatchLastVideoTime = 0;
+    state.autoWatchSeekStartTime = null;
+    state.autoWatchBlockedKey = "";
   }
 
   function getCurrentNormalEpisode() {
@@ -5579,6 +5737,8 @@
     const characterStripInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-character-strip']`);
     const subjectInfoPanelInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-subject-info-panel']`);
     const officialBangumiLayoutInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-official-bangumi-layout']`);
+    const longVideoEpisodeGuessInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-long-video-episode-guess']`);
+    const longVideoOffsetInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-long-video-offset']`);
     const autoWatchThresholdInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-auto-watch-threshold']`);
     const opedSkipEnabledInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-enabled']`);
     const opedSkipSecondsInput = document.querySelector(`#${SETTINGS_ID} [data-role='settings-oped-skip-seconds']`);
@@ -5588,6 +5748,19 @@
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
+    const nextLongVideoEpisodeGuessEnabled = Boolean(longVideoEpisodeGuessInput && longVideoEpisodeGuessInput.checked);
+    const longVideoContext = getLongVideoSettingsContext();
+    if (longVideoOffsetInput) longVideoOffsetInput.setCustomValidity("");
+    const nextLongVideoOffsetSeconds = parseTimecode(longVideoOffsetInput && longVideoOffsetInput.value);
+    if (longVideoContext.ownerKey && nextLongVideoOffsetSeconds === null) {
+      const message = "首集开始时间格式无效，请填写 02:00:00、120:00 或 120 分钟。";
+      if (longVideoOffsetInput) {
+        longVideoOffsetInput.setCustomValidity(message);
+        longVideoOffsetInput.reportValidity();
+        longVideoOffsetInput.focus();
+      }
+      return;
+    }
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
     const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
@@ -5597,6 +5770,15 @@
     }
     state.token = nextToken;
     state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
+    state.longVideoEpisodeGuessEnabled = nextLongVideoEpisodeGuessEnabled;
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    if (longVideoContext.ownerKey) {
+      state.longVideoEpisodeOffsets = {
+        ...state.longVideoEpisodeOffsets,
+        [longVideoContext.ownerKey]: normalizeLongVideoOffsetSeconds(nextLongVideoOffsetSeconds),
+      };
+    }
     const parsedWhitelist = parseWhitelistInput(String(whitelistInput && whitelistInput.value || ""));
     state.whitelist = parsedWhitelist.items;
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
@@ -5617,6 +5799,8 @@
       writeValueAsync(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0"),
       writeValueAsync(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0"),
       writeValueAsync(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0"),
+      writeValueAsync(STORAGE.longVideoEpisodeGuess, state.longVideoEpisodeGuessEnabled ? "1" : "0"),
+      writeJsonValueAsync(STORAGE.longVideoEpisodeOffsets, state.longVideoEpisodeOffsets),
       writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
       writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
     ]);
@@ -5624,6 +5808,7 @@
     removeModal();
     state.message = `设置已保存。白名单共 ${state.whitelist.length} 项。`;
     state.error = "";
+    if (!state.longVideoEpisodeGuessEnabled) resetLongVideoEpisodeGuess();
     render();
     refreshOpedSkipButton();
     if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
@@ -7077,9 +7262,9 @@
   function detectCurrentEpisodeNo(rawTitle) {
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
-    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentPartNoFromUrl();
+    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
     if (isNonMainEpisodeTitle(rawTitle)) return null;
-    return detectEpisodeNo(getActiveEpisodeText()) || getCurrentPartNoFromUrl();
+    return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
   }
 
   function scheduleEpisodeContextRefresh() {
@@ -7120,6 +7305,452 @@
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
     render();
+  }
+
+  function parseLongVideoPartTitle(value) {
+    const text = String(value || "").replace(/\s+/g, " ").trim();
+    if (!text) return null;
+    const rangeMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3})(?:\s*[-~～–—至到]\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3}))?/i);
+    if (rangeMatch) {
+      const seasonNo = Number(rangeMatch[1]);
+      const episodeStart = Number(rangeMatch[2]);
+      const episodeEnd = Number(rangeMatch[3] || rangeMatch[2]);
+      if (seasonNo > 0 && episodeStart > 0 && episodeEnd >= episodeStart) {
+        return { seasonNo, episodeStart, episodeEnd, rangeLabel: `S${seasonNo} ${episodeStart}-${episodeEnd}` };
+      }
+    }
+    const seasonMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})(?:\b|\s)/i);
+    const seasonNo = seasonMatch ? Number(seasonMatch[1]) : 0;
+    return seasonNo > 0 ? { seasonNo, episodeStart: null, episodeEnd: null, rangeLabel: `S${seasonNo}` } : null;
+  }
+
+  function getVideoPartListNodes() {
+    if (!document || typeof document.querySelectorAll !== "function") return [];
+    const activeSelectors = [
+      [".multi-p .page-list .page-item.active, .multi-p .page-list .page-item.on", ".page-list"],
+      [".video-pod__list .video-pod__item.active, .video-pod__list [class*='base-item'].active", ".video-pod__list"],
+      [".bpx-player-ctrl-eplist-episodes-content > .bpx-state-multi-active-item", ".bpx-player-ctrl-eplist-episodes-content"],
+    ];
+    if (typeof document.querySelector === "function") {
+      for (const [selector, containerSelector] of activeSelectors) {
+        const active = document.querySelector(selector);
+        if (!active) continue;
+        const container = typeof active.closest === "function" ? active.closest(containerSelector) : active.parentElement;
+        const nodes = container && container.children ? Array.from(container.children) : [];
+        if (nodes.length > 1) return nodes;
+      }
+    }
+    const fallbackSelectors = [
+      ".multi-p .page-list .page-item",
+      ".video-pod__list .video-pod__item",
+      ".bpx-player-ctrl-eplist-episodes-content > .bpx-player-ctrl-eplist-multi-menu-item",
+    ];
+    for (const selector of fallbackSelectors) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      if (nodes.length > 1 && nodes.length <= 50) return nodes;
+    }
+    return [];
+  }
+
+  function isActiveVideoPartNode(node) {
+    const className = String(node && node.className || "");
+    return /(?:^|\s)(?:active|on|bpx-state-multi-active-item)(?:\s|$)/i.test(className);
+  }
+
+  function getVideoPartNodeTitle(node) {
+    if (!node) return "";
+    const candidates = [node.getAttribute && node.getAttribute("title"), node.getAttribute && node.getAttribute("aria-label")];
+    if (typeof node.querySelectorAll === "function") {
+      Array.from(node.querySelectorAll("[title], [class*='title'], [class*='Title']")).slice(0, 6).forEach((child) => {
+        candidates.push(child.getAttribute("title"), child.getAttribute("aria-label"), child.textContent);
+      });
+    }
+    candidates.push(node.textContent);
+    return candidates
+      .map((text) => stripTrailingDurationText(String(text || "").replace(/\s+/g, " ").trim()))
+      .find(Boolean) || "";
+  }
+
+  function getCurrentVideoPartContext() {
+    const bvid = String(getBvIdFromUrl() || "").toUpperCase();
+    if (!bvid) return null;
+    const nodes = getVideoPartListNodes();
+    const activeNode = nodes.find(isActiveVideoPartNode) || null;
+    const activeIndex = activeNode ? nodes.indexOf(activeNode) : -1;
+    const urlPartNo = getCurrentPartNoFromUrl();
+    const partNo = urlPartNo || (activeIndex >= 0 ? activeIndex + 1 : 1);
+    const selectedNode = activeNode || (partNo > 0 && partNo <= nodes.length ? nodes[partNo - 1] : null);
+    const title = getVideoPartNodeTitle(selectedNode);
+    const parsed = parseLongVideoPartTitle(title) || {};
+    return {
+      bvid,
+      partNo,
+      partCount: Math.max(nodes.length, urlPartNo || 1),
+      title,
+      seasonNo: Number(parsed.seasonNo) || null,
+      episodeStart: Number(parsed.episodeStart) || null,
+      episodeEnd: Number(parsed.episodeEnd) || null,
+      rangeLabel: parsed.rangeLabel || "",
+    };
+  }
+
+  function getCurrentLongVideoPartBindingKey() {
+    const part = getCurrentVideoPartContext();
+    if (getLongVideoEpisodeModeDecision() !== true || !part || part.partCount <= 1 || !part.seasonNo) return "";
+    return `bili:${part.bvid}:p${part.partNo}`;
+  }
+
+  function selectLongVideoEpisodeSegment(episodes, part) {
+    const allEpisodes = Array.isArray(episodes) ? episodes : [];
+    const start = Number(part && part.episodeStart);
+    const end = Number(part && part.episodeEnd);
+    const base = {
+      episodes: allEpisodes,
+      firstEpisodeNo: 1,
+      part: part || null,
+      rangeApplied: false,
+      rangeFallback: false,
+      rangeLabel: String(part && part.rangeLabel || ""),
+    };
+    if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) return base;
+    if (start > allEpisodes.length || end > allEpisodes.length) {
+      return { ...base, rangeFallback: true };
+    }
+    const selected = allEpisodes.slice(start - 1, end);
+    return selected.length
+      ? { ...base, episodes: selected, firstEpisodeNo: start, rangeApplied: true }
+      : { ...base, rangeFallback: true };
+  }
+
+  function getLongVideoEpisodeSegment(episodes = getNormalEpisodes()) {
+    return selectLongVideoEpisodeSegment(episodes, getCurrentVideoPartContext());
+  }
+
+  function getLongVideoPartCacheKey() {
+    const part = getCurrentVideoPartContext();
+    return part ? `${part.bvid}:p${part.partNo}:${part.title}` : "single";
+  }
+
+  function getLongVideoOwnerKey() {
+    const owner = getLongVideoOwnerInfo();
+    const mid = String(owner && (owner.mid || owner.uid) || "").trim();
+    return /^\d+$/.test(mid) ? `mid:${mid}` : "";
+  }
+
+  function getLongVideoOwnerLabel() {
+    const owner = getLongVideoOwnerInfo();
+    const mid = String(owner && (owner.mid || owner.uid) || "").trim();
+    const name = String(owner && owner.name || "").trim();
+    return name ? `${name}${mid ? `（UID ${mid}）` : ""}` : (mid ? `UID ${mid}` : "当前 UP");
+  }
+
+  function getLongVideoOwnerInfo() {
+    const domOwner = getPrimaryDomOwnerInfo();
+    if (domOwner && (domOwner.mid || domOwner.uid)) return domOwner;
+    const initial = window.__INITIAL_STATE__ || {};
+    const videoData = initial.videoData || initial.videoInfo || {};
+    const currentBvidMatch = location.pathname.match(/\/video\/(BV[\w]+)/i);
+    const currentBvid = currentBvidMatch ? currentBvidMatch[1].toUpperCase() : "";
+    const initialBvid = String(videoData.bvid || initial.bvid || "").toUpperCase();
+    if (currentBvid && initialBvid && currentBvid !== initialBvid) return {};
+    return getInitialOwnerInfo(initial, videoData);
+  }
+
+  function getLongVideoOffsetSeconds(ownerKey = getLongVideoOwnerKey()) {
+    const stored = ownerKey && state.longVideoEpisodeOffsets && state.longVideoEpisodeOffsets[ownerKey];
+    return stored === undefined
+      ? DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS
+      : normalizeLongVideoOffsetSeconds(stored);
+  }
+
+  function getLongVideoSettingsContext() {
+    const ownerKey = getLongVideoOwnerKey();
+    const detection = getLongVideoDetection(getActiveVideoElement(), { ignoreEnabled: true });
+    return {
+      ownerKey,
+      ownerLabel: getLongVideoOwnerLabel(),
+      offsetSeconds: getLongVideoOffsetSeconds(ownerKey),
+      statusText: ` 当前检测：${detection.reason}`,
+    };
+  }
+
+  function getLongVideoLegacyDecisionKey() {
+    const match = location.pathname.match(/\/video\/(BV[\w]+)/i);
+    return match ? `bvid:${match[1].toUpperCase()}` : "";
+  }
+
+  function getLongVideoDecisionKey() {
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    const part = getCurrentVideoPartContext();
+    return legacyKey && part && part.partCount > 1 && part.seasonNo
+      ? `${legacyKey}:p${part.partNo}`
+      : legacyKey;
+  }
+
+  function getLongVideoEpisodeModeDecision() {
+    const key = getLongVideoDecisionKey();
+    if (!key || !state.longVideoEpisodeModes) return null;
+    if (Object.prototype.hasOwnProperty.call(state.longVideoEpisodeModes, key)) return state.longVideoEpisodeModes[key] === true;
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    if (legacyKey && legacyKey !== key && Object.prototype.hasOwnProperty.call(state.longVideoEpisodeModes, legacyKey)) {
+      return state.longVideoEpisodeModes[legacyKey] === true;
+    }
+    return null;
+  }
+
+  function getLongVideoDurationSeconds(video) {
+    const direct = Number(video && video.duration);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    const initial = window.__INITIAL_STATE__ || {};
+    const videoData = initial.videoData || initial.videoInfo || {};
+    const currentBvidMatch = location.pathname.match(/\/video\/(BV[\w]+)/i);
+    const currentBvid = currentBvidMatch ? currentBvidMatch[1].toUpperCase() : "";
+    const initialBvid = String(videoData.bvid || initial.bvid || "").toUpperCase();
+    const fallback = Number(videoData.duration || initial.duration);
+    return (!currentBvid || !initialBvid || currentBvid === initialBvid) && Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
+  }
+
+  function shouldOfferLongVideoBindingPrompt(video) {
+    if (!state.longVideoEpisodeGuessEnabled || isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
+    const duration = getLongVideoDurationSeconds(video);
+    return Number.isFinite(duration)
+      && duration > LONG_VIDEO_MIN_DURATION_SECONDS
+      && getLongVideoEpisodeModeDecision() === null;
+  }
+
+  async function setLongVideoEpisodeModeDecision(enabled) {
+    const key = getLongVideoDecisionKey();
+    if (!key) return;
+    state.longVideoEpisodeModes = { ...state.longVideoEpisodeModes, [key]: Boolean(enabled) };
+    await writeJsonValueAsync(STORAGE.longVideoEpisodeModes, state.longVideoEpisodeModes);
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+  }
+
+  async function clearLongVideoEpisodeModeDecision() {
+    const key = getLongVideoDecisionKey();
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    if (!key) return;
+    const next = { ...state.longVideoEpisodeModes };
+    delete next[key];
+    if (legacyKey && legacyKey !== key) delete next[legacyKey];
+    state.longVideoEpisodeModes = next;
+    await writeJsonValueAsync(STORAGE.longVideoEpisodeModes, state.longVideoEpisodeModes);
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+  }
+
+  function getLongVideoDetection(video, options = {}) {
+    if (!options.ignoreEnabled && !state.longVideoEpisodeGuessEnabled) return { active: false, reason: "实验开关未开启。" };
+    if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
+    const duration = getLongVideoDurationSeconds(video);
+    if (!Number.isFinite(duration) || duration <= 0) return { active: false, reason: "正在等待播放器时长。" };
+    if (duration <= LONG_VIDEO_MIN_DURATION_SECONDS) return { active: false, reason: `视频未超过 ${formatTimecode(LONG_VIDEO_MIN_DURATION_SECONDS)}。` };
+    const decision = getLongVideoEpisodeModeDecision();
+    if (decision === null) return { active: false, reason: "绑定时尚未确认此视频是否包含连续多集正片。" };
+    if (!decision) return { active: false, reason: "当前视频已选择按普通视频处理。" };
+    const ownerKey = getLongVideoOwnerKey();
+    if (!ownerKey) return { active: false, reason: "尚未识别当前 UP 的 UID。" };
+    if (!state.subjectId) return { active: false, reason: "当前视频尚未绑定 Bangumi 条目。" };
+    const allEpisodes = getNormalEpisodes();
+    let segment = getLongVideoEpisodeSegment(allEpisodes);
+    let episodes = segment.episodes;
+    const minimumEpisodes = segment.rangeApplied ? 1 : 4;
+    if (episodes.length < minimumEpisodes) return { active: false, reason: `Bangumi 可用正片章节少于 ${minimumEpisodes} 集。` };
+    const startOffset = getLongVideoOffsetSeconds(ownerKey);
+    let timeline = buildLongVideoEpisodeTimeline(episodes, startOffset, segment.firstEpisodeNo);
+    let rangeTimingMismatch = segment.rangeApplied && duration - timeline.endTime > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS;
+    if (rangeTimingMismatch && episodes.length < allEpisodes.length) {
+      const fallbackTimeline = buildLongVideoEpisodeTimeline(allEpisodes, startOffset, 1);
+      if (Math.max(0, fallbackTimeline.endTime - duration) <= LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS) {
+        segment = { ...segment, episodes: allEpisodes, firstEpisodeNo: 1, rangeApplied: false, rangeFallback: true };
+        episodes = allEpisodes;
+        timeline = fallbackTimeline;
+        rangeTimingMismatch = false;
+      }
+    }
+    const overflowSeconds = Math.max(0, timeline.endTime - duration);
+    if (overflowSeconds > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS) {
+      return { active: false, reason: "首集起点加全季时长已超过视频总长，请校准首集开始时间。" };
+    }
+    const autoMarkSafe = !segment.rangeFallback && !rangeTimingMismatch && timeline.safeForAutoMark && overflowSeconds <= LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS;
+    return {
+      active: true,
+      reason: segment.rangeFallback
+        ? `分P标注的 ${segment.rangeLabel || "章节范围"} 与当前 Bangumi 条目或视频时长不吻合，已按整季显示推测且不会自动标记。`
+        : rangeTimingMismatch
+        ? `分P标注的 ${segment.rangeLabel || "章节范围"} 对应正片时长明显短于视频，仅显示推测且不会自动标记。`
+        : autoMarkSafe
+        ? "条件已满足，将按分集局部进度推测。"
+        : "条件已满足，但分集时长不完整或时间线与视频不完全吻合，仅显示推测，不自动标记。",
+      duration,
+      timeline,
+      autoMarkSafe,
+      segment,
+      rangeTimingMismatch,
+    };
+  }
+
+  function buildLongVideoEpisodeTimeline(episodes, offsetSeconds, firstEpisodeNo = 1) {
+    const normalized = episodes.map((episode) => getEpisodeDurationSeconds(episode));
+    const knownDurations = normalized.filter((value) => Number.isFinite(value) && value > 0);
+    const fallbackDuration = knownDurations.length ? median(knownDurations) : DEFAULT_EPISODE_DURATION_SECONDS;
+    const startOffset = normalizeLongVideoOffsetSeconds(offsetSeconds);
+    let cursor = startOffset;
+    const items = episodes.map((episode, index) => {
+      const knownDuration = normalized[index];
+      const duration = knownDuration || fallbackDuration;
+      const item = { episode, localNo: firstEpisodeNo + index, startTime: cursor, endTime: cursor + duration, duration, durationEstimated: !knownDuration };
+      cursor = item.endTime;
+      return item;
+    });
+    return {
+      items,
+      startTime: startOffset,
+      endTime: cursor,
+      knownDurationCount: knownDurations.length,
+      safeForAutoMark: knownDurations.length === episodes.length,
+    };
+  }
+
+  function getEpisodeDurationSeconds(episode) {
+    const parsed = Number(episode && episode.duration_seconds);
+    if (Number.isFinite(parsed) && parsed >= 60 && parsed <= 3 * 60 * 60) return Math.round(parsed);
+    return parseEpisodeDurationText(episode && episode.duration);
+  }
+
+  function parseEpisodeDurationText(value) {
+    const text = String(value || "").trim().toLowerCase();
+    if (!text) return 0;
+    if (/^\d{1,3}:\d{2}(?::\d{2})?$/.test(text)) {
+      const parts = text.split(":").map(Number);
+      const seconds = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
+      return seconds >= 60 && seconds <= 3 * 60 * 60 ? seconds : 0;
+    }
+    let seconds = 0;
+    const hours = text.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|小时|小時)/);
+    const minutes = text.match(/(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes|分钟|分鐘|分)/);
+    const secs = text.match(/(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds|秒)/);
+    if (hours) seconds += Number(hours[1]) * 3600;
+    if (minutes) seconds += Number(minutes[1]) * 60;
+    if (secs) seconds += Number(secs[1]);
+    return Number.isFinite(seconds) && seconds >= 60 && seconds <= 3 * 60 * 60 ? Math.round(seconds) : 0;
+  }
+
+  function inferLongVideoEpisode(video, detection) {
+    if (!detection || !detection.active || !detection.timeline) return null;
+    const currentTime = Number(video && video.currentTime);
+    if (!Number.isFinite(currentTime) || currentTime < 0) return null;
+    const timeline = detection.timeline;
+    if (currentTime < timeline.startTime) {
+      return { active: true, stage: "prelude", episode: null, currentTime, ...detection };
+    }
+    const item = timeline.items.find((entry) => currentTime < entry.endTime);
+    if (!item) return { active: true, stage: "outro", episode: null, currentTime, ...detection };
+    const episodeElapsed = Math.max(0, currentTime - item.startTime);
+    return {
+      active: true,
+      stage: "episode",
+      episode: item.episode,
+      episodeNo: item.localNo,
+      episodeElapsed,
+      episodeDuration: item.duration,
+      episodePercent: Math.max(0, Math.min(100, Math.floor((episodeElapsed / item.duration) * 100))),
+      currentTime,
+      ...detection,
+    };
+  }
+
+  function refreshLongVideoEpisodeGuess(video) {
+    if (!state.longVideoEpisodeGuessEnabled) {
+      if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(true);
+      return null;
+    }
+    const decision = getLongVideoEpisodeModeDecision();
+    const detectionCacheKey = `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}|${state.episodes.length}|${Math.round(getLongVideoDurationSeconds(video))}|${decision}`;
+    const cachedDetection = state.longVideoDetectionCache;
+    const detection = cachedDetection && cachedDetection.key === detectionCacheKey
+      ? cachedDetection.value
+      : getLongVideoDetection(video);
+    if (detection.active && (!cachedDetection || cachedDetection.key !== detectionCacheKey)) {
+      state.longVideoDetectionCache = { key: detectionCacheKey, value: detection };
+    }
+    if (!detection.active) {
+      if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(true);
+      return null;
+    }
+    const guess = inferLongVideoEpisode(video, detection);
+    if (!guess) return null;
+    const nextEpisodeNo = guess.episode ? Number(guess.episodeNo) : null;
+    const renderKey = `${guess.stage}:${nextEpisodeNo || 0}:${guess.stage === "episode" ? Math.floor(guess.episodePercent / 10) : 0}`;
+    const changed = renderKey !== state.longVideoEpisodeRenderKey || Number(state.currentEpisodeNo) !== Number(nextEpisodeNo);
+    state.longVideoEpisodeGuess = guess;
+    state.longVideoEpisodeRenderKey = renderKey;
+    state.currentEpisodeNo = nextEpisodeNo;
+    if (changed) render();
+    return guess;
+  }
+
+  function resetLongVideoEpisodeGuess(shouldRender = false) {
+    const hadGuess = Boolean(state.longVideoEpisodeGuess);
+    state.longVideoEpisodeGuess = null;
+    state.longVideoEpisodeRenderKey = "";
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    state.currentEpisodeNo = detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+    if (shouldRender && hadGuess) render();
+  }
+
+  function renderLongVideoEpisodeHint() {
+    const guess = state.longVideoEpisodeGuess;
+    if (!guess || !guess.active) return "";
+    if (guess.stage === "prelude") {
+      return `<div class="biligumi-long-video-hint">实验推测：正片尚未开始；当前 UP 的首集起点为 ${escapeHtml(formatTimecode(guess.timeline.startTime))}。</div>`;
+    }
+    if (guess.stage === "outro") {
+      return '<div class="biligumi-long-video-hint">实验推测：全季正片已播放完，当前可能是结尾防审核片段。</div>';
+    }
+    const name = String(guess.episode && (guess.episode.name_cn || guess.episode.name) || "").trim();
+    const segment = guess.segment || {};
+    const partNote = segment.rangeApplied
+      ? ` · 分P ${escapeHtml(segment.rangeLabel || segment.part?.title || "")}`
+      : (segment.rangeFallback ? ` · ${escapeHtml(segment.rangeLabel || "分P范围")} 无法与条目对应，已按整季估算` : "");
+    const safety = guess.autoMarkSafe ? "" : " · 仅显示推测，不会自动标记";
+    return `<div class="biligumi-long-video-hint">实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${safety}</div>`;
+  }
+
+  function parseTimecode(value) {
+    const text = String(value || "").trim();
+    if (!text) return null;
+    if (/^\d+(?:\.\d+)?\s*(?:分钟|分鐘|分|min|mins|minute|minutes)$/i.test(text)) {
+      return normalizeLongVideoOffsetSeconds(Number.parseFloat(text) * 60);
+    }
+    if (/^\d+(?:\.\d+)?$/.test(text)) return normalizeLongVideoOffsetSeconds(Number(text) * 60);
+    if (!/^\d{1,3}:\d{2}(?::\d{2})?$/.test(text)) return null;
+    const parts = text.split(":").map(Number);
+    if (parts.some((part) => !Number.isFinite(part)) || parts.slice(1).some((part) => part >= 60)) return null;
+    return normalizeLongVideoOffsetSeconds(parts.length === 3
+      ? parts[0] * 3600 + parts[1] * 60 + parts[2]
+      : parts[0] * 60 + parts[1]);
+  }
+
+  function normalizeLongVideoOffsetSeconds(value) {
+    const seconds = Number(value);
+    return Number.isFinite(seconds) ? Math.max(0, Math.min(24 * 60 * 60, Math.round(seconds))) : DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS;
+  }
+
+  function formatTimecode(value) {
+    const seconds = normalizeLongVideoOffsetSeconds(value);
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const rest = seconds % 60;
+    return `${pad2(hours)}:${pad2(minutes)}:${pad2(rest)}`;
+  }
+
+  function median(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : Math.round((sorted[middle - 1] + sorted[middle]) / 2);
   }
 
   function captureRouteContext() {
@@ -7259,6 +7890,13 @@
     } catch (_) {
       return null;
     }
+  }
+
+  function getCurrentVideoPartEpisodeNo() {
+    const part = getCurrentVideoPartContext();
+    if (part && part.seasonNo) return null;
+    if (part && part.partCount > 1) return part.partNo;
+    return getCurrentPartNoFromUrl();
   }
 
   function getActiveEpisodeNodeText(el, requireVisible = true) {
