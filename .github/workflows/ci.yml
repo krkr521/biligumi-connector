@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Syntax checks
+        run: |
+          node --check userscript/biligumi-connector.user.js
+          node --check extension/content.js
+          node --check extension/background.js
+          node --check extension/options.js
+
+      - name: Validate extension manifest
+        run: |
+          node -e "
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('extension/manifest.json', 'utf8'));
+            if (!manifest.manifest_version || !manifest.name || !manifest.version) {
+              throw new Error('extension/manifest.json is missing required fields');
+            }
+            console.log('manifest.json ok:', manifest.name, manifest.version);
+          "
+
+      - name: Run tests
+        run: |
+          for test_file in tests/*.test.js; do
+            echo "== ${test_file} =="
+            node "${test_file}"
+          done

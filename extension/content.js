@@ -119,6 +119,13 @@
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
+  const AUTO_WATCH_TIMEUPDATE_MIN_INTERVAL_MS = 1000;
+  const AUTO_WATCH_FAILURE_COOLDOWN_BASE_MS = 5000;
+  const AUTO_WATCH_MAX_FAILURE_ROUNDS = 3;
+  const AUTO_WATCH_FAILURE_RECORD_MAX_KEYS = 24;
+  const AUTO_WATCH_RATE_LIMIT_DEFAULT_SECONDS = 60;
+  const AUTO_WATCH_RATE_LIMIT_MAX_SECONDS = 300;
+  const LONG_VIDEO_DETECTION_KEY_MEMO_MS = 2500;
   const LONG_VIDEO_MIN_DURATION_SECONDS = 2 * 60 * 60;
   const DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS = 2 * 60 * 60;
   const DEFAULT_EPISODE_DURATION_SECONDS = 24 * 60;
@@ -204,6 +211,7 @@
     longVideoEpisodeGuess: null,
     longVideoEpisodeRenderKey: "",
     longVideoDetectionCache: null,
+    longVideoDetectionKeyMemo: null,
     longVideoBindingPrompt: null,
     longVideoIdentifyDismissedKey: "",
     nonMainResults: [],
@@ -220,6 +228,9 @@
     autoWatchLastVideoTime: 0,
     autoWatchSeekStartTime: null,
     autoWatchBlockedKey: "",
+    autoWatchAuthBlocked: false,
+    autoWatchRateLimitRetryAt: 0,
+    autoWatchFailures: {},
   };
 
   GM_addStyle(`
@@ -2482,6 +2493,10 @@
   let episodeContextRefreshTimer = 0;
   let episodeContextObserver = null;
   let episodeContextObserverStopTimer = 0;
+  let subjectInfoSyncTimer = 0;
+  let characterStripSyncTimer = 0;
+  let injectRetryTimer = 0;
+  let autoWatchTimeupdateLastRunAt = 0;
 
   init();
   bindExtensionBridge();
@@ -2571,10 +2586,12 @@
     state.standaloneSearchExpanded = false;
     state.autoEpisodeSyncing = false;
     state.autoEpisodeSyncLastKey = "";
+    state.autoWatchFailures = {};
     resetAutoWatchObservationState();
     state.longVideoEpisodeGuess = null;
     state.longVideoEpisodeRenderKey = "";
     state.longVideoDetectionCache = null;
+    state.longVideoDetectionKeyMemo = null;
     clearLongVideoBindingPrompt();
     state.longVideoIdentifyDismissedKey = "";
     refreshOpedSkipButton();
@@ -2661,6 +2678,10 @@
   }
 
   function injectWhenReady(forceRefresh) {
+    if (!isSupportedWatchPage()) {
+      cancelInjectRetry();
+      return;
+    }
     const existing = document.getElementById(PANEL_ID);
     if (existing && !forceRefresh) {
       repositionPanel();
@@ -2670,9 +2691,10 @@
 
     const host = findRightColumn();
     if (!host) {
-      setTimeout(() => injectWhenReady(forceRefresh), 800);
+      scheduleInjectRetry(forceRefresh);
       return;
     }
+    cancelInjectRetry();
 
     const panel = document.createElement("section");
     panel.id = PANEL_ID;
@@ -2686,6 +2708,21 @@
     if (shouldRenderFullPanel() && state.subjectId) {
       loadSubjectBundle().catch(showError);
     }
+  }
+
+  function scheduleInjectRetry(forceRefresh) {
+    if (injectRetryTimer) return;
+    injectRetryTimer = window.setTimeout(() => {
+      injectRetryTimer = 0;
+      if (!isSupportedWatchPage()) return;
+      injectWhenReady(forceRefresh);
+    }, 800);
+  }
+
+  function cancelInjectRetry() {
+    if (!injectRetryTimer) return;
+    window.clearTimeout(injectRetryTimer);
+    injectRetryTimer = 0;
   }
 
   function findRightColumn() {
@@ -2913,6 +2950,7 @@
   function render() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
+    const inputDrafts = capturePanelInputDrafts(panel);
     updateCurrentWhitelistLabel();
     syncSettingsDialog();
 
@@ -2924,6 +2962,7 @@
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
       panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
+      restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
       if (nonMainKeyword) ensureNonMainPreviewSearch(nonMainKeyword);
       refreshOpedSkipButton();
@@ -2953,6 +2992,7 @@
     if (state.panelCollapsed) {
       panel.innerHTML = headerHtml;
       bindPanelEvents();
+      restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
       syncSubjectInfoPanel();
       syncCharacterStrip();
@@ -2973,12 +3013,48 @@
     `;
 
     bindPanelEvents();
+    restorePanelInputDrafts(panel, inputDrafts);
     layoutPanelWithoutOwningBiliDom();
     syncSubjectInfoPanel();
     syncCharacterStrip();
     refreshOpedSkipButton();
     const inlineAutoKeyword = getInlineAutoPreviewKeyword();
     if (inlineAutoKeyword) ensureNonMainPreviewSearch(inlineAutoKeyword);
+  }
+
+  function capturePanelInputDrafts(panel) {
+    const drafts = [];
+    if (!panel || typeof panel.querySelector !== "function") return drafts;
+    ["search-keyword", "progress"].forEach((role) => {
+      const input = panel.querySelector(`[data-role='${role}']`);
+      if (!input) return;
+      drafts.push({
+        role,
+        value: input.value,
+        focused: document.activeElement === input,
+        selectionStart: typeof input.selectionStart === "number" ? input.selectionStart : null,
+        selectionEnd: typeof input.selectionEnd === "number" ? input.selectionEnd : null,
+      });
+    });
+    return drafts;
+  }
+
+  function restorePanelInputDrafts(panel, drafts) {
+    if (!panel || !Array.isArray(drafts) || !drafts.length) return;
+    drafts.forEach((draft) => {
+      const input = panel.querySelector(`[data-role='${draft.role}']`);
+      if (!input) return;
+      if (input.value !== draft.value) input.value = draft.value;
+      if (!draft.focused) return;
+      input.focus({ preventScroll: true });
+      if (draft.selectionStart != null && typeof input.setSelectionRange === "function") {
+        try {
+          input.setSelectionRange(draft.selectionStart, draft.selectionEnd != null ? draft.selectionEnd : draft.selectionStart);
+        } catch (_error) {
+          // Some input types (e.g. number) do not support selection ranges.
+        }
+      }
+    });
   }
 
   function syncSubjectInfoPanel() {
@@ -2989,9 +3065,10 @@
 
     const host = findSubjectInfoInsertHost();
     if (!host) {
-      window.setTimeout(syncSubjectInfoPanel, 900);
+      scheduleSubjectInfoSyncRetry();
       return;
     }
+    cancelSubjectInfoSyncRetry();
 
     let box = document.getElementById(SUBJECT_INFO_ID);
     if (!box) {
@@ -3015,9 +3092,24 @@
   }
 
   function removeSubjectInfoPanel() {
+    cancelSubjectInfoSyncRetry();
     const box = document.getElementById(SUBJECT_INFO_ID);
     if (box) box.remove();
     clearSubjectSideLayout();
+  }
+
+  function scheduleSubjectInfoSyncRetry() {
+    if (subjectInfoSyncTimer || !isSupportedWatchPage()) return;
+    subjectInfoSyncTimer = window.setTimeout(() => {
+      subjectInfoSyncTimer = 0;
+      syncSubjectInfoPanel();
+    }, 900);
+  }
+
+  function cancelSubjectInfoSyncRetry() {
+    if (!subjectInfoSyncTimer) return;
+    window.clearTimeout(subjectInfoSyncTimer);
+    subjectInfoSyncTimer = 0;
   }
 
   function syncCharacterStrip() {
@@ -3036,9 +3128,10 @@
 
     const host = findCharacterStripInsertHost();
     if (!host) {
-      window.setTimeout(syncCharacterStrip, 900);
+      scheduleCharacterStripSyncRetry();
       return;
     }
+    cancelCharacterStripSyncRetry();
 
     let strip = document.getElementById(CHARACTER_STRIP_ID);
     if (!strip) {
@@ -3113,8 +3206,23 @@
   }
 
   function removeCharacterStrip() {
+    cancelCharacterStripSyncRetry();
     const strip = document.getElementById(CHARACTER_STRIP_ID);
     if (strip) strip.remove();
+  }
+
+  function scheduleCharacterStripSyncRetry() {
+    if (characterStripSyncTimer || !isSupportedWatchPage()) return;
+    characterStripSyncTimer = window.setTimeout(() => {
+      characterStripSyncTimer = 0;
+      syncCharacterStrip();
+    }, 900);
+  }
+
+  function cancelCharacterStripSyncRetry() {
+    if (!characterStripSyncTimer) return;
+    window.clearTimeout(characterStripSyncTimer);
+    characterStripSyncTimer = 0;
   }
 
   function renderSubjectInfoPanel() {
@@ -4731,12 +4839,12 @@
     return `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}`;
   }
 
-  function maybeOfferLongVideoAutoIdentify() {
+  function maybeOfferLongVideoAutoIdentify(video = getActiveVideoElement()) {
     if (!state.subjectId) return false;
     if (state.longVideoBindingPrompt) return false;
     if (state.longVideoIdentifyDismissedKey === getLongVideoIdentifyDismissKey()) return false;
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
-    const readiness = getLongVideoBindReadiness(getActiveVideoElement());
+    const readiness = getLongVideoBindReadiness(video);
     if (readiness.action === "auto") {
       applyLongVideoAutoAccept(state.subjectId, captureRouteContext(), "identify").catch(showError);
       return true;
@@ -5704,7 +5812,13 @@
   function bindAutoWatchProgressEvents() {
     if (window.__biligumiAutoWatchEventsBound) return;
     window.__biligumiAutoWatchEventsBound = true;
-    ["timeupdate", "playing", "loadedmetadata", "durationchange"].forEach((eventName) => {
+    document.addEventListener("timeupdate", () => {
+      const now = Date.now();
+      if (now - autoWatchTimeupdateLastRunAt < AUTO_WATCH_TIMEUPDATE_MIN_INTERVAL_MS) return;
+      autoWatchTimeupdateLastRunAt = now;
+      checkAutoWatchProgress().catch(showError);
+    }, true);
+    ["playing", "loadedmetadata", "durationchange"].forEach((eventName) => {
       document.addEventListener(eventName, () => {
         checkAutoWatchProgress().catch(showError);
       }, true);
@@ -5724,9 +5838,10 @@
   }
 
   async function checkAutoWatchProgress() {
+    if (!isSupportedWatchPage()) return;
     if (isCurrentVideoAutoProgressDisabled()) return;
     const video = getActiveVideoElement();
-    maybeOfferLongVideoAutoIdentify();
+    maybeOfferLongVideoAutoIdentify(video);
     const longVideoGuess = video ? refreshLongVideoEpisodeGuess(video) : null;
     const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
     if (!state.token || !state.subjectId || !hasCollection() || state.autoEpisodeSyncing) return;
@@ -5744,12 +5859,19 @@
     if (watchedPercent < getAutoWatchThreshold()) return;
     if (state.autoWatchBlockedKey === syncKey) return;
     if (state.autoEpisodeSyncLastKey === syncKey) return;
+    if (state.autoWatchAuthBlocked) return;
+    const failure = getAutoWatchFailureRecord(syncKey);
+    if (failure && failure.circuitOpen) return;
+    const now = Date.now();
+    if (state.autoWatchRateLimitRetryAt && now < state.autoWatchRateLimitRetryAt) return;
+    if (failure && failure.retryAt && now < failure.retryAt) return;
 
     state.autoEpisodeSyncing = true;
     state.autoEpisodeSyncLastKey = syncKey;
     try {
       await patchEpisodes([Number(currentEpisode.id)], 2, "", false);
       applySingleEpisodeProgress(Number(currentEpisode.id), 2);
+      clearAutoWatchFailureRecord(syncKey);
       state.busy = false;
       state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeLocalNo(currentEpisode))} 集看过。`;
       state.error = "";
@@ -5757,10 +5879,73 @@
       window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
     } catch (error) {
       state.autoEpisodeSyncLastKey = "";
-      throw error;
+      handleAutoWatchSyncFailure(error, syncKey);
     } finally {
       state.autoEpisodeSyncing = false;
     }
+  }
+
+  function getAutoWatchFailureRecord(syncKey) {
+    const failures = state.autoWatchFailures;
+    if (!failures || typeof failures !== "object") return null;
+    return failures[syncKey] || null;
+  }
+
+  function writeAutoWatchFailureRecord(syncKey, record) {
+    if (!state.autoWatchFailures || typeof state.autoWatchFailures !== "object") state.autoWatchFailures = {};
+    if (record) state.autoWatchFailures[syncKey] = record;
+    else delete state.autoWatchFailures[syncKey];
+    const keys = Object.keys(state.autoWatchFailures);
+    if (keys.length > AUTO_WATCH_FAILURE_RECORD_MAX_KEYS) {
+      keys.slice(0, keys.length - AUTO_WATCH_FAILURE_RECORD_MAX_KEYS).forEach((key) => {
+        delete state.autoWatchFailures[key];
+      });
+    }
+  }
+
+  function clearAutoWatchFailureRecord(syncKey) {
+    if (getAutoWatchFailureRecord(syncKey)) writeAutoWatchFailureRecord(syncKey, null);
+    state.autoWatchAuthBlocked = false;
+  }
+
+  function handleAutoWatchSyncFailure(error, syncKey) {
+    const status = Number(error && error.status);
+    if (status === 401 || status === 403) {
+      state.autoWatchAuthBlocked = true;
+      showAutoWatchSyncNotice(`自动标记已暂停：Bangumi 拒绝了访问凭证（${status}）；更新 Access Token 后自动恢复。`);
+      return;
+    }
+    if (status === 429) {
+      const retryAfterSeconds = Number(error && error.retryAfterSeconds);
+      const cooldownSeconds = Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+        ? Math.max(1, Math.min(Math.ceil(retryAfterSeconds), AUTO_WATCH_RATE_LIMIT_MAX_SECONDS))
+        : AUTO_WATCH_RATE_LIMIT_DEFAULT_SECONDS;
+      state.autoWatchRateLimitRetryAt = Date.now() + cooldownSeconds * 1000;
+      showAutoWatchSyncNotice(`自动标记已暂停：Bangumi 请求过于频繁（429），约 ${cooldownSeconds} 秒后自动恢复。`);
+      return;
+    }
+    const previous = getAutoWatchFailureRecord(syncKey) || {};
+    const count = (Number(previous.count) || 0) + 1;
+    if (!isRetryableApiError(error)) {
+      writeAutoWatchFailureRecord(syncKey, { count, retryAt: 0, circuitOpen: true });
+      showAutoWatchSyncNotice(`自动标记失败：${error && error.message ? error.message : error}。已暂停当前集数的自动标记，切换视频或刷新页面后重试。`);
+      return;
+    }
+    if (count >= AUTO_WATCH_MAX_FAILURE_ROUNDS) {
+      writeAutoWatchFailureRecord(syncKey, { count, retryAt: 0, circuitOpen: true });
+      showAutoWatchSyncNotice(`自动标记连续 ${count} 轮失败，已熔断当前集数的自动标记；切换集数、视频或页面后可恢复。`);
+      return;
+    }
+    const cooldownMs = AUTO_WATCH_FAILURE_COOLDOWN_BASE_MS * Math.pow(2, count - 1);
+    writeAutoWatchFailureRecord(syncKey, { count, retryAt: Date.now() + cooldownMs, circuitOpen: false });
+    showAutoWatchSyncNotice(`自动标记失败：${error && error.message ? error.message : error}；约 ${Math.round(cooldownMs / 1000)} 秒后自动重试。`);
+  }
+
+  function showAutoWatchSyncNotice(message) {
+    if (state.error === message) return;
+    state.busy = false;
+    state.error = message;
+    render();
   }
 
   function getActiveVideoElement() {
@@ -6825,6 +7010,7 @@
     if (tokenChanged) {
       state.username = "";
       pendingRequests.clear();
+      state.autoWatchAuthBlocked = false;
     }
     state.token = nextToken;
     state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
@@ -6977,6 +7163,7 @@
     state.collection = null;
     state.episodeCollections = [];
     pendingRequests.clear();
+    state.autoWatchAuthBlocked = false;
     await writeValueAsync(STORAGE.token, "");
 
     const settings = document.getElementById(SETTINGS_ID);
@@ -7479,7 +7666,7 @@
     const headers = {
       "Accept": "application/json",
       "Content-Type": "application/json",
-      "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/local/biligumi-connector)`,
+      "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/krkr521/biligumi-connector)`,
     };
     if (options.auth) headers.Authorization = `Bearer ${options.authToken != null ? options.authToken : state.token}`;
 
@@ -7520,7 +7707,7 @@
         url,
         headers: {
           "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-          "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/local/biligumi-connector)`,
+          "User-Agent": `biligumi-connector/${SCRIPT_VERSION} (https://github.com/krkr521/biligumi-connector)`,
         },
         anonymous: false,
         withCredentials: true,
@@ -7541,7 +7728,20 @@
   function makeApiError(response) {
     const error = new Error(extractApiError(response));
     error.status = Number(response.status) || 0;
+    const retryAfterSeconds = parseRetryAfterSeconds(response);
+    if (retryAfterSeconds != null) error.retryAfterSeconds = retryAfterSeconds;
     return error;
+  }
+
+  function parseRetryAfterSeconds(response) {
+    const headers = String(response && response.responseHeaders || "");
+    const match = headers.match(/^\s*retry-after\s*:\s*(.+?)\s*$/im);
+    if (!match) return null;
+    const value = match[1];
+    if (/^\d+(?:\.\d+)?$/.test(value)) return Number(value);
+    const date = Date.parse(value);
+    if (Number.isFinite(date)) return Math.max(0, (date - Date.now()) / 1000);
+    return null;
   }
 
   function makeNetworkError(message) {
@@ -7594,6 +7794,10 @@
     const url = new URL(location.href);
     const match = url.pathname.match(/\/bangumi\/play\/(ss\d+|ep\d+|md\d+)|\/video\/(BV[\w]+)/i);
     return match ? match[0] : url.pathname;
+  }
+
+  function isSupportedWatchPage() {
+    return /\/video\//i.test(location.pathname) || isOfficialBangumiPage();
   }
 
   function isOfficialBangumiPage() {
@@ -7707,7 +7911,7 @@
   function getTitleSeasonNumber(value) {
     const text = String(value || "").toLowerCase();
     const numeric = text.match(/第(\d{1,2})(?:季|期)/)
-      || text.match(/(?:season|s)(\d{1,2})(?:$|[^0-9])/)
+      || text.match(/(?<![a-z0-9])(?:season|s)(\d{1,2})(?:$|[^0-9])/)
       || text.match(/(\d{1,2})(?:st|nd|rd|th)season/);
     if (numeric) return Number(numeric[1]) || 0;
     const chinese = text.match(/第([一二两兩三四五六七八九十]{1,3})(?:季|期)/);
@@ -9166,13 +9370,38 @@
     };
   }
 
+  function getLongVideoDetectionCacheKey(video) {
+    const now = Date.now();
+    const cheapKey = [
+      state.pageKey,
+      String(location.search || ""),
+      String(state.subjectId || 0),
+      String(state.episodes.length),
+      String(Math.round(getLongVideoDurationSeconds(video))),
+    ].join("|");
+    const memo = state.longVideoDetectionKeyMemo;
+    if (memo && memo.cheapKey === cheapKey && now - memo.stamp < LONG_VIDEO_DETECTION_KEY_MEMO_MS) {
+      return memo.fullKey;
+    }
+    const fullKey = [
+      state.pageKey,
+      getLongVideoPartCacheKey(),
+      String(state.subjectId || 0),
+      String(state.episodes.length),
+      String(Math.round(getLongVideoDurationSeconds(video))),
+      String(getLongVideoEpisodeModeDecision()),
+      String(getEffectiveLongVideoOffsetSeconds()),
+    ].join("|");
+    state.longVideoDetectionKeyMemo = { cheapKey, fullKey, stamp: now };
+    return fullKey;
+  }
+
   function refreshLongVideoEpisodeGuess(video) {
     if (isCurrentVideoAutoProgressDisabled()) {
       if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(true);
       return null;
     }
-    const decision = getLongVideoEpisodeModeDecision();
-    const detectionCacheKey = `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}|${state.episodes.length}|${Math.round(getLongVideoDurationSeconds(video))}|${decision}|${getEffectiveLongVideoOffsetSeconds()}`;
+    const detectionCacheKey = getLongVideoDetectionCacheKey(video);
     const cachedDetection = state.longVideoDetectionCache;
     const detection = cachedDetection && cachedDetection.key === detectionCacheKey
       ? cachedDetection.value
@@ -9201,6 +9430,7 @@
     state.longVideoEpisodeGuess = null;
     state.longVideoEpisodeRenderKey = "";
     state.longVideoDetectionCache = null;
+    state.longVideoDetectionKeyMemo = null;
     resetAutoWatchObservationState();
     state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
       ? null
@@ -10098,11 +10328,16 @@
     }).then(async (response) => {
       window.clearTimeout(timeout);
       const responseText = await response.text();
+      const responseHeaders = [];
+      response.headers.forEach((value, key) => {
+        responseHeaders.push(`${key}: ${value}`);
+      });
       callHandler(details.onload, {
         status: response.status,
         statusText: response.statusText,
         responseText,
         response: request.responseType === "json" ? tryParseExtensionJson(responseText) : responseText,
+        responseHeaders: responseHeaders.join("\r\n"),
         finalUrl: response.url,
       });
     }).catch((error) => {

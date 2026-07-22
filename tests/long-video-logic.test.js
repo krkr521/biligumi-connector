@@ -2,12 +2,30 @@
 
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
-const path = require("node:path");
 const vm = require("node:vm");
 
-const repoRoot = path.resolve(__dirname, "..");
-const userscriptPath = path.join(repoRoot, "userscript", "biligumi-connector.user.js");
-const extensionPath = path.join(repoRoot, "extension", "content.js");
+const {
+  USERSCRIPT_PATH: userscriptPath,
+  EXTENSION_PATH: extensionPath,
+  readSource,
+  extractFunction,
+  extractConstants,
+  extractObjectConstant,
+} = require("./_source");
+
+const userscriptSource = readSource(userscriptPath);
+
+// Constants and STORAGE come from the userscript source, never hand-copied:
+// extraction failure must fail this test instead of drifting from the code.
+const SRC_CONSTANTS = extractConstants(userscriptSource, [
+  "DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS",
+  "DEFAULT_EPISODE_DURATION_SECONDS",
+  "LONG_VIDEO_MIN_DURATION_SECONDS",
+  "LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS",
+  "LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS",
+  "AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS",
+]);
+const SRC_STORAGE = extractObjectConstant(userscriptSource, "STORAGE");
 
 function readLogicBlock(filePath) {
   const source = fs.readFileSync(filePath, "utf8");
@@ -94,21 +112,15 @@ assert.match(
 const episodes = Array.from({ length: 12 }, (_, index) => ({
   id: index + 1,
   type: 0,
+  sort: index + 1,
   name: `Episode ${index + 1}`,
   duration_seconds: 24 * 60,
 }));
 
 const sandbox = {
-  DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS: 2 * 60 * 60,
-  DEFAULT_EPISODE_DURATION_SECONDS: 24 * 60,
-  LONG_VIDEO_MIN_DURATION_SECONDS: 2 * 60 * 60,
-  LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS: 45 * 60,
-  LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS: 5 * 60,
-  STORAGE: {
-    longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
-    longVideoEpisodeVideoOffsets: "biligumi.longVideoEpisodeVideoOffsets",
-    disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
-  },
+  ...SRC_CONSTANTS,
+  STORAGE: SRC_STORAGE,
+  URL,
   state: {
     longVideoEpisodeGuessEnabled: false, // default: prompt; enable for auto-accept tests
     longVideoEpisodeOffsets: { "mid:42": 2 * 60 * 60 },
@@ -119,27 +131,30 @@ const sandbox = {
     subjectId: 1,
     episodes,
   },
-  location: { pathname: "/video/BV1TEST" },
+  location: new URL("https://www.bilibili.com/video/BV1TEST"),
   window: { __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } } },
   document: { querySelectorAll: () => [] },
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
-  getCurrentPartNoFromUrl: () => null,
-  stripTrailingDurationText: (value) => String(value || "").replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "").trim(),
-  getPageOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
   getPrimaryDomOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
   getActiveVideoElement: () => null,
-  getNormalEpisodes: () => sandbox.state.episodes,
   isOfficialBangumiPage: () => false,
   detectCurrentEpisodeNo: () => null,
-  escapeHtml: (value) => String(value),
   pad2: (value) => String(value).padStart(2, "0"),
   render: () => {},
   writeJsonValueAsync: async () => {},
   resetAutoWatchObservationState: () => {},
 };
 
+// Real implementations replace former hand-written stubs; extraction is strict.
+const realHelpers = [
+  extractFunction(userscriptSource, "getNormalEpisodes"),
+  extractFunction(userscriptSource, "escapeHtml"),
+  extractFunction(userscriptSource, "getCurrentPartNoFromUrl"),
+  extractFunction(userscriptSource, "stripTrailingDurationText"),
+].join("\n");
+
 vm.createContext(sandbox);
-vm.runInContext(`${userscriptLogic}\n;globalThis.logic = {
+vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
   buildLongVideoEpisodeTimeline,
   getEpisodeDurationSeconds,
   parseEpisodeDurationText,
@@ -163,6 +178,10 @@ vm.runInContext(`${userscriptLogic}\n;globalThis.logic = {
   clearLongVideoVideoOffset,
   setCurrentVideoAutoProgressDisabled,
   clearLongVideoEpisodeModeDecision,
+  getNormalEpisodes,
+  escapeHtml,
+  getCurrentPartNoFromUrl,
+  stripTrailingDurationText,
 };`, sandbox);
 
 (async () => {
@@ -402,8 +421,32 @@ sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
 
 assert.equal(logic.getLongVideoDetection({ duration: 4 * 60 * 60 }).active, false);
 
+// getNormalEpisodes is the real implementation: it filters type !== 0 and sorts by sort.
+sandbox.state.episodes = [...episodes, { id: 999, type: 1, sort: 3, name: "SP", duration_seconds: 300 }];
+const normalEpisodes = logic.getNormalEpisodes();
+assert.equal(normalEpisodes.length, episodes.length, "getNormalEpisodes must filter non-main episodes");
+assert.ok(normalEpisodes.every((ep) => Number(ep.type) === 0), "getNormalEpisodes keeps only type 0");
+assert.deepEqual(normalEpisodes.map((ep) => ep.id), episodes.map((ep) => ep.id), "getNormalEpisodes must keep sort order");
+sandbox.state.episodes = episodes.slice().reverse();
+assert.deepEqual(logic.getNormalEpisodes().map((ep) => ep.id), episodes.map((ep) => ep.id), "getNormalEpisodes must sort a reversed list");
+sandbox.state.episodes = episodes;
+
+// escapeHtml is the real implementation and must neutralize markup.
+assert.equal(logic.escapeHtml('<img src=x onerror="alert(1)">'), "&lt;img src=x onerror=&quot;alert(1)&quot;&gt;");
+assert.equal(logic.escapeHtml("a&b'c\"d"), "a&amp;b&#039;c&quot;d");
+assert.ok(!logic.escapeHtml("<script>alert('x')</script>").includes("<"), "escaped output must not contain raw <");
+
+// ?p= drives the current part number through the real getCurrentPartNoFromUrl.
+sandbox.location = new URL("https://www.bilibili.com/video/BV1TEST?p=3");
+assert.equal(logic.getCurrentPartNoFromUrl(), 3, "?p=3 must be read from the URL");
+const urlDrivenPart = logic.getCurrentVideoPartContext();
+assert.equal(urlDrivenPart.partNo, 3, "URL part number must win without part-list DOM");
+assert.equal(urlDrivenPart.partCount, 3);
+sandbox.location = new URL("https://www.bilibili.com/video/BV1TEST");
+assert.equal(logic.getCurrentPartNoFromUrl(), null);
+
 const autoWatchSandbox = {
-  AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS: 5 * 60,
+  AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS: SRC_CONSTANTS.AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS,
   getAutoWatchThreshold: () => 80,
   state: {
     autoWatchLastVideoKey: "1:1:owner",
