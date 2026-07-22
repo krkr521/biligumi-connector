@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.6.16
+// @version      0.7.0
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -17,6 +17,8 @@
 // @grant        GM_openInTab
 // @grant        GM_closeTab
 // @run-at       document-idle
+// @updateURL    https://raw.githubusercontent.com/krkr521/biligumi-connector/master/userscript/biligumi-connector.user.js
+// @downloadURL  https://raw.githubusercontent.com/krkr521/biligumi-connector/master/userscript/biligumi-connector.user.js
 // ==/UserScript==
 
 (function () {
@@ -34,7 +36,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.16";
+  const SCRIPT_VERSION = "0.7.0";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",

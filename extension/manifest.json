@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Biligumi Connector",
-  "version": "0.2.15",
+  "version": "0.3.0",
   "description": "Embed Bangumi collection, rating, episode progress and OP/ED skip controls into Bilibili watch pages.",
   "permissions": [
     "storage",

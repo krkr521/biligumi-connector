@@ -38,7 +38,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.16";
+  const SCRIPT_VERSION = "0.3.0";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
