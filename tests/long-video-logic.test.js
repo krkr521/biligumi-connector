@@ -104,11 +104,17 @@ const sandbox = {
   LONG_VIDEO_MIN_DURATION_SECONDS: 2 * 60 * 60,
   LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS: 45 * 60,
   LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS: 5 * 60,
-  STORAGE: { longVideoEpisodeModes: "biligumi.longVideoEpisodeModes" },
+  STORAGE: {
+    longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
+    longVideoEpisodeVideoOffsets: "biligumi.longVideoEpisodeVideoOffsets",
+    disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
+  },
   state: {
     longVideoEpisodeGuessEnabled: false, // default: prompt; enable for auto-accept tests
     longVideoEpisodeOffsets: { "mid:42": 2 * 60 * 60 },
+    longVideoEpisodeVideoOffsets: {},
     longVideoEpisodeModes: { "bvid:BV1TEST": true },
+    disabledAutoProgressVideos: {},
     rawTitle: "普通超长视频",
     subjectId: 1,
     episodes,
@@ -149,8 +155,17 @@ vm.runInContext(`${userscriptLogic}\n;globalThis.logic = {
   selectLongVideoEpisodeSegment,
   getCurrentVideoPartContext,
   getLongVideoDecisionKey,
+  getCurrentVideoProgressKey,
+  getEffectiveLongVideoOffsetSeconds,
+  getLongVideoVideoOffsetSeconds,
+  isCurrentVideoAutoProgressDisabled,
+  setLongVideoVideoOffsetSeconds,
+  clearLongVideoVideoOffset,
+  setCurrentVideoAutoProgressDisabled,
+  clearLongVideoEpisodeModeDecision,
 };`, sandbox);
 
+(async () => {
 const logic = sandbox.logic;
 const timeline = logic.buildLongVideoEpisodeTimeline(episodes, 2 * 60 * 60);
 assert.equal(timeline.startTime, 7200);
@@ -255,6 +270,84 @@ assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, true
 assert.equal(logic.getLongVideoDetection({ duration: 110 * 60 }).active, false);
 assert.equal(logic.getLongVideoDetection({ duration: 2 * 60 * 60 }).active, false);
 
+assert.equal(logic.getCurrentVideoProgressKey(), "bvid:BV1TEST");
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 7200, "No video offset should fall back to UP default");
+sandbox.state.longVideoEpisodeVideoOffsets = { "bvid:BV1TEST": 100 };
+assert.equal(logic.getLongVideoVideoOffsetSeconds().seconds, 100);
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 100, "Per-video offset should beat UP default");
+assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).timeline.startTime, 100);
+sandbox.state.longVideoEpisodeVideoOffsets = { "bvid:BV1TEST": 100, "bvid:BV1TEST:p3": 200 };
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list") ? partNodes[2] : null;
+sandbox.document.querySelectorAll = () => Array.from({ length: 225 }, () => partNodes[0]);
+assert.equal(logic.getLongVideoDecisionKey(), "bvid:BV1TEST:p3");
+assert.equal(logic.getCurrentVideoProgressKey(), "bvid:BV1TEST:p3");
+assert.equal(logic.getLongVideoVideoOffsetSeconds().seconds, 200, "Part-specific video offset should beat BV-wide offset");
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 200);
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.longVideoEpisodeVideoOffsets = {};
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 7200);
+sandbox.state.disabledAutoProgressVideos = { "bvid:BV1TEST": true };
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), true);
+sandbox.state.disabledAutoProgressVideos = {};
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), false);
+
+// Bug 1 regression: legacy BV pause fallback when current key is part-scoped.
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list") ? partNodes[2] : null;
+sandbox.document.querySelectorAll = () => Array.from({ length: 225 }, () => partNodes[0]);
+assert.equal(logic.getLongVideoDecisionKey(), "bvid:BV1TEST:p3");
+sandbox.state.disabledAutoProgressVideos = { "bvid:BV1TEST": true };
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), true, "Legacy BV pause should still apply when part key is active");
+sandbox.state.disabledAutoProgressVideos = { "bvid:BV1TEST:p3": true };
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), true, "Part-specific pause should be honored");
+sandbox.state.disabledAutoProgressVideos = { "bvid:BV1TEST:p2": true };
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), false, "Unrelated part pause should not leak");
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.disabledAutoProgressVideos = {};
+
+// Bug 2 regression: clear removes both part and legacy video-offset keys.
+sandbox.state.longVideoEpisodeVideoOffsets = { "bvid:BV1TEST": 100, "bvid:BV1TEST:p3": 200 };
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list") ? partNodes[2] : null;
+sandbox.document.querySelectorAll = () => Array.from({ length: 225 }, () => partNodes[0]);
+assert.equal(logic.getLongVideoVideoOffsetSeconds().seconds, 200);
+await logic.clearLongVideoVideoOffset();
+assert.equal(logic.getLongVideoVideoOffsetSeconds(), null, "Clearing part offset must also clear legacy BV offset");
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 7200, "After dual clear, effective offset falls back to UP default");
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.longVideoEpisodeVideoOffsets = {};
+
+// Bug 1 disable side effect: turning auto back on clears both keys.
+sandbox.state.disabledAutoProgressVideos = { "bvid:BV1TEST": true, "bvid:BV1TEST:p3": true };
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list") ? partNodes[2] : null;
+sandbox.document.querySelectorAll = () => Array.from({ length: 225 }, () => partNodes[0]);
+await logic.setCurrentVideoAutoProgressDisabled(false);
+assert.equal(logic.isCurrentVideoAutoProgressDisabled(), false, "After enable, no pause key remains");
+assert.equal(Object.keys(sandbox.state.disabledAutoProgressVideos).length, 0, "Enable must delete both part and legacy pause keys");
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+
+// setLongVideoVideoOffsetSeconds round-trip.
+await logic.setLongVideoVideoOffsetSeconds(150);
+assert.equal(logic.getLongVideoVideoOffsetSeconds().seconds, 150);
+assert.equal(logic.getEffectiveLongVideoOffsetSeconds("mid:42"), 150);
+await logic.clearLongVideoVideoOffset();
+assert.equal(logic.getLongVideoVideoOffsetSeconds(), null);
+
+// Nit 7: unbind clears sibling part mode keys for the same BV.
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true, "bvid:BV1TEST:p1": true, "bvid:BV1TEST:p2": false, "bvid:BV2OTHER": true };
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list") ? partNodes[2] : null;
+sandbox.document.querySelectorAll = () => Array.from({ length: 225 }, () => partNodes[0]);
+await logic.clearLongVideoEpisodeModeDecision();
+assert.equal(sandbox.state.longVideoEpisodeModes["bvid:BV1TEST"], undefined, "Legacy mode cleared");
+assert.equal(sandbox.state.longVideoEpisodeModes["bvid:BV1TEST:p1"], undefined, "Sibling part mode cleared");
+assert.equal(sandbox.state.longVideoEpisodeModes["bvid:BV1TEST:p2"], undefined, "Sibling part mode cleared");
+assert.equal(sandbox.state.longVideoEpisodeModes["bvid:BV2OTHER"], true, "Unrelated BV untouched");
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+
 sandbox.state.episodes = oneMissing;
 const missingDurationDetection = logic.getLongVideoDetection({ duration: 7 * 60 * 60 });
 assert.equal(missingDurationDetection.active, true);
@@ -327,3 +420,4 @@ assert.equal(autoWatchSandbox.state.autoWatchBlockedKey, "1:1:owner", "First obs
 assert.equal(autoWatchSandbox.state.autoWatchLastVideoTime, 5000);
 
 console.log("long-video logic tests passed");
+})().catch((err) => { console.error(err); process.exit(1); });

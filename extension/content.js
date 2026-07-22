@@ -35,7 +35,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.12";
+  const SCRIPT_VERSION = "0.6.15";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -55,7 +55,9 @@
     danmakuFavorites: "biligumi.danmakuFavorites",
     longVideoEpisodeGuess: "biligumi.longVideoEpisodeGuess",
     longVideoEpisodeOffsets: "biligumi.longVideoEpisodeOffsets",
+    longVideoEpisodeVideoOffsets: "biligumi.longVideoEpisodeVideoOffsets",
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
+    disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
     deleteBridge: "biligumi.deleteBridge",
   };
 
@@ -194,7 +196,9 @@
     danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
     longVideoEpisodeGuessEnabled: readValue(STORAGE.longVideoEpisodeGuess, "0") === "1",
     longVideoEpisodeOffsets: readJsonValue(STORAGE.longVideoEpisodeOffsets, {}),
+    longVideoEpisodeVideoOffsets: readJsonValue(STORAGE.longVideoEpisodeVideoOffsets, {}),
     longVideoEpisodeModes: readJsonValue(STORAGE.longVideoEpisodeModes, {}),
+    disabledAutoProgressVideos: readJsonValue(STORAGE.disabledAutoProgressVideos, {}),
     longVideoEpisodeGuess: null,
     longVideoEpisodeRenderKey: "",
     longVideoDetectionCache: null,
@@ -714,14 +718,38 @@
       outline-offset: 1px;
     }
     .biligumi-long-video-hint {
-      margin-bottom: 7px;
-      padding: 6px 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-bottom: 8px;
+      padding: 10px 10px 9px;
       border: 1px dashed #e8a3b2;
-      border-radius: 6px;
+      border-radius: 8px;
       background: #fff7f9;
       color: #925368;
+      font-size: 13px;
+      line-height: 1.45;
+    }
+    .biligumi-long-video-hint-text {
+      min-width: 0;
+    }
+    .biligumi-long-video-hint-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .biligumi-long-video-hint-meta {
+      color: #a06b7a;
       font-size: 12px;
-      line-height: 1.35;
+    }
+    .biligumi-long-video-hint .biligumi-button {
+      min-height: 28px;
+      padding: 3px 10px;
+      margin-left: 0;
+      font-size: 12px;
+      font-weight: 600;
+      vertical-align: middle;
     }
     .biligumi-long-video-bind-prompt {
       border: 1px solid #e8a3b2;
@@ -1173,31 +1201,131 @@
       background: linear-gradient(135deg, #08a9fa 0%, #0cb5ff 42%, #25d5fb 42%, #179deb 100%);
     }
     #${PANEL_ID} .biligumi-progress-edit {
-      display: grid;
-      grid-template-columns: minmax(52px, 64px) auto minmax(72px, 84px);
+      display: flex;
+      flex-wrap: wrap;
       gap: 8px;
       align-items: center;
       margin-top: 8px;
     }
+    #${PANEL_ID} .biligumi-progress-value {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      min-width: 0;
+    }
     #${PANEL_ID} .biligumi-progress-input {
+      width: 48px;
+      max-width: 48px;
       height: 30px;
+      padding: 0 2px;
       border-color: #b6c4d4;
       background: rgba(255,255,255,.75);
+      color: #344252;
+      font-size: 13px;
+      line-height: 30px;
       text-align: center;
+      box-sizing: border-box;
+    }
+    #${PANEL_ID} .biligumi-progress-slash {
+      flex: 0 0 auto;
+      margin: 0 3px 0 2px;
+      color: #344252;
+      font-size: 13px;
+      line-height: 30px;
+      font-weight: 400;
     }
     #${PANEL_ID} .biligumi-progress-total {
+      display: inline-flex;
+      align-items: center;
+      justify-content: flex-start;
+      min-width: 1.6em;
+      height: 30px;
+      padding: 0;
       color: #344252;
+      font-size: 13px;
+      line-height: 30px;
+      font-weight: 400;
+      text-align: left;
+      white-space: nowrap;
+      box-sizing: border-box;
+    }
+    #${PANEL_ID} .biligumi-progress-edit .biligumi-button.primary {
+      width: 48px;
+      min-width: 48px;
+      max-width: 48px;
+      min-height: 30px;
+      height: 30px;
+      padding: 0;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      box-sizing: border-box;
     }
     #${PANEL_ID} .biligumi-episode-head {
       display: flex;
       justify-content: space-between;
       gap: 10px;
       align-items: center;
+      margin-bottom: 2px;
+    }
+    #${PANEL_ID} .biligumi-episode-head > .biligumi-label {
+      margin-bottom: 0;
+      font-size: 15px;
+      font-weight: 400;
+      color: #4b5563;
     }
     #${PANEL_ID} .biligumi-progress-summary {
+      margin-left: auto;
       color: #7b8794;
       font-size: 12px;
       white-space: nowrap;
+      text-align: right;
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode {
+      position: relative;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      width: 112px;
+      height: 28px;
+      flex: 0 0 auto;
+      padding: 2px;
+      border: 1px solid #dfe6ef;
+      border-radius: 999px;
+      background: #f7f8fa;
+      box-shadow: inset 0 1px 2px rgba(48, 62, 77, .08);
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode::before {
+      content: "";
+      position: absolute;
+      top: 2px;
+      bottom: 2px;
+      left: 2px;
+      width: calc(50% - 2px);
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 1px 4px rgba(48, 62, 77, .18);
+      transition: transform .18s ease;
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode.paused::before {
+      transform: translateX(100%);
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode-btn {
+      position: relative;
+      z-index: 1;
+      border: 0;
+      padding: 0;
+      background: transparent;
+      color: #7f8792;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode-btn.active {
+      color: #f0189b;
+    }
+    #${PANEL_ID} .biligumi-auto-progress-mode[data-disabled="1"] {
+      opacity: .55;
+      pointer-events: none;
     }
     #${PANEL_ID} .biligumi-button.primary {
       min-height: 32px;
@@ -2291,7 +2419,9 @@
     state.pageKey = getPageKey();
     state.rawTitle = rawTitle;
     state.pageTitle = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : cleanTitle(seriesTitle || rawTitle);
-    state.currentEpisodeNo = detectCurrentEpisodeNo(rawTitle);
+    state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
+      ? null
+      : detectCurrentEpisodeNo(rawTitle);
     const previewKeyword = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : "";
     if (previewKeyword !== state.nonMainKeyword) {
       state.nonMainKeyword = "";
@@ -3547,6 +3677,9 @@
               <span class="biligumi-threshold-value">首集开始</span>
             </div>
             <div class="biligumi-settings-help">${longVideoContext.ownerKey ? `当前 UP：${escapeHtml(longVideoContext.ownerLabel)}。首集开始时间按 UP 单独保存，可填 02:00:00、120:00 或 120 分钟。` : "暂未识别当前 UP，无法保存专属首集开始时间。"}</div>
+            <div class="biligumi-settings-help">${longVideoContext.videoOffsetSeconds != null
+              ? `本视频已设专属首集起点 ${escapeHtml(formatTimecode(longVideoContext.videoOffsetSeconds))}（优先于 UP 默认）；可在长视频推测提示条里重新取进度或清除。`
+              : "本视频专属首集起点：未设置。启用分集推测后，可在提示条里一键取当前播放进度。"}</div>
             <div class="biligumi-settings-help">默认关闭。关闭时，普通 B站视频超过 2 小时会弹出确认，询问是否为“一个视频内包含多集正片”。勾选后遇到超长视频将不再询问，直接按多集长视频处理并启用分集推测。${escapeHtml(longVideoContext.statusText)}</div>
             <div class="biligumi-settings-help warning">这是基于 Bangumi 分集时长和人工偏移的估算；视频中插入额外片段时可能发生偏移。</div>
           </div>
@@ -3802,6 +3935,19 @@
     `;
   }
 
+  function renderAutoProgressModeToggle() {
+    const key = getCurrentVideoProgressKey();
+    const paused = isCurrentVideoAutoProgressDisabled();
+    const modeClass = paused ? "paused" : "auto";
+    const disabledAttr = key ? "" : ' data-disabled="1"';
+    return `
+      <div class="biligumi-auto-progress-mode ${modeClass}" role="group" aria-label="本视频自动进度追踪"${disabledAttr} title="${key ? "按视频保存：暂停后不自动推测/高亮当前集，也不按进度自动标记看过；手动点集数不受影响" : "当前页面无法识别视频键"}">
+        <button type="button" class="biligumi-auto-progress-mode-btn ${paused ? "" : "active"}" data-action="set-auto-progress-mode" data-mode="auto" title="开启本视频自动进度追踪" ${key ? "" : "disabled"}>自动</button>
+        <button type="button" class="biligumi-auto-progress-mode-btn ${paused ? "active" : ""}" data-action="set-auto-progress-mode" data-mode="paused" title="暂停本视频自动进度追踪" ${key ? "" : "disabled"}>暂停</button>
+      </div>
+    `;
+  }
+
   function renderRatingHistogram() {
     const counts = getRatingCounts();
     const max = Math.max(1, ...counts.map((item) => item.count));
@@ -3905,13 +4051,15 @@
     const episodes = getNormalEpisodes();
     const progress = getProgressInfo();
     const longVideoHint = renderLongVideoEpisodeHint();
+    const autoProgressToggle = renderAutoProgressModeToggle();
     if (!episodes.length) {
       return `
         <div class="biligumi-row">
           <div class="biligumi-episode-head">
             <div class="biligumi-label">我的完成度</div>
-            <span class="biligumi-progress-summary">${escapeHtml(progress.summary)}</span>
+            ${autoProgressToggle}
           </div>
+          <div class="biligumi-progress-summary" style="margin-top:6px;text-align:left">${escapeHtml(progress.summary)}</div>
         </div>
       `;
     }
@@ -3920,7 +4068,7 @@
         ${longVideoHint}
         <div class="biligumi-episode-head">
           <div class="biligumi-label">我的完成度</div>
-          <span class="biligumi-progress-summary">${escapeHtml(progress.summary)}</span>
+          ${autoProgressToggle}
         </div>
         <div class="biligumi-episode-grid">
           ${episodes.map((ep, index) => {
@@ -3933,9 +4081,13 @@
           }).join("")}
         </div>
         <div class="biligumi-progress-edit">
-          <input class="biligumi-progress-input" data-role="progress" type="number" min="0" max="${progress.total}" value="${progress.watched}">
-          <span class="biligumi-progress-total">/ ${progress.total || "??"}</span>
+          <div class="biligumi-progress-value">
+            <input class="biligumi-progress-input" data-role="progress" type="number" min="0" max="${progress.total}" value="${progress.watched}">
+            <span class="biligumi-progress-slash">/</span>
+            <span class="biligumi-progress-total">${escapeHtml(String(progress.total || "??"))}</span>
+          </div>
           <button class="biligumi-button primary" data-action="save-progress">更新</button>
+          <span class="biligumi-progress-summary">${escapeHtml(progress.summary)}</span>
         </div>
       </div>
     `;
@@ -4010,6 +4162,28 @@
     if (action === "toggle-panel") togglePanelCollapsed();
     if (action === "toggle-standalone-search") toggleStandaloneSearchExpanded();
     if (action === "set-score-mode") setScoreDetailMode(target.dataset.mode);
+    if (action === "set-auto-progress-mode") {
+      setCurrentVideoAutoProgressDisabled(target.dataset.mode === "paused").catch(showError);
+    }
+    if (action === "capture-long-video-video-offset") {
+      captureLongVideoVideoOffsetFromPlayer().catch(showError);
+    }
+    if (action === "clear-long-video-video-offset") {
+      clearLongVideoVideoOffset()
+        .then((cleared) => {
+          if (cleared) {
+            state.error = "";
+            state.message = "已清除本视频专属首集开始时间。";
+            if (!isCurrentVideoAutoProgressDisabled()) {
+              const video = getActiveVideoElement();
+              if (video) refreshLongVideoEpisodeGuess(video);
+            }
+            remountSettingsDialog();
+            render();
+          }
+        })
+        .catch(showError);
+    }
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
@@ -5339,6 +5513,7 @@
   }
 
   async function checkAutoWatchProgress() {
+    if (isCurrentVideoAutoProgressDisabled()) return;
     const video = getActiveVideoElement();
     maybeOfferLongVideoAutoIdentify();
     const longVideoGuess = video ? refreshLongVideoEpisodeGuess(video) : null;
@@ -6309,6 +6484,10 @@
   }
 
   function handleAutoWatchSeekEnd(video) {
+    if (isCurrentVideoAutoProgressDisabled()) {
+      state.autoWatchSeekStartTime = null;
+      return;
+    }
     const start = Number(state.autoWatchSeekStartTime);
     const end = Number(video.currentTime);
     state.autoWatchSeekStartTime = null;
@@ -8153,6 +8332,15 @@
   function refreshEpisodeContextIfChanged(seq) {
     if (seq !== episodeContextRefreshSeq) return;
     const rawTitle = getPageTitle();
+    if (isCurrentVideoAutoProgressDisabled()) {
+      if (state.currentEpisodeNo !== null) {
+        state.rawTitle = rawTitle;
+        state.currentEpisodeNo = null;
+        render();
+      }
+      return;
+    }
+    if (getLongVideoEpisodeModeDecision() === true || (state.longVideoEpisodeGuess && state.longVideoEpisodeGuess.active)) return;
     const nextEpisodeNo = detectCurrentEpisodeNo(rawTitle);
     const safeNextEpisodeNo = Number(nextEpisodeNo);
     if (!Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo <= 0) return;
@@ -8318,13 +8506,135 @@
       : normalizeLongVideoOffsetSeconds(stored);
   }
 
+  function getCurrentVideoProgressKey() {
+    if (isOfficialBangumiPage()) {
+      const match = location.pathname.match(/\/bangumi\/play\/ep(\d+)/i);
+      return match ? `bangumi:ep${match[1]}` : "";
+    }
+    return getLongVideoDecisionKey() || "";
+  }
+
+  function isCurrentVideoAutoProgressDisabled() {
+    const map = state.disabledAutoProgressVideos;
+    if (!map || typeof map !== "object") return false;
+    const key = getCurrentVideoProgressKey();
+    if (key && Object.prototype.hasOwnProperty.call(map, key)) return map[key] === true;
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    if (legacyKey && legacyKey !== key && Object.prototype.hasOwnProperty.call(map, legacyKey)) return map[legacyKey] === true;
+    return false;
+  }
+
+  function getLongVideoVideoOffsetSeconds() {
+    if (!state.longVideoEpisodeVideoOffsets || typeof state.longVideoEpisodeVideoOffsets !== "object") return null;
+    const key = getLongVideoDecisionKey();
+    if (key && Object.prototype.hasOwnProperty.call(state.longVideoEpisodeVideoOffsets, key)) {
+      return { key, seconds: normalizeLongVideoOffsetSeconds(state.longVideoEpisodeVideoOffsets[key]) };
+    }
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    if (legacyKey && legacyKey !== key && Object.prototype.hasOwnProperty.call(state.longVideoEpisodeVideoOffsets, legacyKey)) {
+      return { key: legacyKey, seconds: normalizeLongVideoOffsetSeconds(state.longVideoEpisodeVideoOffsets[legacyKey]) };
+    }
+    return null;
+  }
+
+  function getEffectiveLongVideoOffsetSeconds(ownerKey = getLongVideoOwnerKey()) {
+    const videoOffset = getLongVideoVideoOffsetSeconds();
+    if (videoOffset) return videoOffset.seconds;
+    return getLongVideoOffsetSeconds(ownerKey);
+  }
+
+  async function setLongVideoVideoOffsetSeconds(seconds) {
+    const key = getCurrentVideoProgressKey() || getLongVideoDecisionKey();
+    if (!key) return false;
+    const normalized = normalizeLongVideoOffsetSeconds(seconds);
+    state.longVideoEpisodeVideoOffsets = {
+      ...(state.longVideoEpisodeVideoOffsets && typeof state.longVideoEpisodeVideoOffsets === "object" ? state.longVideoEpisodeVideoOffsets : {}),
+      [key]: normalized,
+    };
+    await writeJsonValueAsync(STORAGE.longVideoEpisodeVideoOffsets, state.longVideoEpisodeVideoOffsets);
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    return true;
+  }
+
+  async function clearLongVideoVideoOffset() {
+    const key = getCurrentVideoProgressKey() || getLongVideoDecisionKey();
+    if (!key || !state.longVideoEpisodeVideoOffsets || typeof state.longVideoEpisodeVideoOffsets !== "object") return false;
+    const legacyKey = getLongVideoLegacyDecisionKey();
+    const next = { ...state.longVideoEpisodeVideoOffsets };
+    let changed = false;
+    if (Object.prototype.hasOwnProperty.call(next, key)) { delete next[key]; changed = true; }
+    if (legacyKey && legacyKey !== key && Object.prototype.hasOwnProperty.call(next, legacyKey)) { delete next[legacyKey]; changed = true; }
+    if (!changed) return false;
+    state.longVideoEpisodeVideoOffsets = next;
+    await writeJsonValueAsync(STORAGE.longVideoEpisodeVideoOffsets, state.longVideoEpisodeVideoOffsets);
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    return true;
+  }
+
+  async function captureLongVideoVideoOffsetFromPlayer() {
+    const video = getActiveVideoElement();
+    const currentTime = Number(video && video.currentTime);
+    if (!video || !Number.isFinite(currentTime) || currentTime < 0) {
+      state.error = "找不到播放器进度，请在视频播放页再试。";
+      state.message = "";
+      render();
+      return;
+    }
+    const ok = await setLongVideoVideoOffsetSeconds(currentTime);
+    if (!ok) {
+      state.error = "当前页面无法保存本视频首集开始时间。";
+      state.message = "";
+      render();
+      return;
+    }
+    state.error = "";
+    state.message = `已把本视频首集开始时间设为 ${formatTimecode(currentTime)}。`;
+    if (!isCurrentVideoAutoProgressDisabled()) {
+      refreshLongVideoEpisodeGuess(video);
+    }
+    remountSettingsDialog();
+    render();
+  }
+
+  async function setCurrentVideoAutoProgressDisabled(disabled) {
+    const key = getCurrentVideoProgressKey();
+    if (!key) return;
+    const next = {
+      ...(state.disabledAutoProgressVideos && typeof state.disabledAutoProgressVideos === "object" ? state.disabledAutoProgressVideos : {}),
+    };
+    if (disabled) next[key] = true;
+    else {
+      delete next[key];
+      const legacyKey = getLongVideoLegacyDecisionKey();
+      if (legacyKey && legacyKey !== key) delete next[legacyKey];
+    }
+    state.disabledAutoProgressVideos = next;
+    await writeJsonValueAsync(STORAGE.disabledAutoProgressVideos, state.disabledAutoProgressVideos);
+    state.longVideoDetectionCache = null;
+    resetAutoWatchObservationState();
+    if (disabled) {
+      if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(false);
+      state.currentEpisodeNo = null;
+    } else {
+      state.currentEpisodeNo = detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+      const video = getActiveVideoElement();
+      if (video) refreshLongVideoEpisodeGuess(video);
+    }
+    render();
+  }
+
   function getLongVideoSettingsContext() {
     const ownerKey = getLongVideoOwnerKey();
-    const detection = getLongVideoDetection(getActiveVideoElement(), { ignoreEnabled: true });
+    const detection = getLongVideoDetection(getActiveVideoElement());
+    const videoOffset = getLongVideoVideoOffsetSeconds();
     return {
       ownerKey,
       ownerLabel: getLongVideoOwnerLabel(),
       offsetSeconds: getLongVideoOffsetSeconds(ownerKey),
+      videoKey: getCurrentVideoProgressKey() || getLongVideoDecisionKey() || "",
+      videoOffsetSeconds: videoOffset ? videoOffset.seconds : null,
       statusText: ` 当前检测：${detection.reason}`,
     };
   }
@@ -8422,14 +8732,20 @@
     if (!key) return;
     const next = { ...state.longVideoEpisodeModes };
     delete next[key];
-    if (legacyKey && legacyKey !== key) delete next[legacyKey];
+    if (legacyKey) {
+      delete next[legacyKey];
+      const partPrefix = `${legacyKey}:p`;
+      for (const k of Object.keys(next)) {
+        if (k.startsWith(partPrefix)) delete next[k];
+      }
+    }
     state.longVideoEpisodeModes = next;
     await writeJsonValueAsync(STORAGE.longVideoEpisodeModes, state.longVideoEpisodeModes);
     state.longVideoDetectionCache = null;
     resetAutoWatchObservationState();
   }
 
-  function getLongVideoDetection(video, options = {}) {
+  function getLongVideoDetection(video) {
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
     const duration = getLongVideoDurationSeconds(video);
     if (!Number.isFinite(duration) || duration <= 0) return { active: false, reason: "正在等待播放器时长。" };
@@ -8445,7 +8761,7 @@
     let episodes = segment.episodes;
     const minimumEpisodes = segment.rangeApplied ? 1 : 4;
     if (episodes.length < minimumEpisodes) return { active: false, reason: `Bangumi 可用正片章节少于 ${minimumEpisodes} 集。` };
-    const startOffset = getLongVideoOffsetSeconds(ownerKey);
+    const startOffset = getEffectiveLongVideoOffsetSeconds(ownerKey);
     let timeline = buildLongVideoEpisodeTimeline(episodes, startOffset, segment.firstEpisodeNo);
     let rangeTimingMismatch = segment.rangeApplied && duration - timeline.endTime > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS;
     if (rangeTimingMismatch && episodes.length < allEpisodes.length) {
@@ -8550,8 +8866,12 @@
   }
 
   function refreshLongVideoEpisodeGuess(video) {
+    if (isCurrentVideoAutoProgressDisabled()) {
+      if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(true);
+      return null;
+    }
     const decision = getLongVideoEpisodeModeDecision();
-    const detectionCacheKey = `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}|${state.episodes.length}|${Math.round(getLongVideoDurationSeconds(video))}|${decision}`;
+    const detectionCacheKey = `${state.pageKey}|${getLongVideoPartCacheKey()}|${state.subjectId || 0}|${state.episodes.length}|${Math.round(getLongVideoDurationSeconds(video))}|${decision}|${getEffectiveLongVideoOffsetSeconds()}`;
     const cachedDetection = state.longVideoDetectionCache;
     const detection = cachedDetection && cachedDetection.key === detectionCacheKey
       ? cachedDetection.value
@@ -8581,26 +8901,42 @@
     state.longVideoEpisodeRenderKey = "";
     state.longVideoDetectionCache = null;
     resetAutoWatchObservationState();
-    state.currentEpisodeNo = detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+    state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
+      ? null
+      : detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
     if (shouldRender && hadGuess) render();
+  }
+
+  function renderLongVideoOffsetActions() {
+    const videoOffset = getLongVideoVideoOffsetSeconds();
+    const canCapture = Boolean(getCurrentVideoProgressKey() || getLongVideoDecisionKey());
+    const captureButton = `<button type="button" class="biligumi-button" data-action="capture-long-video-video-offset" ${canCapture ? "" : "disabled"} title="把当前播放进度设为本视频首集起点">取当前进度为首集起点</button>`;
+    const meta = videoOffset
+      ? `<span class="biligumi-long-video-hint-meta">本视频起点 ${escapeHtml(formatTimecode(videoOffset.seconds))}</span>
+         <button type="button" class="biligumi-button" data-action="clear-long-video-video-offset" title="清除本视频专属首集起点">清除</button>`
+      : "";
+    return `<div class="biligumi-long-video-hint-actions">${captureButton}${meta}</div>`;
   }
 
   function renderLongVideoEpisodeHint() {
     const guess = state.longVideoEpisodeGuess;
     if (!guess || !guess.active) return "";
+    const actions = renderLongVideoOffsetActions();
+    let text = "";
     if (guess.stage === "prelude") {
-      return `<div class="biligumi-long-video-hint">实验推测：正片尚未开始；当前 UP 的首集起点为 ${escapeHtml(formatTimecode(guess.timeline.startTime))}。</div>`;
+      text = `实验推测：正片尚未开始；当前起点为 ${escapeHtml(formatTimecode(guess.timeline.startTime))}。`;
+    } else if (guess.stage === "outro") {
+      text = "实验推测：全季正片已播放完，当前可能是结尾防审核片段。";
+    } else {
+      const name = String(guess.episode && (guess.episode.name_cn || guess.episode.name) || "").trim();
+      const segment = guess.segment || {};
+      const partNote = segment.rangeApplied
+        ? ` · 分P ${escapeHtml(segment.rangeLabel || segment.part?.title || "")}`
+        : (segment.rangeFallback ? ` · ${escapeHtml(segment.rangeLabel || "分P范围")} 无法与条目对应，已按整季估算` : "");
+      const safety = guess.autoMarkSafe ? "" : " · 仅显示推测，不会自动标记";
+      text = `实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${safety}`;
     }
-    if (guess.stage === "outro") {
-      return '<div class="biligumi-long-video-hint">实验推测：全季正片已播放完，当前可能是结尾防审核片段。</div>';
-    }
-    const name = String(guess.episode && (guess.episode.name_cn || guess.episode.name) || "").trim();
-    const segment = guess.segment || {};
-    const partNote = segment.rangeApplied
-      ? ` · 分P ${escapeHtml(segment.rangeLabel || segment.part?.title || "")}`
-      : (segment.rangeFallback ? ` · ${escapeHtml(segment.rangeLabel || "分P范围")} 无法与条目对应，已按整季估算` : "");
-    const safety = guess.autoMarkSafe ? "" : " · 仅显示推测，不会自动标记";
-    return `<div class="biligumi-long-video-hint">实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${safety}</div>`;
+    return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">${text}</div>${actions}</div>`;
   }
 
   function parseTimecode(value) {
