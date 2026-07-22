@@ -694,11 +694,12 @@
     .biligumi-episode {
       height: 26px;
       border: 1px solid #c8ddff;
-      border-radius: 5px;
+      border-radius: 6px;
       background: #edf5ff;
       color: #1167d8;
       cursor: pointer;
       font-size: 12px;
+      transition: background .14s ease, border-color .14s ease, color .14s ease;
     }
     .biligumi-episode:hover {
       border-color: #77adff;
@@ -818,6 +819,9 @@
       background: var(--bgm-soft);
       min-width: 0;
     }
+    .biligumi-result:hover {
+      border-color: #f0c2cc;
+    }
     .biligumi-result img {
       width: 44px;
       height: 58px;
@@ -868,6 +872,9 @@
       border-radius: 6px;
       background: var(--bgm-soft);
       min-width: 0;
+    }
+    .biligumi-lite-result:hover {
+      border-color: #f0c2cc;
     }
     .biligumi-lite-cover {
       width: 38px;
@@ -945,12 +952,14 @@
     .biligumi-notice {
       margin-top: 10px;
       padding: 8px 9px;
-      border-radius: 6px;
+      border: 1px solid #f0dfae;
+      border-radius: 8px;
       background: #fff8e7;
       color: #8a6200;
       font-size: 12px;
     }
     .biligumi-notice.error {
+      border-color: #f3c4cd;
       background: #fff0f2;
       color: #bd2441;
     }
@@ -980,7 +989,7 @@
       border-radius: 14px;
       background: #fff;
       color: #5f6f80;
-      box-shadow: 0 8px 20px rgba(52, 64, 84, .12);
+      box-shadow: 0 10px 24px rgba(52, 64, 84, .14);
       font-family: Arial, "Microsoft YaHei", sans-serif;
     }
     #${PANEL_ID}.biligumi-panel-under-bili-overlay {
@@ -988,15 +997,15 @@
     }
     #${PANEL_ID} .biligumi-head {
       margin: 0;
-      padding: 12px 14px 10px;
+      padding: 12px 14px 11px;
       background: linear-gradient(#f7f7f7, var(--bgm-card-blue-top));
       border-bottom: 1px solid #e2e5e8;
       cursor: pointer;
     }
     #${PANEL_ID} .biligumi-title {
       font-size: 15px;
-      font-weight: 400;
-      color: #596a7a;
+      font-weight: 650;
+      color: #4f6072;
     }
     #${PANEL_ID} .biligumi-actions {
       cursor: default;
@@ -1008,10 +1017,16 @@
       line-height: 22px;
       padding: 0 6px;
       border-color: rgba(131, 161, 194, .55);
-      border-radius: 5px;
+      border-radius: 6px;
       background: rgba(255, 255, 255, .48);
       color: #4a789d;
       font-size: 13px;
+      transition: background .16s ease, border-color .16s ease, color .16s ease;
+    }
+    #${PANEL_ID} .biligumi-icon-btn:hover {
+      border-color: #86add7;
+      background: #edf5ff;
+      color: #2274b8;
     }
     #${PANEL_ID} .biligumi-card-body {
       padding: 10px 14px 14px;
@@ -1049,6 +1064,10 @@
       color: var(--bgm-link);
       cursor: pointer;
       font-size: 13px;
+    }
+    #${PANEL_ID} .biligumi-current button:hover {
+      color: #0f6aad;
+      text-decoration: underline;
     }
     #${PANEL_ID} .biligumi-current-meta {
       color: #7b8794;
@@ -1120,6 +1139,7 @@
       color: #596a7a;
       cursor: pointer;
       font-size: 14px;
+      transition: background .16s ease, color .16s ease;
     }
     #${PANEL_ID} .biligumi-collection-box button:first-child {
       border-left: 0;
@@ -1189,7 +1209,7 @@
     }
     #${PANEL_ID} .biligumi-progress-bar {
       height: 28px;
-      border: 1px solid #aab8c8;
+      border: 1px solid #c3cedd;
       border-radius: 5px;
       background: rgba(255,255,255,.58);
     }
@@ -1492,6 +1512,7 @@
       font-weight: 700;
       letter-spacing: 0;
       white-space: nowrap;
+      transition: background .16s ease, border-color .16s ease, color .16s ease;
     }
     #${PANEL_ID} .biligumi-search-button:hover {
       border-color: #c86986;
@@ -1666,6 +1687,11 @@
     #${SETTINGS_ID} .biligumi-settings-field input {
       height: 34px;
       padding: 4px 9px;
+    }
+    #${SETTINGS_ID} .biligumi-settings-field input:not([type="checkbox"]):not([type="range"]):focus,
+    #${SETTINGS_ID} .biligumi-settings-field textarea:focus {
+      border-color: #e6a0b3;
+      box-shadow: 0 0 0 2px rgba(234, 143, 163, .16);
     }
     /* Keep this a text field so Chrome does not treat the page as a login form. */
     #${SETTINGS_ID} .biligumi-secret-input {
@@ -1901,7 +1927,9 @@
       justify-content: flex-start;
       align-items: center;
       gap: 10px;
-      padding: 12px;
+      padding: 12px 16px 14px;
+      border-top: 1px solid #eceff2;
+      background: linear-gradient(#fbfbfb, #f5f5f5);
     }
     #${SETTINGS_ID} .biligumi-collection-dialog .biligumi-settings-actions .biligumi-edit-private {
       order: 2;
@@ -1926,6 +1954,11 @@
       gap: 4px;
       margin: 0;
       font-size: 14px;
+      cursor: pointer;
+    }
+    #${SETTINGS_ID} .biligumi-edit-types input,
+    #${SETTINGS_ID} .biligumi-edit-private input {
+      accent-color: #e68aa2;
     }
     #${SETTINGS_ID} .biligumi-edit-stars {
       display: flex;
@@ -1940,6 +1973,7 @@
       cursor: pointer;
       font-size: 22px;
       line-height: 1.1;
+      transition: color .12s ease, transform .12s ease;
     }
     #${SETTINGS_ID} .biligumi-edit-stars .biligumi-rate-clear {
       flex: 0 0 auto;
@@ -1982,6 +2016,7 @@
       color: #5f6f80;
       cursor: pointer;
       font-size: 12px;
+      transition: background .14s ease, color .14s ease;
     }
     #${SETTINGS_ID} .biligumi-tag-pill:hover,
     #${SETTINGS_ID} .biligumi-tag-pill.selected {
@@ -1989,7 +2024,7 @@
       color: #1489d4;
     }
     #${SETTINGS_ID} .biligumi-edit-row {
-      padding: 12px;
+      padding: 14px 16px;
     }
     #${SETTINGS_ID} .biligumi-edit-row + .biligumi-edit-row {
       border-top: 1px solid #e2e5e8;
@@ -2023,6 +2058,12 @@
       border-radius: 999px;
       background: #ea8fa3;
       font-size: 18px;
+      transition: background .16s ease, border-color .16s ease, box-shadow .16s ease;
+    }
+    #${SETTINGS_ID} .biligumi-collection-dialog .biligumi-button.primary:hover {
+      border-color: #df7a93;
+      background: #df7a93;
+      box-shadow: 0 4px 12px rgba(190, 75, 101, .22);
     }
     @media (max-width: 620px) {
       #${SETTINGS_ID} .biligumi-settings-body {
