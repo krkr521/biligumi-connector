@@ -27,6 +27,7 @@
   const DELETE_BRIDGE_PARAM = "biligumi_delete_bridge";
   const DELETE_BRIDGE_TTL_MS = 5 * 60 * 1000;
   const DELETE_BRIDGE_POLL_MS = 400;
+  const DELETE_BRIDGE_GRACE_MS = 60 * 1000;
   const PANEL_ID = "biligumi-connector-panel";
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
@@ -2496,6 +2497,7 @@
   let characterStripSyncTimer = 0;
   let injectRetryTimer = 0;
   let autoWatchTimeupdateLastRunAt = 0;
+  let longVideoAutoAcceptInFlight = false;
 
   init();
 
@@ -4893,7 +4895,11 @@
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
     const readiness = getLongVideoBindReadiness(video);
     if (readiness.action === "auto") {
-      applyLongVideoAutoAccept(state.subjectId, capturePageContext(), "identify").catch(showError);
+      if (longVideoAutoAcceptInFlight) return false;
+      longVideoAutoAcceptInFlight = true;
+      applyLongVideoAutoAccept(state.subjectId, capturePageContext(), "identify")
+        .catch(showError)
+        .finally(() => { longVideoAutoAcceptInFlight = false; });
       return true;
     }
     if (readiness.action === "prompt") {
@@ -5549,12 +5555,14 @@
     }
 
     let loginNoticeShown = false;
+    let lastStatus = "pending";
     try {
       while (Date.now() - createdAt <= DELETE_BRIDGE_TTL_MS) {
         const current = readJsonValue(STORAGE.deleteBridge, null);
         if (!current || current.nonce !== nonce) {
           throw new Error("Bangumi 删除任务已被替换或取消，请重试。");
         }
+        lastStatus = String(current.status || "");
         if (current.status === "success") return;
         if (current.status === "error") {
           throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
@@ -5567,6 +5575,22 @@
           render();
         }
         await sleep(DELETE_BRIDGE_POLL_MS);
+      }
+      // TTL reached. If the bridge was mid-processing, grant a short grace
+      // window for a terminal success/error before declaring failure — a real
+      // server-side delete may still be in flight and could land just after.
+      if (lastStatus === "processing") {
+        const graceDeadline = Date.now() + DELETE_BRIDGE_GRACE_MS;
+        while (Date.now() <= graceDeadline) {
+          const current = readJsonValue(STORAGE.deleteBridge, null);
+          if (current && current.nonce === nonce) {
+            if (current.status === "success") return;
+            if (current.status === "error") {
+              throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
+            }
+          }
+          await sleep(DELETE_BRIDGE_POLL_MS);
+        }
       }
       throw new Error("等待 Bangumi 登录或删除结果超时，请重新点击删除后再试。");
     } finally {
@@ -5652,19 +5676,19 @@
       // waiting until the TTL. Leave "processing"/"success" tasks untouched —
       // another bridge tab is handling or has already completed them.
       if (task && task.nonce === nonce && !["processing", "success"].includes(String(task.status))) {
-        updateDeleteBridgeTask(task, { status: "error", errorCode: "task-invalid", completedAt: Date.now() });
+        await updateDeleteBridgeTask(task, { status: "error", errorCode: "task-invalid", completedAt: Date.now() });
       }
       return;
     }
     if (Date.now() - Number(task.createdAt) > DELETE_BRIDGE_TTL_MS) {
-      updateDeleteBridgeTask(task, { status: "error", errorCode: "task-expired", completedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "task-expired", completedAt: Date.now() });
       return;
     }
 
     const pageHtml = document.documentElement.outerHTML;
     const webUsername = parseBangumiWebUsername(pageHtml);
     if (!webUsername) {
-      updateDeleteBridgeTask(task, { status: "awaiting-login", loginRequestedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "awaiting-login", loginRequestedAt: Date.now() });
       // Pass the full subject URL (with the bridge nonce) as the return target so
       // Bangumi redirects back here after login even if the Referer header is stripped.
       const returnUrl = `${location.pathname}${location.search}`;
@@ -5672,7 +5696,7 @@
       return;
     }
     if (webUsername !== String(task.expectedUsername || "")) {
-      updateDeleteBridgeTask(task, {
+      await updateDeleteBridgeTask(task, {
         status: "error",
         errorCode: "account-mismatch",
         actualUsername: webUsername,
@@ -5683,11 +5707,11 @@
 
     const gh = parseSubjectRemoveHash(pageHtml, subjectId);
     if (!gh) {
-      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-token-missing", completedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-token-missing", completedAt: Date.now() });
       return;
     }
 
-    updateDeleteBridgeTask(task, { status: "processing", processingAt: Date.now() });
+    await updateDeleteBridgeTask(task, { status: "processing", processingAt: Date.now() });
     let response;
     try {
       response = await fetch(`/subject/${subjectId}/remove?gh=${encodeURIComponent(gh)}`, {
@@ -5697,11 +5721,11 @@
         cache: "no-store",
       });
     } catch (_) {
-      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
       return;
     }
     if (!response.ok) {
-      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
       return;
     }
     const responseHtml = await response.text();
@@ -5709,11 +5733,36 @@
       parseBangumiWebUsername(responseHtml) !== webUsername
       || parseSubjectRemoveHash(responseHtml, subjectId)
     ) {
-      updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
       return;
     }
 
-    updateDeleteBridgeTask(task, { status: "success", completedAt: Date.now() });
+    // "200 + still logged in + no remove link" is necessary but not sufficient:
+    // a soft-fail/error template can also lack the remove link. Positively
+    // confirm the collection is gone by re-fetching the subject page fresh and
+    // verifying it no longer exposes the collect-remove hash for this subject.
+    let verified = false;
+    try {
+      const verifyResponse = await fetch(`/subject/${subjectId}`, {
+        method: "GET",
+        credentials: "same-origin",
+        redirect: "follow",
+        cache: "no-store",
+      });
+      if (verifyResponse.ok) {
+        const verifyHtml = await verifyResponse.text();
+        verified = parseBangumiWebUsername(verifyHtml) === webUsername
+          && !parseSubjectRemoveHash(verifyHtml, subjectId);
+      }
+    } catch (_) {
+      verified = false;
+    }
+    if (!verified) {
+      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
+      return;
+    }
+
+    await updateDeleteBridgeTask(task, { status: "success", completedAt: Date.now() });
     window.setTimeout(closeBangumiDeleteBridgeTab, 250);
   }
 
@@ -5729,18 +5778,20 @@
     );
   }
 
-  function updateDeleteBridgeTask(task, patch) {
+  async function updateDeleteBridgeTask(task, patch) {
     const current = readJsonValue(STORAGE.deleteBridge, null);
     if (!current || current.nonce !== task.nonce) return false;
-    writeJsonValue(STORAGE.deleteBridge, { ...current, ...patch });
+    // Await the flush so terminal status writes land before the bridge page
+    // navigates (login redirect) or closes itself.
+    await writeJsonValueAsync(STORAGE.deleteBridge, { ...current, ...patch });
     return true;
   }
 
-  function failBangumiDeleteBridgeFromPage(errorCode) {
+  async function failBangumiDeleteBridgeFromPage(errorCode) {
     const nonce = new URLSearchParams(location.search).get(DELETE_BRIDGE_PARAM) || "";
     const task = readJsonValue(STORAGE.deleteBridge, null);
     if (!task || task.nonce !== nonce || !isActiveDeleteBridgeTask(task)) return;
-    updateDeleteBridgeTask(task, { status: "error", errorCode, completedAt: Date.now() });
+    await updateDeleteBridgeTask(task, { status: "error", errorCode, completedAt: Date.now() });
   }
 
   function closeBangumiDeleteBridgeTab() {
@@ -7037,16 +7088,14 @@
     const nextLongVideoEpisodeGuessEnabled = Boolean(longVideoEpisodeGuessInput && longVideoEpisodeGuessInput.checked);
     const longVideoContext = getLongVideoSettingsContext();
     if (longVideoOffsetInput) longVideoOffsetInput.setCustomValidity("");
-    const nextLongVideoOffsetSeconds = parseTimecode(longVideoOffsetInput && longVideoOffsetInput.value);
-    if (longVideoContext.ownerKey && nextLongVideoOffsetSeconds === null) {
-      const message = "首集开始时间格式无效，请填写 02:00:00、120:00 或 120 分钟。";
-      if (longVideoOffsetInput) {
-        longVideoOffsetInput.setCustomValidity(message);
-        longVideoOffsetInput.reportValidity();
-        longVideoOffsetInput.focus();
-      }
-      return false;
-    }
+    const parsedOffsetSeconds = parseTimecode(longVideoOffsetInput && longVideoOffsetInput.value);
+    const offsetIsInvalid = Boolean(longVideoContext.ownerKey) && parsedOffsetSeconds === null;
+    // An invalid/mid-edit offset must not abort the rest of the dialog save.
+    // Fall back to the previously stored offset so we neither clobber it with the
+    // default nor drop unrelated settings (checkboxes, token, threshold, ...).
+    const nextLongVideoOffsetSeconds = offsetIsInvalid
+      ? normalizeLongVideoOffsetSeconds(state.longVideoEpisodeOffsets[longVideoContext.ownerKey])
+      : normalizeLongVideoOffsetSeconds(parsedOffsetSeconds);
     const nextAutoWatchThreshold = normalizeAutoWatchThreshold(autoWatchThresholdInput && autoWatchThresholdInput.value);
     const nextOpedSkipEnabled = Boolean(opedSkipEnabledInput && opedSkipEnabledInput.checked);
     const nextOpedSkipSeconds = normalizeOpedSkipSeconds(opedSkipSecondsInput && opedSkipSecondsInput.value);
@@ -7207,6 +7256,7 @@
     state.username = "";
     state.collection = null;
     state.episodeCollections = [];
+    state.pendingCollection = null;
     pendingRequests.clear();
     state.autoWatchAuthBlocked = false;
     writeValue(STORAGE.token, "");
@@ -7356,6 +7406,20 @@
     wrapper.addEventListener("pointerdown", handleModalPointerDown, true);
     wrapper.addEventListener("pointerup", handleModalPointerUp, true);
 
+    // Bubble-phase Escape-to-close (settings/collection). Runs after inner
+    // capture-phase handlers (e.g. OP/ED hotkey input clears on Escape and
+    // stops propagation), so those keep their behavior.
+    wrapper.addEventListener("keydown", (event) => {
+      if (event.key !== "Escape") return;
+      if (state.collectionEditorOpen) {
+        event.stopPropagation();
+        closeCollectionEditor();
+      } else if (state.settingsOpen) {
+        event.stopPropagation();
+        closeSettings();
+      }
+    });
+
     const editStars = wrapper.querySelector("[data-role='edit-rate-stars']");
     if (editStars) {
       editStars.addEventListener("mouseover", (event) => {
@@ -7453,8 +7517,19 @@
 
     const longVideoOffsetInput = wrapper.querySelector("[data-role='settings-long-video-offset']");
     if (longVideoOffsetInput) {
-      longVideoOffsetInput.addEventListener("change", autoSave);
-      longVideoOffsetInput.addEventListener("blur", autoSave);
+      const handleLongVideoOffset = () => {
+        const ctx = getLongVideoSettingsContext();
+        const parsed = parseTimecode(longVideoOffsetInput.value);
+        if (ctx.ownerKey && parsed === null) {
+          longVideoOffsetInput.setCustomValidity("首集开始时间格式无效，请填写 02:00:00、120:00 或 120 分钟。");
+          longVideoOffsetInput.reportValidity();
+        } else {
+          longVideoOffsetInput.setCustomValidity("");
+        }
+        applySettingsFromDialog();
+      };
+      longVideoOffsetInput.addEventListener("change", handleLongVideoOffset);
+      longVideoOffsetInput.addEventListener("blur", handleLongVideoOffset);
     }
   }
 
@@ -9839,16 +9914,21 @@
   function readValue(key, fallback) {
     try {
       return GM_getValue(key, fallback);
-    } catch (_) {
-      return localStorage.getItem(key) || fallback;
+    } catch (_error) {
+      // Never fall back to page localStorage: it is readable by any script on
+      // the host page and could leak the Access Token. Fail closed instead.
+      return fallback;
     }
   }
 
   function writeValue(key, value) {
     try {
       GM_setValue(key, value);
-    } catch (_) {
-      localStorage.setItem(key, value);
+    } catch (_error) {
+      // Never fall back to page localStorage (token/binding leakage). Fail
+      // closed so the caller surfaces broken storage instead of silently
+      // persisting secrets to origin-readable storage.
+      throw new Error("油猴存储不可用，无法保存设置。请确认脚本管理器（Tampermonkey/Violentmonkey）已启用。");
     }
   }
 

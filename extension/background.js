@@ -158,7 +158,11 @@
       headers,
       body: request && request.data != null ? String(request.data) : undefined,
       responseType: String(request && request.responseType || ""),
-      credentials: request && request.withCredentials ? "include" : "omit",
+    // Defense-in-depth: only GET requests may carry cookies (the credentialed
+    // caller is bgmWebRequest, a GET HTML scrape). Mutating methods are proxied
+    // cookie-less so a future bug/compromise cannot perform cookie-authenticated
+    // state changes through this proxy.
+    credentials: request && request.withCredentials && method === "GET" ? "include" : "omit",
       timeout: Math.max(1000, Math.min(120000, Number(request && request.timeout) || 30000)),
     };
   }
@@ -166,10 +170,12 @@
   function isAllowedHttpUrl(url) {
     try {
       const parsed = new URL(url);
+      // api.bgm.tv (token API) and bgm.tv (HTML scrape) are the only real proxy
+      // targets. www.bilibili.com was dead surface that widened the credentialed
+      // blast radius without any caller; it has been removed.
       return parsed.protocol === "https:" && (
         parsed.hostname === "api.bgm.tv"
         || parsed.hostname === "bgm.tv"
-        || parsed.hostname === "www.bilibili.com"
       );
     } catch (_error) {
       return false;
