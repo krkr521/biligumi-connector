@@ -35,7 +35,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.6.15";
+  const SCRIPT_VERSION = "0.6.16";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -147,6 +147,8 @@
   let danmakuRepeatBusy = false;
   let danmakuRepeatUnlockTimer = 0;
   let lastDanmakuRepeatActionAt = 0;
+
+  const panelLoadProgress = { total: 0, done: 0, label: "", loadId: 0 };
 
   const state = {
     pageKey: "",
@@ -1557,6 +1559,67 @@
       background: #fff;
       color: #7b8794;
     }
+    #${PANEL_ID} .biligumi-progress-slot {
+      height: 4px;
+      background: transparent;
+      overflow: hidden;
+    }
+    #${PANEL_ID} .biligumi-load-bar {
+      height: 100%;
+      width: 0;
+      background: linear-gradient(90deg, #f4a7b9, #e9829a);
+      opacity: 0;
+      transition: width .35s ease, opacity .25s ease;
+    }
+    #${PANEL_ID} .biligumi-progress-slot.active .biligumi-load-bar {
+      opacity: 1;
+    }
+    #${PANEL_ID} .biligumi-progress-slot.indeterminate .biligumi-load-bar {
+      width: 38% !important;
+      transition: opacity .25s ease;
+      animation: biligumi-progress-indeterminate 1.15s ease-in-out infinite;
+    }
+    @keyframes biligumi-progress-indeterminate {
+      0% { transform: translateX(-110%); }
+      100% { transform: translateX(280%); }
+    }
+    #${PANEL_ID} .biligumi-loading-skeleton {
+      display: grid;
+      gap: 10px;
+      padding: 12px 14px 6px;
+    }
+    #${PANEL_ID} .biligumi-skel-block {
+      border-radius: 6px;
+      background: linear-gradient(90deg, #edf0f3 25%, #e0e6ec 50%, #edf0f3 75%);
+      background-size: 200% 100%;
+      animation: biligumi-skel-shimmer 1.4s linear infinite;
+    }
+    @keyframes biligumi-skel-shimmer {
+      0% { background-position: 180% 0; }
+      100% { background-position: -20% 0; }
+    }
+    #${PANEL_ID} .biligumi-skel-line { height: 14px; }
+    #${PANEL_ID} .biligumi-skel-line.w-60 { width: 62%; }
+    #${PANEL_ID} .biligumi-skel-line.w-40 { width: 44%; }
+    #${PANEL_ID} .biligumi-skel-buttons { height: 30px; width: 86%; }
+    #${PANEL_ID} .biligumi-skel-stars { height: 26px; width: 78%; }
+    #${PANEL_ID} .biligumi-skel-grid {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+    }
+    #${PANEL_ID} .biligumi-skel-ep { height: 26px; }
+    #${PANEL_ID} .biligumi-skel-score { height: 200px; margin-top: 4px; }
+    #${PANEL_ID} .biligumi-loading-skeleton:not(.with-token) .biligumi-skel-buttons,
+    #${PANEL_ID} .biligumi-loading-skeleton:not(.with-token) .biligumi-skel-stars,
+    #${PANEL_ID} .biligumi-loading-skeleton:not(.with-token) .biligumi-skel-grid {
+      display: none;
+    }
+    #${PANEL_ID} .biligumi-skel-note {
+      padding: 2px 0 8px;
+      color: #9aa7b4;
+      font-size: 12px;
+    }
     #${PANEL_ID}.biligumi-panel-collapsed {
       background: #fff;
     }
@@ -2752,8 +2815,8 @@
     panel.style.width = `${Math.round(rightRect.width)}px`;
     panel.style.right = "auto";
 
-    const reserve = Math.ceil(panel.getBoundingClientRect().height + 24);
-    reserveLayoutSpace(layoutAnchor, reserve);
+    const measuredReserve = Math.ceil(panel.getBoundingClientRect().height + 24);
+    reserveLayoutSpace(layoutAnchor, stabilizePanelReserve(panel, measuredReserve));
   }
 
   function hasOverlappingBiliMusicOverlay(rightColumn) {
@@ -2807,6 +2870,7 @@
   }
 
   function clearReservedLayoutSpace() {
+    window.__biligumiStableReserve = 0;
     const previous = window.__biligumiReservedLayoutTarget;
     if (!previous) return;
     previous.style.marginBottom = "";
@@ -2857,7 +2921,7 @@
       removeCharacterStrip();
       const nonMainKeyword = getNonMainPreviewKeyword();
       const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt;
-      panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}`;
+      panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
       panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
       layoutPanelWithoutOwningBiliDom();
@@ -2866,7 +2930,7 @@
       return;
     }
 
-    panel.className = `biligumi-panel${state.panelCollapsed ? " biligumi-panel-collapsed" : ""}`;
+    panel.className = `biligumi-panel${state.panelCollapsed ? " biligumi-panel-collapsed" : ""}${isPanelLoadActive() ? " biligumi-panel-loading" : ""}`;
     const progress = getProgressInfo();
     const safeSubjectId = Number(state.subjectId) || 0;
     const bangumiUrl = safeSubjectId ? `${BGM_WEB_BASE}/subject/${safeSubjectId}` : `${BGM_WEB_BASE}/`;
@@ -2898,6 +2962,7 @@
 
     panel.innerHTML = `
       ${headerHtml}
+      ${renderPanelProgressSlot()}
       ${renderSearchOrSubject()}
       ${state.message ? `<div class="biligumi-notice">${escapeHtml(state.message)}</div>` : ""}
       ${state.error ? `<div class="biligumi-notice error">${escapeHtml(state.error)}</div>` : ""}
@@ -3516,6 +3581,9 @@
 
   function renderSearchOrSubject() {
     if (!state.subjectId || !state.subject) {
+      if (state.subjectId && !state.error) {
+        return renderSubjectLoadingSkeleton();
+      }
       return `
         <div class="biligumi-search-pane">
           <div class="biligumi-row">
@@ -3580,6 +3648,7 @@
           <button class="biligumi-icon-btn" data-action="settings" title="设置 Access Token / 白名单">⚙</button>
         </div>
       </div>
+      ${renderPanelProgressSlot()}
       <div class="biligumi-collapsed-note">${escapeHtml(getWhitelistHint())}</div>
       ${body}
     `;
@@ -4963,31 +5032,43 @@
 
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot) {
     setBusy("正在读取 Bangumi 数据...");
-    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
-    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-    const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-      bgmRequest(`/v0/subjects/${subjectId}`),
-      bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }),
-      loadSubjectCharacters(subjectId),
-      collectionPath ? bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }) : Promise.resolve(null),
-      tokenSnapshot ? bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }) : Promise.resolve(null),
-    ]);
-    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-    state.subject = subject;
-    await rememberBindingSubject(subject);
-    state.subjectInfoLinks = {};
-    state.subjectInfoWebRows = [];
-    state.episodes = episodes.data || [];
-    state.longVideoDetectionCache = null;
-    state.characters = charactersResult.characters;
-    state.characterError = charactersResult.error;
-    state.collection = mergePendingCollection(collection);
-    state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
-    state.message = state.token ? "已同步 Bangumi 数据。" : "未设置 Access Token，只能查看公开条目信息。";
-    state.error = "";
-    state.busy = false;
-    render();
-    refreshSubjectInfoLinksInBackground(subjectId);
+    let loadId = 0;
+    try {
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
+      loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
+      if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
+      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
+        advancePanelLoad(label, loadId);
+        return value;
+      });
+      const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+      ]);
+      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      state.subject = subject;
+      await rememberBindingSubject(subject);
+      state.subjectInfoLinks = {};
+      state.subjectInfoWebRows = [];
+      state.episodes = episodes.data || [];
+      state.longVideoDetectionCache = null;
+      state.characters = charactersResult.characters;
+      state.characterError = charactersResult.error;
+      state.collection = mergePendingCollection(collection);
+      state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
+      state.message = state.token ? "已同步 Bangumi 数据。" : "未设置 Access Token，只能查看公开条目信息。";
+      state.error = "";
+      state.busy = false;
+      render();
+      refreshSubjectInfoLinksInBackground(subjectId);
+    } finally {
+      finishPanelLoad(loadId);
+    }
   }
 
   async function loadSubjectBundlePreservingLocal(localCollection) {
@@ -4995,34 +5076,46 @@
     if (!state.subjectId) return;
     const subjectId = Number(state.subjectId);
     const tokenSnapshot = state.token || "";
-    const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
-    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-    const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-      bgmRequest(`/v0/subjects/${subjectId}`),
-      bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }),
-      loadSubjectCharacters(subjectId),
-      collectionPath ? bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }) : Promise.resolve(null),
-      tokenSnapshot ? bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }) : Promise.resolve(null),
-    ]);
-    if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-    state.subject = subject;
-    await rememberBindingSubject(subject);
-    state.subjectInfoLinks = {};
-    state.subjectInfoWebRows = [];
-    state.episodes = episodes.data || [];
-    state.longVideoDetectionCache = null;
-    state.characters = charactersResult.characters;
-    state.characterError = charactersResult.error;
-    state.collection = mergePendingCollection(collection);
-    state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
-    if (optimistic && (!state.collection || Number(state.collection.rate || 0) !== Number(optimistic.rate || 0))) {
-      state.collection = { ...(state.collection || {}), ...optimistic };
+    let loadId = 0;
+    try {
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
+      loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
+      if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
+      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
+        advancePanelLoad(label, loadId);
+        return value;
+      });
+      const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+      ]);
+      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      state.subject = subject;
+      await rememberBindingSubject(subject);
+      state.subjectInfoLinks = {};
+      state.subjectInfoWebRows = [];
+      state.episodes = episodes.data || [];
+      state.longVideoDetectionCache = null;
+      state.characters = charactersResult.characters;
+      state.characterError = charactersResult.error;
+      state.collection = mergePendingCollection(collection);
+      state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
+      if (optimistic && (!state.collection || Number(state.collection.rate || 0) !== Number(optimistic.rate || 0))) {
+        state.collection = { ...(state.collection || {}), ...optimistic };
+      }
+      state.busy = false;
+      state.error = "";
+      render();
+      refreshSubjectInfoLinksInBackground(subjectId);
+      checkAutoWatchProgress().catch(showError);
+    } finally {
+      finishPanelLoad(loadId);
     }
-    state.busy = false;
-    state.error = "";
-    render();
-    refreshSubjectInfoLinksInBackground(subjectId);
-    checkAutoWatchProgress().catch(showError);
   }
 
   async function loadSubjectCharacters(subjectId) {
@@ -7201,6 +7294,96 @@
 
   function ensureToken() {
     if (!state.token) throw new Error("请先点右上角设置 Bangumi Access Token");
+  }
+
+  function beginPanelLoad(total, label) {
+    panelLoadProgress.loadId += 1;
+    panelLoadProgress.total = total;
+    panelLoadProgress.done = 0;
+    panelLoadProgress.label = label || "";
+    updatePanelProgressBar();
+    return panelLoadProgress.loadId;
+  }
+
+  function advancePanelLoad(label, loadId) {
+    if (loadId !== undefined && loadId !== panelLoadProgress.loadId) return;
+    if (panelLoadProgress.total > 0 && panelLoadProgress.done < panelLoadProgress.total) {
+      panelLoadProgress.done += 1;
+    }
+    if (label) panelLoadProgress.label = label;
+    updatePanelProgressBar();
+  }
+
+  function finishPanelLoad(loadId) {
+    if (loadId !== undefined && loadId !== panelLoadProgress.loadId) return;
+    panelLoadProgress.total = 0;
+    panelLoadProgress.done = 0;
+    panelLoadProgress.label = "";
+    updatePanelProgressBar();
+  }
+
+  function isSubjectDataLoading() {
+    return Boolean(state.subjectId && !state.subject && !state.error);
+  }
+
+  function isPanelLoadActive() {
+    return isSubjectDataLoading() || Boolean(state.busy && state.subjectId) || Boolean(state.nonMainBusy);
+  }
+
+  function getPanelProgressState() {
+    const active = isPanelLoadActive();
+    const determinate = Boolean(state.subjectId) && panelLoadProgress.total > 0 && !state.nonMainBusy;
+    const percent = determinate
+      ? Math.max(6, Math.round((panelLoadProgress.done / panelLoadProgress.total) * 100))
+      : 0;
+    return { active, indeterminate: active && !determinate, percent };
+  }
+
+  function renderPanelProgressSlot() {
+    const progress = getPanelProgressState();
+    return `<div class="biligumi-progress-slot${progress.active ? " active" : ""}${progress.indeterminate ? " indeterminate" : ""}" aria-hidden="true"><div class="biligumi-load-bar" style="width:${progress.percent}%"></div></div>`;
+  }
+
+  function updatePanelProgressBar() {
+    const panel = document.getElementById(PANEL_ID);
+    if (!panel) return;
+    const progress = getPanelProgressState();
+    const slot = panel.querySelector(".biligumi-progress-slot");
+    if (slot) {
+      slot.classList.toggle("active", progress.active);
+      slot.classList.toggle("indeterminate", progress.indeterminate);
+      const bar = slot.querySelector(".biligumi-load-bar");
+      if (bar) bar.style.width = `${progress.percent}%`;
+    }
+    const note = panel.querySelector(".biligumi-skel-note");
+    if (note && panelLoadProgress.label) note.textContent = panelLoadProgress.label;
+  }
+
+  function renderSubjectLoadingSkeleton() {
+    const label = panelLoadProgress.label || state.message || "正在读取 Bangumi 数据...";
+    return `
+      <div class="biligumi-loading-skeleton${state.token ? " with-token" : ""}">
+        <div class="biligumi-skel-block biligumi-skel-line w-60"></div>
+        <div class="biligumi-skel-block biligumi-skel-line w-40"></div>
+        <div class="biligumi-skel-block biligumi-skel-buttons"></div>
+        <div class="biligumi-skel-block biligumi-skel-stars"></div>
+        <div class="biligumi-skel-grid">${Array.from({ length: 12 }, () => '<div class="biligumi-skel-block biligumi-skel-ep"></div>').join("")}</div>
+        <div class="biligumi-skel-block biligumi-skel-score"></div>
+        <div class="biligumi-skel-note">${escapeHtml(label)}</div>
+      </div>
+    `;
+  }
+
+  function stabilizePanelReserve(panel, measured) {
+    const loading = panel && panel.classList.contains("biligumi-panel-loading");
+    const last = Number(window.__biligumiStableReserve) || 0;
+    if (loading) {
+      const peak = Math.max(measured, last);
+      window.__biligumiStableReserve = peak;
+      return peak;
+    }
+    window.__biligumiStableReserve = measured;
+    return measured;
   }
 
   function setBusy(message) {
