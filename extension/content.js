@@ -1583,11 +1583,56 @@
       font-size: 18px;
       font-weight: 700;
     }
+    #${SETTINGS_ID} .biligumi-settings-main {
+      width: min(840px, calc(100vw - 36px));
+    }
     #${SETTINGS_ID} .biligumi-settings-body {
-      display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-      gap: 12px;
-      padding: 12px;
+      column-count: 2;
+      column-gap: 14px;
+      padding: 14px;
+    }
+    #${SETTINGS_ID} .biligumi-settings-section {
+      margin: 0 0 14px;
+      border: 1px solid #e2e5e8;
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 1px 2px rgba(52, 64, 84, .06);
+      -webkit-column-break-inside: avoid;
+      break-inside: avoid;
+    }
+    #${SETTINGS_ID} .biligumi-settings-section-title {
+      padding: 7px 12px;
+      border-bottom: 1px solid #eceff2;
+      border-radius: 7px 7px 0 0;
+      background: linear-gradient(#f8f8f8, #f1f1f1);
+      color: #d9758c;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: .02em;
+    }
+    #${SETTINGS_ID} .biligumi-settings-section .biligumi-settings-field {
+      padding: 10px 12px 12px;
+    }
+    #${SETTINGS_ID} .biligumi-settings-section .biligumi-settings-field + .biligumi-settings-field {
+      border-top: 1px dashed #e8ebef;
+    }
+    #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-field > label[for] {
+      color: #4f6072;
+      font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-check input {
+      accent-color: #e68aa2;
+    }
+    #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-help {
+      margin-top: 5px;
+      padding-left: 8px;
+      border-left: 2px solid #f3d3db;
+      line-height: 1.45;
+    }
+    #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-help.warning {
+      border-left-color: #e59a9a;
+      color: #d03030;
+      font-weight: 600;
     }
     #${SETTINGS_ID} .biligumi-settings-field {
       min-width: 0;
@@ -1985,7 +2030,7 @@
     }
     @media (max-width: 620px) {
       #${SETTINGS_ID} .biligumi-settings-body {
-        grid-template-columns: 1fr;
+        column-count: 1;
       }
     }
     #${PANEL_ID} .biligumi-collapsed-note {
@@ -3630,81 +3675,93 @@
       ? (state.subject ? displaySubjectName(state.subject) : `subject ${state.subjectId}`)
       : "";
     return `
-      <div class="biligumi-settings-dialog" data-action="noop">
+      <div class="biligumi-settings-dialog biligumi-settings-main" data-action="noop">
         <div class="biligumi-settings-title">设置</div>
         <div class="biligumi-settings-body">
-          <div class="biligumi-settings-field">
-            <label for="biligumi-token-input">Bangumi Access Token</label>
-            <input id="biligumi-token-input" class="biligumi-secret-input" data-role="settings-token" type="text" value="" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
-            <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换；清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
-            <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
-          </div>
-          <div class="biligumi-settings-field">
-            <label for="biligumi-whitelist-input">Bilibili 白名单</label>
-            <textarea class="biligumi-whitelist-store" id="biligumi-whitelist-input" data-role="settings-whitelist">${escapeHtml(formatWhitelistForSettings())}</textarea>
-            ${renderWhitelistSettingsList()}
-            <div class="biligumi-settings-help compact">当前页面候选：${escapeHtml(currentHints || "无")}</div>
-          </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-character-strip" ${state.characterStripEnabled ? "checked" : ""}>
-              <span>在 Bilibili 正文评论区上方显示 Bangumi 角色 / CV 横栏。</span>
-            </label>
-            <div class="biligumi-settings-help">关闭后只隐藏正文横栏，右侧 Bangumi 面板不受影响。</div>
-          </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-subject-info-panel" ${state.subjectInfoPanelEnabled ? "checked" : ""}>
-              <span>在 Bilibili 正文显示 Bangumi 风格条目信息栏。</span>
-            </label>
-            <div class="biligumi-settings-help">默认关闭；会显示封面和公开 infobox 字段，并尽量解析 Bangumi 页面补全制作人员链接。</div>
-            <div class="biligumi-settings-help warning">注意：此功能会对界面排版进行大量更改，并且带来一定性能开销。</div>
-          </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-official-bangumi-layout" ${state.officialBangumiLayoutEnabled ? "checked" : ""}>
-              <span>实验兼容 Bilibili 官方番剧页右侧布局，把 PV / 相关推荐列表下移给面板让位。</span>
-            </label>
-            <div class="biligumi-settings-help">官方源不是推荐使用场景；如果页面布局异常，可以关闭这个开关。</div>
-          </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-long-video-episode-guess" ${state.longVideoEpisodeGuessEnabled ? "checked" : ""}>
-              <span>遇到长视频时自动识别</span>
-            </label>
-            <div class="biligumi-threshold-line biligumi-long-video-offset-line">
-              <input id="biligumi-long-video-offset" type="text" inputmode="numeric" data-role="settings-long-video-offset" value="${escapeHtml(formatTimecode(longVideoContext.offsetSeconds))}" placeholder="02:00:00" ${longVideoContext.ownerKey ? "" : "disabled"}>
-              <span class="biligumi-threshold-value">首集开始</span>
+          <div class="biligumi-settings-section">
+            <div class="biligumi-settings-section-title">账号与授权</div>
+            <div class="biligumi-settings-field">
+              <label for="biligumi-token-input">Bangumi Access Token</label>
+              <input id="biligumi-token-input" class="biligumi-secret-input" data-role="settings-token" type="text" value="" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
+              <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；出于安全考虑不会回填到网页。粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换；清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
+              <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
             </div>
-            <div class="biligumi-settings-help">${longVideoContext.ownerKey ? `当前 UP：${escapeHtml(longVideoContext.ownerLabel)}。首集开始时间按 UP 单独保存，可填 02:00:00、120:00 或 120 分钟。` : "暂未识别当前 UP，无法保存专属首集开始时间。"}</div>
-            <div class="biligumi-settings-help">${longVideoContext.videoOffsetSeconds != null
-              ? `本视频已设专属首集起点 ${escapeHtml(formatTimecode(longVideoContext.videoOffsetSeconds))}（优先于 UP 默认）；可在长视频推测提示条里重新取进度或清除。`
-              : "本视频专属首集起点：未设置。启用分集推测后，可在提示条里一键取当前播放进度。"}</div>
-            <div class="biligumi-settings-help">默认关闭。关闭时，普通 B站视频超过 2 小时会弹出确认，询问是否为“一个视频内包含多集正片”。勾选后遇到超长视频将不再询问，直接按多集长视频处理并启用分集推测。${escapeHtml(longVideoContext.statusText)}</div>
-            <div class="biligumi-settings-help warning">这是基于 Bangumi 分集时长和人工偏移的估算；视频中插入额外片段时可能发生偏移。</div>
           </div>
-          <div class="biligumi-settings-field">
-            <label for="biligumi-auto-watch-threshold">自动标记本集已看</label>
-            <div class="biligumi-threshold-line">
-              <input id="biligumi-auto-watch-threshold" type="range" min="10" max="100" step="10" data-role="settings-auto-watch-threshold" value="${autoWatchThreshold}">
-              <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
+          <div class="biligumi-settings-section">
+            <div class="biligumi-settings-section-title">名单</div>
+            <div class="biligumi-settings-field">
+              <label for="biligumi-whitelist-input">Bilibili 白名单</label>
+              <textarea class="biligumi-whitelist-store" id="biligumi-whitelist-input" data-role="settings-whitelist">${escapeHtml(formatWhitelistForSettings())}</textarea>
+              ${renderWhitelistSettingsList()}
+              <div class="biligumi-settings-help compact">当前页面候选：${escapeHtml(currentHints || "无")}</div>
             </div>
-            <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟或打开页面时已在标准线之后，不会触发。</div>
           </div>
-          <div class="biligumi-settings-field">
-            <label class="biligumi-settings-check">
-              <input type="checkbox" data-role="settings-oped-skip-enabled" ${opedSkipConfig.enabled ? "checked" : ""} ${state.subjectId ? "" : "disabled"}>
-              <span>在播放器下边栏显示一键跳过 OP/ED 按钮。</span>
-            </label>
-            <div class="biligumi-threshold-line biligumi-oped-seconds-line">
-              <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${opedSkipConfig.seconds}" ${state.subjectId ? "" : "disabled"}>
-              <span class="biligumi-threshold-value">秒</span>
+          <div class="biligumi-settings-section">
+            <div class="biligumi-settings-section-title">界面增强</div>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-character-strip" ${state.characterStripEnabled ? "checked" : ""}>
+                <span>在 Bilibili 正文评论区上方显示 Bangumi 角色 / CV 横栏。</span>
+              </label>
+              <div class="biligumi-settings-help">关闭后只隐藏正文横栏，右侧 Bangumi 面板不受影响。</div>
             </div>
-            <div class="biligumi-field biligumi-oped-hotkey-line">
-              <input id="biligumi-oped-skip-hotkey" data-role="settings-oped-skip-hotkey" value="在扩展快捷键页查看 / 修改" readonly>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-subject-info-panel" ${state.subjectInfoPanelEnabled ? "checked" : ""}>
+                <span>在 Bilibili 正文显示 Bangumi 风格条目信息栏。</span>
+              </label>
+              <div class="biligumi-settings-help">默认关闭；会显示封面和公开 infobox 字段，并尽量解析 Bangumi 页面补全制作人员链接。</div>
+              <div class="biligumi-settings-help warning">注意：此功能会对界面排版进行大量更改，并且带来一定性能开销。</div>
             </div>
-            <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
-            <div class="biligumi-settings-help">插件版这里显示的是浏览器级全局快捷键；请在 chrome://extensions/shortcuts 或 edge://extensions/shortcuts 修改。</div>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-official-bangumi-layout" ${state.officialBangumiLayoutEnabled ? "checked" : ""}>
+                <span>实验兼容 Bilibili 官方番剧页右侧布局，把 PV / 相关推荐列表下移给面板让位。</span>
+              </label>
+              <div class="biligumi-settings-help">官方源不是推荐使用场景；如果页面布局异常，可以关闭这个开关。</div>
+            </div>
+          </div>
+          <div class="biligumi-settings-section">
+            <div class="biligumi-settings-section-title">播放</div>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-long-video-episode-guess" ${state.longVideoEpisodeGuessEnabled ? "checked" : ""}>
+                <span>遇到长视频时自动识别</span>
+              </label>
+              <div class="biligumi-threshold-line biligumi-long-video-offset-line">
+                <input id="biligumi-long-video-offset" type="text" inputmode="numeric" data-role="settings-long-video-offset" value="${escapeHtml(formatTimecode(longVideoContext.offsetSeconds))}" placeholder="02:00:00" ${longVideoContext.ownerKey ? "" : "disabled"}>
+                <span class="biligumi-threshold-value">首集开始</span>
+              </div>
+              <div class="biligumi-settings-help">${longVideoContext.ownerKey ? `当前 UP：${escapeHtml(longVideoContext.ownerLabel)}。首集开始时间按 UP 单独保存，可填 02:00:00、120:00 或 120 分钟。` : "暂未识别当前 UP，无法保存专属首集开始时间。"}</div>
+              <div class="biligumi-settings-help">${longVideoContext.videoOffsetSeconds != null
+                ? `本视频已设专属首集起点 ${escapeHtml(formatTimecode(longVideoContext.videoOffsetSeconds))}（优先于 UP 默认）；可在长视频推测提示条里重新取进度或清除。`
+                : "本视频专属首集起点：未设置。启用分集推测后，可在提示条里一键取当前播放进度。"}</div>
+              <div class="biligumi-settings-help">默认关闭。关闭时，普通 B站视频超过 2 小时会弹出确认，询问是否为“一个视频内包含多集正片”。勾选后遇到超长视频将不再询问，直接按多集长视频处理并启用分集推测。${escapeHtml(longVideoContext.statusText)}</div>
+              <div class="biligumi-settings-help warning">这是基于 Bangumi 分集时长和人工偏移的估算；视频中插入额外片段时可能发生偏移。</div>
+            </div>
+            <div class="biligumi-settings-field">
+              <label for="biligumi-auto-watch-threshold">自动标记本集已看</label>
+              <div class="biligumi-threshold-line">
+                <input id="biligumi-auto-watch-threshold" type="range" min="10" max="100" step="10" data-role="settings-auto-watch-threshold" value="${autoWatchThreshold}">
+                <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
+              </div>
+              <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟或打开页面时已在标准线之后，不会触发。</div>
+            </div>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-oped-skip-enabled" ${opedSkipConfig.enabled ? "checked" : ""} ${state.subjectId ? "" : "disabled"}>
+                <span>在播放器下边栏显示一键跳过 OP/ED 按钮。</span>
+              </label>
+              <div class="biligumi-threshold-line biligumi-oped-seconds-line">
+                <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${opedSkipConfig.seconds}" ${state.subjectId ? "" : "disabled"}>
+                <span class="biligumi-threshold-value">秒</span>
+              </div>
+              <div class="biligumi-field biligumi-oped-hotkey-line">
+                <input id="biligumi-oped-skip-hotkey" data-role="settings-oped-skip-hotkey" value="在扩展快捷键页查看 / 修改" readonly>
+              </div>
+              <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
+              <div class="biligumi-settings-help">插件版这里显示的是浏览器级全局快捷键；请在 chrome://extensions/shortcuts 或 edge://extensions/shortcuts 修改。</div>
+            </div>
           </div>
         </div>
         <div class="biligumi-settings-actions">
