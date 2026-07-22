@@ -32,6 +32,8 @@
   const DELETE_BRIDGE_TTL_MS = 5 * 60 * 1000;
   const DELETE_BRIDGE_POLL_MS = 400;
   const DELETE_BRIDGE_GRACE_MS = 60 * 1000;
+  const DELETE_VERIFY_POLL_MS = 500;
+  const DELETE_VERIFY_ATTEMPTS = 6;
   const PANEL_ID = "biligumi-connector-panel";
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
@@ -5505,15 +5507,16 @@
     }
 
     let loginNoticeShown = false;
-    let lastStatus = "pending";
     try {
       while (Date.now() - createdAt <= DELETE_BRIDGE_TTL_MS) {
         const current = readJsonValue(STORAGE.deleteBridge, null);
         if (!current || current.nonce !== nonce) {
           throw new Error("Bangumi 删除任务已被替换或取消，请重试。");
         }
-        lastStatus = String(current.status || "");
-        if (current.status === "success") return;
+        if (current.status === "success") {
+          await confirmCollectionDeletedViaApi(subjectId);
+          return;
+        }
         if (current.status === "error") {
           throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
         }
@@ -5526,22 +5529,36 @@
         }
         await sleep(DELETE_BRIDGE_POLL_MS);
       }
-      // TTL reached. If the bridge was mid-processing, grant a short grace
-      // window for a terminal success/error before declaring failure — a real
-      // server-side delete may still be in flight and could land just after.
-      if (lastStatus === "processing") {
-        const graceDeadline = Date.now() + DELETE_BRIDGE_GRACE_MS;
-        while (Date.now() <= graceDeadline) {
-          const current = readJsonValue(STORAGE.deleteBridge, null);
-          if (current && current.nonce === nonce) {
-            if (current.status === "success") return;
-            if (current.status === "error") {
-              throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
+      // TTL reached: re-read once so a late pending→processing/success edge is
+      // not missed just because the last in-loop snapshot was stale.
+      const afterTtl = readJsonValue(STORAGE.deleteBridge, null);
+      if (afterTtl && afterTtl.nonce === nonce) {
+        if (afterTtl.status === "success") {
+          await confirmCollectionDeletedViaApi(subjectId);
+          return;
+        }
+        if (afterTtl.status === "error") {
+          throw new Error(getDeleteBridgeErrorMessage(afterTtl, expectedUsername));
+        }
+        if (afterTtl.status === "processing" || afterTtl.status === "pending") {
+          const graceDeadline = Date.now() + DELETE_BRIDGE_GRACE_MS;
+          while (Date.now() <= graceDeadline) {
+            const current = readJsonValue(STORAGE.deleteBridge, null);
+            if (current && current.nonce === nonce) {
+              if (current.status === "success") {
+                await confirmCollectionDeletedViaApi(subjectId);
+                return;
+              }
+              if (current.status === "error") {
+                throw new Error(getDeleteBridgeErrorMessage(current, expectedUsername));
+              }
             }
+            await sleep(DELETE_BRIDGE_POLL_MS);
           }
-          await sleep(DELETE_BRIDGE_POLL_MS);
         }
       }
+      // Status channel may have been lost after a real delete — last chance via API.
+      if (await tryConfirmCollectionDeletedViaApi(subjectId)) return;
       throw new Error("等待 Bangumi 登录或删除结果超时，请重新点击删除后再试。");
     } finally {
       await clearDeleteBridgeTask(nonce);
@@ -5553,6 +5570,27 @@
         }
       }
     }
+  }
+
+  async function confirmCollectionDeletedViaApi(subjectId) {
+    if (!(await tryConfirmCollectionDeletedViaApi(subjectId))) {
+      throw new Error("Bangumi 收藏删除未确认成功（接口仍可查询到收藏），请稍后刷新后重试。");
+    }
+  }
+
+  async function tryConfirmCollectionDeletedViaApi(subjectId) {
+    const path = await getCollectionReadPath(subjectId);
+    if (!path) return false;
+    for (let attempt = 0; attempt < DELETE_VERIFY_ATTEMPTS; attempt += 1) {
+      try {
+        const collection = await bgmRequest(path, { auth: true, allow404: true });
+        if (collection == null) return true;
+      } catch (_error) {
+        // Transient API/network errors: keep polling; do not treat as deleted.
+      }
+      if (attempt + 1 < DELETE_VERIFY_ATTEMPTS) await sleep(DELETE_VERIFY_POLL_MS);
+    }
+    return false;
   }
 
   function bringDeleteBridgeToForeground(bridgeTab, bridgeUrl) {
@@ -5679,35 +5717,13 @@
       return;
     }
     const responseHtml = await response.text();
+    // Bridge-side HTML checks are fail-fast only (still-present remove token /
+    // lost session). They are NOT positive proof of deletion — soft-fail pages
+    // can also lack the remove link. The parent confirms via Token API 404.
     if (
       parseBangumiWebUsername(responseHtml) !== webUsername
       || parseSubjectRemoveHash(responseHtml, subjectId)
     ) {
-      await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
-      return;
-    }
-
-    // "200 + still logged in + no remove link" is necessary but not sufficient:
-    // a soft-fail/error template can also lack the remove link. Positively
-    // confirm the collection is gone by re-fetching the subject page fresh and
-    // verifying it no longer exposes the collect-remove hash for this subject.
-    let verified = false;
-    try {
-      const verifyResponse = await fetch(`/subject/${subjectId}`, {
-        method: "GET",
-        credentials: "same-origin",
-        redirect: "follow",
-        cache: "no-store",
-      });
-      if (verifyResponse.ok) {
-        const verifyHtml = await verifyResponse.text();
-        verified = parseBangumiWebUsername(verifyHtml) === webUsername
-          && !parseSubjectRemoveHash(verifyHtml, subjectId);
-      }
-    } catch (_) {
-      verified = false;
-    }
-    if (!verified) {
       await updateDeleteBridgeTask(task, { status: "error", errorCode: "remove-request-failed", completedAt: Date.now() });
       return;
     }
@@ -7008,15 +7024,16 @@
   }
 
   async function closeSettings() {
-    state.settingsOpen = false;
-    // Flush any queued autosave while the dialog DOM is still attached, so a
-    // pending apply does not bail on the about-to-be-removed DOM and drop the
-    // last edit. (The userscript applies synchronously and has no such race.)
+    // Keep settingsOpen true while flushing so a concurrent render() /
+    // syncSettingsDialog() cannot tear down the modal mid-await (which would
+    // make the queued apply see no DOM and drop the last edit). Only flip the
+    // flag and remove the DOM after the persist queue has finished.
     try {
       await queueApplySettingsFromDialog();
     } catch (error) {
       showError(error);
     }
+    state.settingsOpen = false;
     removeModal();
     render();
   }
@@ -7044,9 +7061,16 @@
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
     const nextLongVideoEpisodeGuessEnabled = Boolean(longVideoEpisodeGuessInput && longVideoEpisodeGuessInput.checked);
     const longVideoContext = getLongVideoSettingsContext();
-    if (longVideoOffsetInput) longVideoOffsetInput.setCustomValidity("");
     const parsedOffsetSeconds = parseTimecode(longVideoOffsetInput && longVideoOffsetInput.value);
     const offsetIsInvalid = Boolean(longVideoContext.ownerKey) && parsedOffsetSeconds === null;
+    // Keep custom validity in sync with parse result — do not clear it first.
+    // The offset blur handler reports validity; clearing here would flash/wipe
+    // the message immediately after reportValidity().
+    if (longVideoOffsetInput) {
+      longVideoOffsetInput.setCustomValidity(
+        offsetIsInvalid ? "首集开始时间格式无效，请填写 02:00:00、120:00 或 120 分钟。" : "",
+      );
+    }
     // An invalid/mid-edit offset must not abort the rest of the dialog save.
     // Fall back to the previously stored offset so we neither clobber it with the
     // default nor drop unrelated settings (checkboxes, token, threshold, ...).
