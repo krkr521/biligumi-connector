@@ -1604,6 +1604,7 @@
       font-size: 18px;
       font-weight: 700;
     }
+    /* Intentionally wider than collection editor (base dialog is 760px). Only main settings uses this class. */
     #${SETTINGS_ID} .biligumi-settings-main {
       width: min(840px, calc(100vw - 36px));
     }
@@ -1622,6 +1623,7 @@
       break-inside: avoid;
     }
     #${SETTINGS_ID} .biligumi-settings-section-title {
+      margin: 0;
       padding: 7px 12px;
       border-bottom: 1px solid #eceff2;
       border-radius: 7px 7px 0 0;
@@ -2389,6 +2391,24 @@
       line-height: 1.4;
       box-shadow: 0 8px 22px rgba(15, 23, 42, .22);
       pointer-events: none;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      #${PANEL_ID} *,
+      #${SETTINGS_ID} *,
+      #${CHARACTER_STRIP_ID} *,
+      #${SUBJECT_INFO_ID} *,
+      #${DANMAKU_FAVORITES_OVERLAY_ID} *,
+      .biligumi-episode,
+      .biligumi-icon-btn,
+      .biligumi-button,
+      .${DANMAKU_FAVORITE_BUTTON_CLASS},
+      .${DANMAKU_HOVER_BAR_CLASS},
+      .${DANMAKU_HOVER_BAR_CLASS} button,
+      .${DANMAKU_OFFICIAL_ACTION_CLASS},
+      .${DANMAKU_TOAST_CLASS} {
+        transition: none !important;
+        animation: none !important;
+      }
     }
   `);
 
@@ -3720,7 +3740,7 @@
         <div class="biligumi-settings-title">设置</div>
         <div class="biligumi-settings-body">
           <div class="biligumi-settings-section">
-            <div class="biligumi-settings-section-title">账号与授权</div>
+            <h3 class="biligumi-settings-section-title">账号与授权</h3>
             <div class="biligumi-settings-field">
               <label for="biligumi-token-input">Bangumi Access Token</label>
               <input id="biligumi-token-input" class="biligumi-secret-input" data-role="settings-token" type="text" value="" autocomplete="off" autocapitalize="none" spellcheck="false" placeholder="${state.token ? "粘贴新 Token 以替换现有 Token" : "粘贴 Bangumi Access Token"}">
@@ -3729,7 +3749,7 @@
             </div>
           </div>
           <div class="biligumi-settings-section">
-            <div class="biligumi-settings-section-title">名单</div>
+            <h3 class="biligumi-settings-section-title">名单</h3>
             <div class="biligumi-settings-field">
               <label for="biligumi-whitelist-input">Bilibili 白名单</label>
               <textarea class="biligumi-whitelist-store" id="biligumi-whitelist-input" data-role="settings-whitelist">${escapeHtml(formatWhitelistForSettings())}</textarea>
@@ -3738,7 +3758,7 @@
             </div>
           </div>
           <div class="biligumi-settings-section">
-            <div class="biligumi-settings-section-title">界面增强</div>
+            <h3 class="biligumi-settings-section-title">界面增强</h3>
             <div class="biligumi-settings-field">
               <label class="biligumi-settings-check">
                 <input type="checkbox" data-role="settings-character-strip" ${state.characterStripEnabled ? "checked" : ""}>
@@ -3763,7 +3783,7 @@
             </div>
           </div>
           <div class="biligumi-settings-section">
-            <div class="biligumi-settings-section-title">播放</div>
+            <h3 class="biligumi-settings-section-title">播放</h3>
             <div class="biligumi-settings-field">
               <label class="biligumi-settings-check">
                 <input type="checkbox" data-role="settings-long-video-episode-guess" ${state.longVideoEpisodeGuessEnabled ? "checked" : ""}>
