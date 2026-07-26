@@ -38,7 +38,10 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
-  const SCRIPT_VERSION = "0.3.0";
+  const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
+  let episodeTooltipViewportBound = false;
+  const episodeTooltipPointer = { x: 0, y: 0 };
+  const SCRIPT_VERSION = "0.3.1";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -240,7 +243,7 @@
     #${PANEL_ID},
     #${SUBJECT_INFO_ID},
     #${CHARACTER_STRIP_ID} {
-      --bgm-pink: #f07f95;
+      --bgm-pink: #d9758c;
       --bgm-blue: #2f8cff;
       --bgm-ink: #1f2329;
       --bgm-muted: #7f8792;
@@ -628,8 +631,8 @@
       color: var(--bgm-blue);
     }
     .biligumi-button.primary:hover {
-      border-color: #e56a83;
-      background: #e56a83;
+      border-color: #c25f75;
+      background: #c25f75;
       color: #fff;
     }
     .biligumi-row {
@@ -725,14 +728,75 @@
       border-color: #77adff;
       background: #dfeeff;
     }
+    .biligumi-episode.unaired {
+      border-color: #d9d9d9;
+      background: #f0f0f0;
+      color: #9a9a9a;
+    }
+    .biligumi-episode.unaired:hover {
+      border-color: #c8c8c8;
+      background: #e4e4e4;
+    }
+    .biligumi-episode.onair {
+      border-color: #7bc89a;
+      background: #e8f7ee;
+      color: #1f8a4c;
+    }
+    .biligumi-episode.onair:hover {
+      border-color: #5bb884;
+      background: #d5f0e0;
+    }
     .biligumi-episode.done {
       border-color: #4d8df7;
       background: #4d8df7;
       color: #fff;
     }
+    .biligumi-episode.done:hover {
+      border-color: #3a7de8;
+      background: #3a7de8;
+    }
     .biligumi-episode.current {
       outline: 2px solid var(--bgm-pink);
       outline-offset: 1px;
+    }
+    .biligumi-episode-tip {
+      position: fixed;
+      display: none;
+      width: 220px;
+      background: #fff;
+      border: 1px solid #eadfe3;
+      border-radius: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, .18);
+      overflow: hidden;
+      pointer-events: none;
+      z-index: 2147483646;
+      font-size: 12px;
+      color: #444;
+    }
+    .biligumi-episode-tip-head {
+      padding: 6px 10px;
+      background: #d9758c;
+      color: #fff;
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .biligumi-episode-tip-body {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding: 8px 10px;
+    }
+    .biligumi-episode-tip-row {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .biligumi-episode-tip-foot {
+      padding: 6px 10px;
+      border-top: 1px solid #f0e6ea;
+      color: #999;
     }
     .biligumi-long-video-hint {
       display: flex;
@@ -943,8 +1007,8 @@
       font-size: 12px;
     }
     .biligumi-lite-open:hover {
-      border-color: #e56a83;
-      background: #e56a83;
+      border-color: #c25f75;
+      background: #c25f75;
       color: #fff;
     }
     .biligumi-lite-actions {
@@ -1002,7 +1066,7 @@
       --bgm-line: rgba(210, 216, 224, .78);
       --bgm-link: #1489d4;
       --bgm-hot: #e96b2d;
-      --bgm-pink-btn: #e68aa2;
+      --bgm-pink-btn: #d9758c;
       padding: 0;
       overflow: hidden;
       border: 1px solid var(--bgm-card-border);
@@ -1357,7 +1421,7 @@
       cursor: pointer;
     }
     #${PANEL_ID} .biligumi-auto-progress-mode-btn.active {
-      color: #f0189b;
+      color: #d9758c;
     }
     #${PANEL_ID} .biligumi-auto-progress-mode[data-disabled="1"] {
       opacity: .55;
@@ -1393,7 +1457,7 @@
       width: 45px;
       height: 38px;
       border-radius: 5px;
-      background: linear-gradient(135deg, #ff8ad2, #ff38b0);
+      background: linear-gradient(135deg, #e8a3b5, #d9758c);
       color: #fff;
       font-weight: 700;
       display: grid;
@@ -1405,7 +1469,7 @@
       font-size: 13px;
     }
     #${PANEL_ID} .biligumi-score-value {
-      color: #f0189b;
+      color: #d9758c;
       font-size: 20px;
       font-weight: 800;
     }
@@ -1453,7 +1517,7 @@
       cursor: pointer;
     }
     #${PANEL_ID} .biligumi-score-mode-btn.active {
-      color: #f0189b;
+      color: #d9758c;
     }
     #${PANEL_ID} .biligumi-histogram {
       display: grid;
@@ -1721,7 +1785,7 @@
       font-weight: 600;
     }
     #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-check input {
-      accent-color: #e68aa2;
+      accent-color: #d9758c;
     }
     #${SETTINGS_ID} .biligumi-settings-body .biligumi-settings-help {
       margin-top: 5px;
@@ -1850,13 +1914,13 @@
       white-space: nowrap;
     }
     #${SETTINGS_ID} .biligumi-whitelist-open {
-      border-color: #f0a5b5;
-      background: #f07f95;
+      border-color: #d9758c;
+      background: #d9758c;
       color: #fff;
     }
     #${SETTINGS_ID} .biligumi-whitelist-open:hover {
-      border-color: #e56a83;
-      background: #e56a83;
+      border-color: #c25f75;
+      background: #c25f75;
       color: #fff;
     }
     #${SETTINGS_ID} .biligumi-whitelist-delete:hover {
@@ -1904,7 +1968,7 @@
       transition: transform .16s ease, box-shadow .16s ease, border-color .16s ease, background .16s ease, color .16s ease;
     }
     #${SETTINGS_ID} .biligumi-button.biligumi-token-clear-button:not(:disabled):hover {
-      border-color: #e68aa2;
+      border-color: #d9758c;
       background: #ffedf2;
       box-shadow: 0 4px 10px rgba(190, 75, 101, .14);
       color: #a93d57;
@@ -2041,7 +2105,7 @@
     }
     #${SETTINGS_ID} .biligumi-edit-types input,
     #${SETTINGS_ID} .biligumi-edit-private input {
-      accent-color: #e68aa2;
+      accent-color: #d9758c;
     }
     #${SETTINGS_ID} .biligumi-edit-stars {
       display: flex;
@@ -2130,8 +2194,8 @@
       font: inherit;
     }
     #${SETTINGS_ID} .biligumi-button.primary {
-      border-color: #e68aa2;
-      background: #e68aa2;
+      border-color: #d9758c;
+      background: #d9758c;
       color: #fff;
       font-weight: 700;
     }
@@ -2952,6 +3016,7 @@
   }
 
   function render() {
+    hideEpisodeTooltip();
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     const inputDrafts = capturePanelInputDrafts(panel);
@@ -4375,8 +4440,9 @@
             const done = getEpisodeCollectionType(ep.id) === 2;
             const localNo = index + 1;
             const current = isCurrentEpisodeNumber(ep, localNo, episodes.length);
-            const title = `${getEpisodeButtonTitle(ep, localNo)} · 左键${done ? "取消看过" : "标记看过"}${episodeId ? " · 右键打开本集讨论" : ""}`;
-            return `<button class="biligumi-episode ${done ? "done" : ""} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}" title="${escapeHtml(title)}">${escapeHtml(formatEpisodeSort(localNo))}</button>`;
+            const airState = done ? "watched" : getEpisodeAirState(ep);
+            const airClass = airState === "unaired" ? "unaired" : airState === "onair" ? "onair" : "";
+            return `<button class="biligumi-episode ${done ? "done" : ""} ${airClass} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(localNo))}</button>`;
           }).join("")}
         </div>
         <div class="biligumi-progress-edit">
@@ -4418,6 +4484,35 @@
       starBox.addEventListener("focusin", handleRatePreviewEvent);
       starBox.addEventListener("mouseout", handleRatePreviewLeave);
       starBox.addEventListener("focusout", handleRatePreviewLeave);
+    }
+
+    const episodeGrid = panel.querySelector(".biligumi-episode-grid");
+    if (episodeGrid) {
+      episodeGrid.addEventListener("mouseover", (event) => {
+        episodeTooltipPointer.x = event.clientX;
+        episodeTooltipPointer.y = event.clientY;
+        const button = event.target.closest(".biligumi-episode");
+        if (button && episodeGrid.contains(button)) showEpisodeTooltip(button);
+      });
+      episodeGrid.addEventListener("mouseout", (event) => {
+        const button = event.target.closest(".biligumi-episode");
+        if (!button || !episodeGrid.contains(button)) return;
+        if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+        hideEpisodeTooltip();
+      });
+      episodeGrid.addEventListener("focusin", (event) => {
+        const button = event.target.closest(".biligumi-episode");
+        if (button && episodeGrid.contains(button)) showEpisodeTooltip(button);
+      });
+      episodeGrid.addEventListener("focusout", (event) => {
+        const button = event.target.closest(".biligumi-episode");
+        if (!button || !episodeGrid.contains(button)) return;
+        if (event.relatedTarget && button.contains(event.relatedTarget)) return;
+        if (event.relatedTarget && episodeGrid.contains(event.relatedTarget) && event.relatedTarget.closest(".biligumi-episode")) return;
+        hideEpisodeTooltip();
+      });
+      episodeGrid.addEventListener("scroll", hideEpisodeTooltip);
+      restoreEpisodeTooltipIfNeeded(episodeGrid);
     }
   }
 
@@ -9436,13 +9531,23 @@
     return parseEpisodeDurationText(episode && episode.duration);
   }
 
-  function parseEpisodeDurationText(value) {
+  // Display-only duration: same formats as the long-video parser, but without
+  // the [60s, 3h] safety window so short specials / long films still show.
+  function getEpisodeDisplayDurationSeconds(episode) {
+    const parsed = Number(episode && episode.duration_seconds);
+    if (Number.isFinite(parsed) && parsed > 0 && parsed <= 24 * 60 * 60) return Math.round(parsed);
+    return parseEpisodeDurationText(episode && episode.duration, { minSeconds: 1, maxSeconds: 24 * 60 * 60 });
+  }
+
+  function parseEpisodeDurationText(value, options) {
+    const minSeconds = options && Number.isFinite(options.minSeconds) ? options.minSeconds : 60;
+    const maxSeconds = options && Number.isFinite(options.maxSeconds) ? options.maxSeconds : 3 * 60 * 60;
     const text = String(value || "").trim().toLowerCase();
     if (!text) return 0;
     if (/^\d{1,3}:\d{2}(?::\d{2})?$/.test(text)) {
       const parts = text.split(":").map(Number);
       const seconds = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
-      return seconds >= 60 && seconds <= 3 * 60 * 60 ? seconds : 0;
+      return Number.isFinite(seconds) && seconds >= minSeconds && seconds <= maxSeconds ? Math.round(seconds) : 0;
     }
     let seconds = 0;
     const hours = text.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|小时|小時)/);
@@ -9451,7 +9556,7 @@
     if (hours) seconds += Number(hours[1]) * 3600;
     if (minutes) seconds += Number(minutes[1]) * 60;
     if (secs) seconds += Number(secs[1]);
-    return Number.isFinite(seconds) && seconds >= 60 && seconds <= 3 * 60 * 60 ? Math.round(seconds) : 0;
+    return Number.isFinite(seconds) && seconds >= minSeconds && seconds <= maxSeconds ? Math.round(seconds) : 0;
   }
 
   function inferLongVideoEpisode(video, detection) {
@@ -9860,6 +9965,33 @@
       .sort((a, b) => Number(a.sort) - Number(b.sort));
   }
 
+  function getLocalDateString(offsetDays) {
+    const date = new Date();
+    date.setDate(date.getDate() + offsetDays);
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`;
+  }
+
+  function getTodayDateString() {
+    return getLocalDateString(0);
+  }
+
+  function getTomorrowDateString() {
+    return getLocalDateString(1);
+  }
+
+  // Air status from the Bangumi episode airdate ("YYYY-MM-DD"). Japanese
+  // late-night anime airs past midnight, so like Bangumi the on-air window
+  // covers both today and tomorrow: dates inside the window are "onair",
+  // later dates "unaired", earlier dates "aired". Missing or malformed dates
+  // stay "unknown" so cells keep the default light blue.
+  function getEpisodeAirState(episode) {
+    const airdate = String(episode && episode.airdate || "").trim();
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(airdate)) return "unknown";
+    if (airdate < getTodayDateString()) return "aired";
+    if (airdate <= getTomorrowDateString()) return "onair";
+    return "unaired";
+  }
+
   function getEpisodeLocalNo(episode, episodes = getNormalEpisodes()) {
     const index = episodes.findIndex((ep) => Number(ep.id) === Number(episode && episode.id));
     return index >= 0 ? index + 1 : Number(episode && episode.sort) || 0;
@@ -9872,13 +10004,81 @@
     return Number(episode && episode.sort) === currentNo;
   }
 
-  function getEpisodeButtonTitle(episode, localNo) {
-    const sort = Number(episode && episode.sort);
-    const name = String(episode && (episode.name_cn || episode.name || "") || "").trim();
-    const parts = [`第 ${formatEpisodeSort(localNo)} 集`];
-    if (Number.isFinite(sort) && sort !== Number(localNo)) parts.push(`Bangumi ep.${formatEpisodeSort(sort)}`);
-    if (name) parts.push(name);
-    return parts.join(" · ");
+  function renderEpisodeTooltipContent(episode, localNo, done) {
+    const name = String(episode && episode.name || "").trim();
+    const nameCn = String(episode && episode.name_cn || "").trim();
+    const airdate = String(episode && episode.airdate || "").trim();
+    const durationSeconds = getEpisodeDisplayDurationSeconds(episode);
+    const bangumiSort = Number(episode && episode.sort);
+    const rows = [];
+    if (nameCn && nameCn !== name) rows.push(`<div class="biligumi-episode-tip-row">中文标题: ${escapeHtml(nameCn)}</div>`);
+    if (Number.isFinite(bangumiSort) && bangumiSort !== Number(localNo)) {
+      rows.push(`<div class="biligumi-episode-tip-row">Bangumi ep.${escapeHtml(formatEpisodeSort(bangumiSort))}</div>`);
+    }
+    rows.push(`<div class="biligumi-episode-tip-row">首播: ${escapeHtml(airdate || "未知")}</div>`);
+    rows.push(`<div class="biligumi-episode-tip-row">时长: ${durationSeconds ? escapeHtml(formatTimecode(durationSeconds)) : "未知"}</div>`);
+    return `
+      <div class="biligumi-episode-tip-head">ep.${escapeHtml(formatEpisodeSort(localNo))}${name ? ` ${escapeHtml(name)}` : ""}</div>
+      <div class="biligumi-episode-tip-body">${rows.join("")}</div>
+      <div class="biligumi-episode-tip-foot">左键${done ? "取消看过" : "标记看过"} · 右键打开本集讨论</div>
+    `;
+  }
+
+  function ensureEpisodeTooltip() {
+    let tip = document.getElementById(EPISODE_TOOLTIP_ID);
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.id = EPISODE_TOOLTIP_ID;
+      tip.className = "biligumi-episode-tip";
+      document.body.appendChild(tip);
+    }
+    if (!episodeTooltipViewportBound) {
+      episodeTooltipViewportBound = true;
+      window.addEventListener("scroll", hideEpisodeTooltip, true);
+      window.addEventListener("resize", hideEpisodeTooltip);
+    }
+    return tip;
+  }
+
+  function hideEpisodeTooltip() {
+    const tip = document.getElementById(EPISODE_TOOLTIP_ID);
+    if (tip) tip.style.display = "none";
+  }
+
+  function showEpisodeTooltip(button) {
+    const episodeId = Number(button && button.dataset && button.dataset.episodeId) || 0;
+    const episode = state.episodes.find((ep) => Number(ep.id) === episodeId);
+    if (!episode) return;
+    const tip = ensureEpisodeTooltip();
+    tip.innerHTML = renderEpisodeTooltipContent(episode, getEpisodeLocalNo(episode), getEpisodeCollectionType(episode.id) === 2);
+    tip.style.display = "block";
+    const rect = button.getBoundingClientRect();
+    const width = tip.offsetWidth;
+    const height = tip.offsetHeight;
+    const left = Math.max(4, Math.min(rect.left, window.innerWidth - width - 4));
+    const below = rect.bottom + 6;
+    const top = below + height <= window.innerHeight - 4 ? below : Math.max(4, rect.top - height - 6);
+    tip.style.left = `${Math.round(left)}px`;
+    tip.style.top = `${Math.round(top)}px`;
+  }
+
+  function restoreEpisodeTooltipIfNeeded(episodeGrid) {
+    if (!episodeGrid) return;
+    const active = document.activeElement;
+    if (active && episodeGrid.contains(active) && active.classList.contains("biligumi-episode")) {
+      showEpisodeTooltip(active);
+      return;
+    }
+    const under = typeof document.elementFromPoint === "function"
+      ? document.elementFromPoint(episodeTooltipPointer.x, episodeTooltipPointer.y)
+      : null;
+    const fromPoint = under && under.closest ? under.closest(".biligumi-episode") : null;
+    if (fromPoint && episodeGrid.contains(fromPoint)) {
+      showEpisodeTooltip(fromPoint);
+      return;
+    }
+    const hovered = episodeGrid.querySelector(".biligumi-episode:hover");
+    if (hovered) showEpisodeTooltip(hovered);
   }
 
   function getEpisodeDiscussionUrl(episodeId) {
