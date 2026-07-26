@@ -35,6 +35,50 @@ assert.match(
   /changed \|\| normalizedChanged/,
   "extension must persist lazy cleanup even when the current segment was already recorded",
 );
+for (const [label, bindSource] of [
+  ["userscript", extractFunction(source, "bindSubject", { async: true })],
+  ["extension", extractFunction(extensionSource, "bindSubject", { async: true })],
+]) {
+  const subjectAssignmentAt = bindSource.indexOf("state.subjectId = subjectId;");
+  const refreshAt = bindSource.indexOf("refreshCurrentEpisodeRecognitionState();");
+  const loadAt = bindSource.indexOf("await loadSubjectBundle();");
+  assert.ok(
+    subjectAssignmentAt >= 0 && refreshAt > subjectAssignmentAt && loadAt > refreshAt,
+    `${label} must refresh the mapped current episode before the post-bind render`,
+  );
+}
+
+const recognitionSandbox = {
+  state: {
+    autoEpisodeSyncLastKey: "old-subject:old-episode",
+    currentEpisodeNo: null,
+    rawTitle: "合集标题",
+  },
+  disabled: false,
+  resetCount: 0,
+  isCurrentVideoAutoProgressDisabled: () => recognitionSandbox.disabled,
+  resetAutoWatchObservationState: () => {
+    recognitionSandbox.resetCount += 1;
+  },
+  detectCurrentEpisodeNo(title) {
+    assert.equal(title, "合集标题");
+    return 4;
+  },
+  getPageTitle() {
+    throw new Error("stored raw title should be preferred");
+  },
+};
+runInSandbox(
+  `${functionSource("refreshCurrentEpisodeRecognitionState")};globalThis.refreshRecognition = refreshCurrentEpisodeRecognitionState;`,
+  recognitionSandbox,
+);
+recognitionSandbox.refreshRecognition();
+assert.equal(recognitionSandbox.state.currentEpisodeNo, 4, "new range mapping is recognized immediately after binding");
+assert.equal(recognitionSandbox.state.autoEpisodeSyncLastKey, "", "stale episode sync state is cleared after remapping");
+assert.equal(recognitionSandbox.resetCount, 1, "watch observation state is reset after remapping");
+recognitionSandbox.disabled = true;
+recognitionSandbox.refreshRecognition();
+assert.equal(recognitionSandbox.state.currentEpisodeNo, null, "a paused video stays unrecognized after binding");
 
 const sandbox = {
   ...collectionConstants,

@@ -44,6 +44,7 @@ const IDENTICAL_FUNCTIONS = [
   "getCollectionSegmentProgressKey",
   "renderCollectionMappingHint",
   "detectCurrentEpisodeNo",
+  "refreshCurrentEpisodeRecognitionState",
   "getCurrentVideoPartEpisodeNo",
   "getCurrentVideoPartContext",
   "getVideoPartListNodes",

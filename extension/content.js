@@ -5259,6 +5259,7 @@
     if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.bindingGuardMessage = "";
     state.subjectId = subjectId;
+    refreshCurrentEpisodeRecognitionState();
     state.collectionDeleteConfirmSubjectId = null;
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
@@ -10070,6 +10071,14 @@
     render();
   }
 
+  function refreshCurrentEpisodeRecognitionState() {
+    state.autoEpisodeSyncLastKey = "";
+    resetAutoWatchObservationState();
+    state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
+      ? null
+      : detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+  }
+
   async function setCurrentVideoAutoProgressDisabled(disabled) {
     const key = getCurrentVideoProgressKey();
     if (!key) return;
@@ -10085,12 +10094,11 @@
     state.disabledAutoProgressVideos = next;
     await writeJsonValueAsync(STORAGE.disabledAutoProgressVideos, state.disabledAutoProgressVideos);
     state.longVideoDetectionCache = null;
-    resetAutoWatchObservationState();
     if (disabled) {
       if (state.longVideoEpisodeGuess) resetLongVideoEpisodeGuess(false);
-      state.currentEpisodeNo = null;
-    } else {
-      state.currentEpisodeNo = detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+    }
+    refreshCurrentEpisodeRecognitionState();
+    if (!disabled) {
       const video = getActiveVideoElement();
       if (video) refreshLongVideoEpisodeGuess(video);
     }
