@@ -3815,7 +3815,7 @@
     if (rule) {
       const targetNo = getCollectionMappedEpisodeNo(context, rule);
       const targetLabel = Number.isFinite(targetNo) && targetNo > 0
-        ? `Bangumi 第 ${formatEpisodeSort(targetNo)} 集`
+        ? formatCollectionTargetEpisodeLabel(targetNo, rule)
         : "特殊分P（不自动标记）";
       return `<div class="biligumi-notice">合集映射：${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}。解绑会只删除当前范围映射。</div>`;
     }
@@ -9240,6 +9240,7 @@
       sourceEnd,
       targetStart,
       subjectId,
+      targetEpisodeZero: rule.targetEpisodeZero === true,
       segmentCount: Math.max(1, Math.min(MAX_COLLECTION_SEGMENTS, Math.round(Number(rule.segmentCount) || 1))),
       autoProgress: rule.autoProgress !== false && targetStart != null,
       createdAt: Number(rule.createdAt) || Date.now(),
@@ -9471,28 +9472,12 @@
     if (!context) return null;
     const existingResolution = getCollectionMappingResolution(context);
     if (existingResolution.ambiguous) throw new Error("当前分P命中多条合集规则，请先删除冲突规则");
-    if (context.episodeNo === 0) {
-      return {
-        context,
-        episodeCount: 0,
-        special: true,
-        replacesRule: existingResolution.rule || null,
-        rule: {
-          bvid: context.bvid,
-          id: `${context.seasonKey}:0-0`,
-          seasonKey: context.seasonKey,
-          sourceStart: 0,
-          sourceEnd: 0,
-          targetStart: null,
-          subjectId: Number(subjectId),
-          segmentCount: 1,
-          autoProgress: false,
-        },
-      };
-    }
     // Intentionally fail closed: without the authoritative episode count a guessed range
     // could bind or auto-mark the wrong Bangumi season.
-    const episodeCount = await getSubjectMainEpisodeCountForMapping(subjectId);
+    const inspectEpisodeZero = context.groupStart === 0
+      || Number(existingResolution.rule && existingResolution.rule.sourceStart) === 0;
+    const episodeInfo = await getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero);
+    const episodeCount = Number(episodeInfo && episodeInfo.episodeCount);
     if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
       throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
     }
@@ -9523,6 +9508,9 @@
     const targetStart = continuesPriorSubject
       ? Number(priorRule.targetStart) + sourceStart - Number(priorRule.sourceStart)
       : 1;
+    const targetEpisodeZero = continuesPriorSubject
+      ? priorRule.targetEpisodeZero === true
+      : episodeInfo.hasEpisodeZero === true;
     const remainingEpisodeCount = episodeCount - targetStart + 1;
     if (remainingEpisodeCount <= 0) throw new Error("该 Bangumi 条目的正片范围已经映射完成");
     let sourceEnd = Math.min(context.groupEnd, sourceStart + remainingEpisodeCount - 1);
@@ -9531,7 +9519,7 @@
     return {
       context,
       episodeCount,
-      special: false,
+      hasEpisodeZero: episodeInfo.hasEpisodeZero === true,
       replacesRule: coveringRule,
       rule: {
         bvid: context.bvid,
@@ -9541,6 +9529,7 @@
         sourceEnd,
         targetStart,
         subjectId: Number(subjectId),
+        targetEpisodeZero,
         segmentCount: context.segmentCount,
         autoProgress: true,
       },
@@ -9559,24 +9548,67 @@
     return Array.isArray(response && response.data) ? response.data.length : 0;
   }
 
+  async function getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero = false) {
+    const safeSubjectId = Number(subjectId);
+    const localEpisodes = Number(state.subjectId) === safeSubjectId ? getNormalEpisodes() : [];
+    if (localEpisodes.length) {
+      return {
+        episodeCount: localEpisodes.length,
+        hasEpisodeZero: localEpisodes.some((episode) => Number(episode && episode.sort) === 0),
+      };
+    }
+    if (!inspectEpisodeZero) {
+      return {
+        episodeCount: await getSubjectMainEpisodeCountForMapping(safeSubjectId),
+        hasEpisodeZero: false,
+      };
+    }
+    const response = await bgmRequestPagedData(`/v0/episodes?subject_id=${safeSubjectId}&type=0`, { pageSize: 200 });
+    const episodes = Array.isArray(response && response.data) ? response.data : [];
+    const total = Number(response && response.total);
+    return {
+      episodeCount: Number.isFinite(total) && total > 0 ? Math.round(total) : episodes.length,
+      hasEpisodeZero: episodes.some((episode) => Number(episode && episode.sort) === 0),
+    };
+  }
+
   function formatCollectionRangeBindingPrompt(proposal, subjectId) {
     const rule = proposal.rule;
     const subject = resolveLongVideoBindingSubject(subjectId);
     const subjectName = subject ? displaySubjectName(subject) : `Bangumi subject ${subjectId}`;
-    if (proposal.special) {
-      return `检测到“${proposal.context.title}”是第0话/特殊分P。\n\n是否只把这个分P绑定到“${subjectName}”？该分P不会自动标记正片进度。`;
-    }
     const splitNote = rule.segmentCount > 1 ? `；每集 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
-    const targetEnd = Number(rule.targetStart) + Number(rule.sourceEnd) - Number(rule.sourceStart);
+    const targetRange = formatCollectionTargetRange(rule);
+    const zeroNote = Number(rule.sourceStart) === 0
+      ? (rule.targetEpisodeZero
+        ? "\n\nBangumi API 的正片列表明确包含 EP0，将从 EP0 开始对齐。"
+        : "\n\n来源第0集将按 Bangumi 第1集处理，后续集数整体顺延一集。")
+      : "";
     const replaceNote = proposal.replacesRule
       ? `\n\n这将替换已有映射「${formatCollectionSourceRange(proposal.replacesRule)}」，不会留下被截断的前半段。`
       : "";
-    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 Bangumi 第${rule.targetStart}-${targetEnd}集${splitNote}。${replaceNote}\n\n确定保存这条范围映射吗？`;
+    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 ${targetRange}${splitNote}。${zeroNote}${replaceNote}\n\n确定保存这条范围映射吗？`;
   }
 
   function formatCollectionSourceRange(rule) {
     const season = rule.seasonKey === "default" ? "未标季" : `第${String(rule.seasonKey).replace(/^season:/, "")}季`;
     return `${season} 第${rule.sourceStart}-${rule.sourceEnd}集`;
+  }
+
+  function formatCollectionTargetEpisodeLabel(targetNo, rule) {
+    const ordinal = Number(targetNo);
+    if (!Number.isFinite(ordinal) || ordinal <= 0) return "Bangumi 未知集数";
+    return rule && rule.targetEpisodeZero
+      ? `Bangumi EP${formatEpisodeSort(ordinal - 1)}`
+      : `Bangumi 第 ${formatEpisodeSort(ordinal)} 集`;
+  }
+
+  function formatCollectionTargetRange(rule) {
+    const targetStart = Number(rule && rule.targetStart);
+    const targetEnd = targetStart + Number(rule && rule.sourceEnd) - Number(rule && rule.sourceStart);
+    if (rule && rule.targetEpisodeZero) {
+      return `Bangumi EP${formatEpisodeSort(targetStart - 1)}-EP${formatEpisodeSort(targetEnd - 1)}`;
+    }
+    return `Bangumi 第${formatEpisodeSort(targetStart)}-${formatEpisodeSort(targetEnd)}集`;
   }
 
   function isCurrentCollectionPartAutoMarkEligible() {

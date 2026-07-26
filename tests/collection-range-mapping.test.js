@@ -44,6 +44,7 @@ const sandbox = {
     .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
     .replace(/\s+/g, " ")
     .trim(),
+  formatEpisodeSort: (value) => String(value),
   getBvIdFromUrl: () => "BV15H3M65EED",
 };
 
@@ -60,6 +61,8 @@ runInSandbox([
   functionSource("getCollectionMappedEpisodeNo"),
   functionSource("putCollectionMappingRule"),
   functionSource("removeCollectionMappingRule"),
+  functionSource("formatCollectionTargetEpisodeLabel"),
+  functionSource("formatCollectionTargetRange"),
   functionSource("isCurrentCollectionPartAutoMarkEligible"),
   functionSource("buildCollectionRangeBindingProposal", true),
   functionSource("getCollectionSegmentProgressKey"),
@@ -71,6 +74,8 @@ runInSandbox([
   getCollectionMappingResolution,
   getCollectionMappedEpisodeNo,
   putCollectionMappingRule,
+  formatCollectionTargetEpisodeLabel,
+  formatCollectionTargetRange,
   isCurrentCollectionPartAutoMarkEligible,
   buildCollectionRangeBindingProposal,
   recordCurrentCollectionSegmentProgressIfNeeded,
@@ -176,11 +181,15 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   };
   sandbox.getCurrentCollectionPartContext = () => currentContext;
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 11;
+  sandbox.getSubjectMainEpisodeInfoForMapping = async (subjectId, inspectEpisodeZero) => ({
+    episodeCount: await sandbox.getSubjectMainEpisodeCountForMapping(subjectId),
+    hasEpisodeZero: Boolean(inspectEpisodeZero && sandbox.apiEpisodeZero),
+  });
   sandbox.state.collectionMappings = {};
   let proposal = await sandbox.api.buildCollectionRangeBindingProposal(1001);
   assert.deepEqual(plain(proposal.rule), {
     bvid, id: "default:1-11", seasonKey: "default", sourceStart: 1, sourceEnd: 11,
-    targetStart: 1, subjectId: 1001, segmentCount: 2, autoProgress: true,
+    targetStart: 1, subjectId: 1001, targetEpisodeZero: false, segmentCount: 2, autoProgress: true,
   });
 
   sandbox.state.collectionMappings = {
@@ -195,6 +204,36 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(proposal.rule.sourceStart, 12);
   assert.equal(proposal.rule.sourceEnd, 23);
   assert.equal(proposal.rule.targetStart, 1);
+
+  // Source episode 0 defaults to the first Bangumi main episode and shifts later labels by one.
+  sandbox.state.collectionMappings = {};
+  currentContext = {
+    bvid, seasonKey: "season:2", episodeNo: 0, groupStart: 0, groupEnd: 24,
+    segmentCount: 1, fragmentIndex: 1,
+  };
+  sandbox.getSubjectMainEpisodeCountForMapping = async () => 13;
+  sandbox.apiEpisodeZero = false;
+  proposal = await sandbox.api.buildCollectionRangeBindingProposal(373247);
+  assert.equal(proposal.rule.sourceStart, 0);
+  assert.equal(proposal.rule.sourceEnd, 12);
+  assert.equal(proposal.rule.targetStart, 1);
+  assert.equal(proposal.rule.targetEpisodeZero, false);
+  assert.equal(sandbox.api.getCollectionMappedEpisodeNo({ ...currentContext, episodeNo: 0 }, proposal.rule), 1);
+  assert.equal(sandbox.api.getCollectionMappedEpisodeNo({ ...currentContext, episodeNo: 1 }, proposal.rule), 2);
+  assert.equal(sandbox.api.formatCollectionTargetRange(proposal.rule), "Bangumi 第1-13集");
+  assert.equal(sandbox.api.formatCollectionTargetEpisodeLabel(1, proposal.rule), "Bangumi 第 1 集");
+
+  // Bangumi subject 373247 is a real API shape: type=0 contains sort=0 while ep remains 1.
+  sandbox.apiEpisodeZero = true;
+  proposal = await sandbox.api.buildCollectionRangeBindingProposal(373247);
+  assert.equal(proposal.rule.sourceStart, 0);
+  assert.equal(proposal.rule.sourceEnd, 12);
+  assert.equal(proposal.rule.targetStart, 1, "targetStart is the local main-episode ordinal");
+  assert.equal(proposal.rule.targetEpisodeZero, true, "sort=0 metadata preserves the real EP0 label");
+  assert.equal(sandbox.api.getCollectionMappedEpisodeNo({ ...currentContext, episodeNo: 0 }, proposal.rule), 1);
+  assert.equal(sandbox.api.getCollectionMappedEpisodeNo({ ...currentContext, episodeNo: 1 }, proposal.rule), 2);
+  assert.equal(sandbox.api.formatCollectionTargetRange(proposal.rule), "Bangumi EP0-EP12");
+  assert.equal(sandbox.api.formatCollectionTargetEpisodeLabel(1, proposal.rule), "Bangumi EP0");
 
   sandbox.state.collectionMappings = {
     [bvid]: [{
@@ -397,6 +436,29 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     failClosedSandbox,
   );
   assert.equal(failClosedSandbox.readEpisode("1.2"), null, "no-rule collection does not reinterpret 1.2 as episode 1");
+
+  const episodeInfoSandbox = {
+    state: { subjectId: null },
+    getNormalEpisodes: () => [],
+    getSubjectMainEpisodeCountForMapping: async () => 13,
+    bgmRequestPagedData: async (path, options) => {
+      assert.match(path, /subject_id=373247&type=0/);
+      assert.equal(options.pageSize, 200);
+      return {
+        total: 13,
+        data: [
+          { id: 1212094, type: 0, sort: 0, ep: 1, name: "守護術師フィッツ" },
+          { id: 1212095, type: 0, sort: 1, ep: 2 },
+        ],
+      };
+    },
+  };
+  runInSandbox(
+    `${functionSource("getSubjectMainEpisodeInfoForMapping", true)};globalThis.readEpisodeInfo = getSubjectMainEpisodeInfoForMapping;`,
+    episodeInfoSandbox,
+  );
+  const explicitZeroInfo = await episodeInfoSandbox.readEpisodeInfo(373247, true);
+  assert.deepEqual(plain(explicitZeroInfo), { episodeCount: 13, hasEpisodeZero: true });
 
   console.log("collection range mapping tests passed");
 })().catch((error) => {

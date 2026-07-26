@@ -38,6 +38,8 @@ const IDENTICAL_FUNCTIONS = [
   "removeCollectionMappingRule",
   "formatCollectionRangeBindingPrompt",
   "formatCollectionSourceRange",
+  "formatCollectionTargetEpisodeLabel",
+  "formatCollectionTargetRange",
   "isCurrentCollectionPartAutoMarkEligible",
   "getCollectionSegmentProgressKey",
   "renderCollectionMappingHint",
@@ -64,6 +66,7 @@ for (const name of IDENTICAL_FUNCTIONS) {
 for (const name of [
   "buildCollectionRangeBindingProposal",
   "getSubjectMainEpisodeCountForMapping",
+  "getSubjectMainEpisodeInfoForMapping",
   "recordCurrentCollectionSegmentProgressIfNeeded",
   "clearCurrentCollectionSegmentProgress",
 ]) {
