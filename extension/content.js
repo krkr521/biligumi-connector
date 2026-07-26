@@ -9203,9 +9203,10 @@
       .trim();
     if (!text) return null;
 
+    // Allow optional free-text after the episode token (e.g. "1.1 相遇", "第二季1 开端").
     const seasonPatterns = [
-      /^(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[话話集])?(?:\s*[-_.．]?\s*(上|下|前|后|後|A|B|1|2))?$/i,
-      /^(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E|EP)?\.?\s*0*(\d{1,3})(?:\s*[-_.．]?\s*(A|B|上|下|1|2))?$/i,
+      /^(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[话話集])?(?:\s*[-_.．]?\s*(上|下|前|后|後|A|B|1|2))?(?:\s+.+)?$/i,
+      /^(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E|EP)?\.?\s*0*(\d{1,3})(?:\s*[-_.．]?\s*(A|B|上|下|1|2))?(?:\s+.+)?$/i,
     ];
     for (const [index, pattern] of seasonPatterns.entries()) {
       const match = text.match(pattern);
@@ -9224,7 +9225,7 @@
       };
     }
 
-    const decimalMatch = text.match(/^0*(\d{1,3})\s*[.．]\s*([12])$/);
+    const decimalMatch = text.match(/^0*(\d{1,3})\s*[.．]\s*([12])(?:\s+.+)?$/);
     if (decimalMatch) {
       return {
         seasonKey: "default",
@@ -9236,7 +9237,7 @@
       };
     }
 
-    const splitMatch = text.match(/^(?:(?:E|EP)\s*)?(?:第\s*)?0*(\d{1,3})\s*(?:[话話集])?\s*[-_.．]?\s*(上|下|前|后|後|A|B)$/i);
+    const splitMatch = text.match(/^(?:(?:E|EP)\s*)?(?:第\s*)?0*(\d{1,3})\s*(?:[话話集])?\s*[-_.．]?\s*(上|下|前|后|後|A|B)(?:\s+.+)?$/i);
     if (splitMatch) {
       const fragment = parseCollectionFragment(splitMatch[2]);
       return {
@@ -9297,11 +9298,14 @@
     const groupRows = parsedRows.filter((row) => row.parsed.seasonKey === parsed.seasonKey);
     const logicalEpisodes = Array.from(new Set(groupRows.map((row) => row.parsed.episodeNo))).sort((a, b) => a - b);
     if (logicalEpisodes.length < 2) return null;
-    const fragmentCounts = new Map();
+    // Count actual uploaded parts per logical episode (declared "1.1" alone is 1 segment, not 2).
+    const fragmentsByEpisode = new Map();
     groupRows.forEach((row) => {
       const key = row.parsed.episodeNo;
-      fragmentCounts.set(key, Math.max(fragmentCounts.get(key) || 1, row.parsed.fragmentCount || 1));
+      if (!fragmentsByEpisode.has(key)) fragmentsByEpisode.set(key, new Set());
+      fragmentsByEpisode.get(key).add(Math.max(1, Number(row.parsed.fragmentIndex) || 1));
     });
+    const actualFragments = fragmentsByEpisode.get(parsed.episodeNo);
     return {
       ...part,
       ...parsed,
@@ -9310,7 +9314,7 @@
       groupEnd: logicalEpisodes[logicalEpisodes.length - 1],
       groupLogicalEpisodeCount: logicalEpisodes.length,
       parsedPartCount: parsedRows.length,
-      segmentCount: fragmentCounts.get(parsed.episodeNo) || parsed.fragmentCount || 1,
+      segmentCount: Math.max(1, actualFragments ? actualFragments.size : 1),
     };
   }
 
@@ -9377,6 +9381,7 @@
         context,
         episodeCount: 0,
         special: true,
+        replacesRule: existingResolution.rule || null,
         rule: {
           bvid: context.bvid,
           id: `${context.seasonKey}:0-0`,
@@ -9394,13 +9399,23 @@
     if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
       throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
     }
+    // If the current episode already sits inside a rule, replace that whole range
+    // instead of starting mid-range and orphaning earlier source episodes.
+    const coveringRule = existingResolution.rule || null;
     const siblingRules = getCollectionMappingRules(context.bvid)
       .filter((rule) => rule.seasonKey === context.seasonKey)
+      .filter((rule) => !coveringRule || rule.id !== coveringRule.id)
       .sort((left, right) => left.sourceStart - right.sourceStart);
-    const priorRule = siblingRules.filter((rule) => rule.sourceEnd < context.episodeNo).at(-1) || null;
-    const sourceStart = priorRule && context.episodeNo <= priorRule.sourceEnd + 1
-      ? priorRule.sourceEnd + 1
-      : (context.episodeNo === context.groupStart ? context.groupStart : context.episodeNo);
+    let sourceStart;
+    if (coveringRule) {
+      sourceStart = coveringRule.sourceStart;
+    } else {
+      const priorForStart = siblingRules.filter((rule) => rule.sourceEnd < context.episodeNo).at(-1) || null;
+      sourceStart = priorForStart && context.episodeNo <= priorForStart.sourceEnd + 1
+        ? priorForStart.sourceEnd + 1
+        : (context.episodeNo === context.groupStart ? context.groupStart : context.episodeNo);
+    }
+    const priorRule = siblingRules.filter((rule) => rule.sourceEnd < sourceStart).at(-1) || null;
     const nextRule = siblingRules.find((rule) => rule.sourceStart > sourceStart) || null;
     const continuesPriorSubject = Boolean(
       priorRule
@@ -9420,6 +9435,7 @@
       context,
       episodeCount,
       special: false,
+      replacesRule: coveringRule,
       rule: {
         bvid: context.bvid,
         id: `${context.seasonKey}:${sourceStart}-${sourceEnd}`,
@@ -9455,7 +9471,10 @@
     }
     const splitNote = rule.segmentCount > 1 ? `；每集 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
     const targetEnd = Number(rule.targetStart) + Number(rule.sourceEnd) - Number(rule.sourceStart);
-    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 Bangumi 第${rule.targetStart}-${targetEnd}集${splitNote}。\n\n确定保存这条范围映射吗？`;
+    const replaceNote = proposal.replacesRule
+      ? `\n\n这将替换已有映射「${formatCollectionSourceRange(proposal.replacesRule)}」，不会留下被截断的前半段。`
+      : "";
+    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 Bangumi 第${rule.targetStart}-${targetEnd}集${splitNote}。${replaceNote}\n\n确定保存这条范围映射吗？`;
   }
 
   function formatCollectionSourceRange(rule) {
@@ -9490,7 +9509,9 @@
     const context = getCurrentCollectionPartContext();
     if (!context) return true;
     const rule = getCollectionMappingRule(context);
-    if (!rule || !rule.autoProgress) return false;
+    // Match isCurrentCollectionPartAutoMarkEligible: no rules yet → legacy whole-BV path.
+    if (!rule) return getCollectionMappingRules(context.bvid).length === 0;
+    if (!rule.autoProgress) return false;
     const segmentCount = Math.max(1, Number(context.segmentCount) || Number(rule.segmentCount) || 1);
     if (segmentCount <= 1) return true;
     const fragmentIndex = Math.max(1, Number(context.fragmentIndex) || 1);
@@ -9501,7 +9522,13 @@
       const previous = progress[key] && Array.isArray(progress[key].completed) ? progress[key].completed : [];
       const completed = Array.from(new Set(previous.concat(fragmentIndex))).sort((left, right) => left - right);
       progress[key] = { completed, updatedAt: Date.now() };
-      complete = completed.filter((part) => part <= segmentCount).length >= segmentCount;
+      complete = true;
+      for (let part = 1; part <= segmentCount; part += 1) {
+        if (!completed.includes(part)) {
+          complete = false;
+          break;
+        }
+      }
       return completed.length !== previous.length;
     });
     return complete;

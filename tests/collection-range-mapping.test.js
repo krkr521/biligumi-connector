@@ -65,6 +65,12 @@ assert.equal(sandbox.api.parseCollectionPartTitle("第1集下").fragmentIndex, 2
 assert.equal(sandbox.api.parseCollectionPartTitle("EP01-A").fragmentIndex, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("EP01-B").fragmentIndex, 2);
 assert.equal(sandbox.api.parseCollectionPartTitle("S2E13").seasonKey, "season:2");
+assert.equal(sandbox.api.parseCollectionPartTitle("1.1 相遇").episodeNo, 1);
+assert.equal(sandbox.api.parseCollectionPartTitle("1.1 相遇").fragmentIndex, 1);
+assert.equal(sandbox.api.parseCollectionPartTitle("第二季1 开端").seasonKey, "season:2");
+assert.equal(sandbox.api.parseCollectionPartTitle("第二季1 开端").episodeNo, 1);
+assert.equal(sandbox.api.parseCollectionPartTitle("S2E13 标题").episodeNo, 13);
+assert.equal(sandbox.api.parseCollectionPartTitle("第1集上 前半").fragmentIndex, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("1080P"), null);
 assert.equal(sandbox.api.parseCollectionPartTitle("4K超清"), null);
 
@@ -157,12 +163,38 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(proposal.rule.sourceEnd, 8);
   assert.equal(proposal.rule.targetStart, 5, "an ongoing collection must continue the same Bangumi episode numbering");
 
+  // Mid-range rebind must replace the covering rule wholesale, not orphan 1..N-1.
+  sandbox.state.collectionMappings = {
+    [bvid]: [{
+      id: "default:1-11", seasonKey: "default", sourceStart: 1, sourceEnd: 11,
+      targetStart: 1, subjectId: 1001, segmentCount: 2, autoProgress: true,
+    }],
+  };
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 5, groupStart: 1, groupEnd: 23,
+    segmentCount: 2, fragmentIndex: 1,
+  };
+  sandbox.getSubjectMainEpisodeCountForMapping = async () => 11;
+  proposal = await sandbox.api.buildCollectionRangeBindingProposal(9001);
+  assert.equal(proposal.rule.sourceStart, 1, "covering rule rebind keeps the original range start");
+  assert.equal(proposal.rule.sourceEnd, 11);
+  assert.equal(proposal.rule.targetStart, 1);
+  assert.equal(proposal.replacesRule.sourceStart, 1);
+  assert.equal(proposal.replacesRule.sourceEnd, 11);
+  const remapped = {};
+  sandbox.api.putCollectionMappingRule(remapped, { ...proposal.rule, bvid });
+  assert.equal(remapped[bvid].length, 1);
+  assert.equal(remapped[bvid][0].subjectId, 9001);
+  assert.equal(remapped[bvid][0].sourceStart, 1);
+  assert.equal(remapped[bvid][0].sourceEnd, 11);
+
   const progress = {};
   const splitRule = {
     id: "default:1-11", seasonKey: "default", sourceStart: 1, sourceEnd: 11,
     targetStart: 1, subjectId: 1001, segmentCount: 2, autoProgress: true,
   };
   sandbox.getCollectionMappingRule = () => splitRule;
+  sandbox.getCollectionMappingRules = () => [splitRule];
   sandbox.updateStoredCollectionSegmentProgress = async (update) => update(progress);
   currentContext = {
     bvid, seasonKey: "default", episodeNo: 1, segmentCount: 2, fragmentIndex: 1,
@@ -170,6 +202,29 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
   currentContext = { ...currentContext, fragmentIndex: 2 };
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true);
+
+  // Incomplete splits: only fragment 1 exists → segmentCount 1 → single watch completes.
+  progress["solo"] = undefined;
+  sandbox.getCollectionMappingRule = () => splitRule;
+  sandbox.getCollectionSegmentProgressKey = () => "solo-key";
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 2, segmentCount: 1, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "actual single-part episodes must auto-mark without waiting for a missing .2");
+
+  // No mapping rules yet: legacy auto-mark path must still be allowed.
+  sandbox.getCollectionMappingRule = () => null;
+  sandbox.getCollectionMappingRules = () => [];
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 1, segmentCount: 2, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "collection-shaped multi-P without rules must not block legacy auto-mark");
+
+  // Other ranges already mapped, current part unmapped → block.
+  sandbox.getCollectionMappingRules = () => [splitRule];
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
 
   const nodes = [
     { title: "1.1", active: true },
@@ -239,6 +294,39 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(liveContext.seasonKey, "season:3");
   assert.equal(liveContext.episodeNo, 1);
   assert.equal(liveContext.groupEnd, 4);
+
+  // Incomplete decimal split list: only "2.1" for episode 2 → segmentCount is 1, not 2.
+  const incompleteTitles = ["1.1", "1.2", "2.1", "3.1", "3.2"];
+  const incompleteNodes = incompleteTitles.map((title, index) => ({
+    className: index === 2 ? "active" : "",
+    textContent: title,
+    getAttribute: (name) => name === "title" ? title : "",
+    querySelectorAll: () => [],
+  }));
+  const incompleteSandbox = {
+    document: {
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? incompleteNodes : [],
+    },
+    getBvIdFromUrl: () => bvid,
+    getCurrentPartNoFromUrl: () => 3,
+    stripTrailingDurationText: sandbox.stripTrailingDurationText,
+  };
+  runInSandbox([
+    functionSource("parseChineseNumber"),
+    functionSource("parseCollectionFragment"),
+    functionSource("parseCollectionPartTitle"),
+    functionSource("parseLongVideoPartTitle"),
+    functionSource("getVideoPartListNodes"),
+    functionSource("isActiveVideoPartNode"),
+    functionSource("getVideoPartNodeTitle"),
+    functionSource("getCurrentVideoPartContext"),
+    functionSource("getCollectionPartRows"),
+    functionSource("getCurrentCollectionPartContext"),
+  ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", incompleteSandbox);
+  const incompleteContext = incompleteSandbox.readCollectionContext();
+  assert.equal(incompleteContext.episodeNo, 2);
+  assert.equal(incompleteContext.segmentCount, 1, "missing .2 must not invent a second required segment");
 
   console.log("collection range mapping tests passed");
 })().catch((error) => {
