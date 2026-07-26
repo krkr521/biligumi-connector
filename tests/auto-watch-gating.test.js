@@ -158,6 +158,7 @@ function createSandbox() {
     applySingleEpisodeProgress: () => {},
     formatEpisodeSort: (value) => String(value),
     getEpisodeLocalNo: () => 1,
+    getEpisodeDisplayNo: () => 1,
     render: () => { sandbox.renderCount += 1; },
     loadSubjectBundle: async () => {},
     showError: () => { throw new Error("showError must not be reached from the gating paths"); },

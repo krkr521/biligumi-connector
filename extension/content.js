@@ -4473,10 +4473,11 @@
             const episodeId = Number(ep.id) || 0;
             const done = getEpisodeCollectionType(ep.id) === 2;
             const localNo = index + 1;
+            const displayNo = getEpisodeDisplayNo(ep, localNo, episodes);
             const current = isCurrentEpisodeNumber(ep, localNo, episodes.length);
             const airState = done ? "watched" : getEpisodeAirState(ep);
             const airClass = airState === "unaired" ? "unaired" : airState === "onair" ? "onair" : "";
-            return `<button class="biligumi-episode ${done ? "done" : ""} ${airClass} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(localNo))}</button>`;
+            return `<button class="biligumi-episode ${done ? "done" : ""} ${airClass} ${current ? "current" : ""}" data-action="toggle-episode" data-episode-id="${episodeId}" data-done="${done ? "1" : "0"}">${escapeHtml(formatEpisodeSort(displayNo))}</button>`;
           }).join("")}
         </div>
         <div class="biligumi-progress-edit">
@@ -6119,7 +6120,7 @@
       await clearCurrentCollectionSegmentProgress();
       clearAutoWatchFailureRecord(syncKey);
       state.busy = false;
-      state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeLocalNo(currentEpisode))} 集看过。`;
+      state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeDisplayNo(currentEpisode))} 集看过。`;
       state.error = "";
       render();
       window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
@@ -9091,6 +9092,11 @@
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
       return null;
     }
+    // Official Bangumi pages expose the current item as a 1-based position
+    // such as "(2/13)". Prefer that ordinal over a visible label such as
+    // "第1集": a season with a real episode 0 uses label 1 for item 2.
+    const officialProgressNo = getOfficialBangumiProgressEpisodeNo();
+    if (officialProgressNo) return officialProgressNo;
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
     if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
@@ -10577,6 +10583,15 @@
     return index >= 0 ? index + 1 : Number(episode && episode.sort) || 0;
   }
 
+  function getEpisodeDisplayNo(episode, localNo = getEpisodeLocalNo(episode), episodes = getNormalEpisodes()) {
+    const hasEpisodeZero = episodes.some((ep) => ep && ep.sort != null && Number(ep.sort) === 0);
+    const rawSort = episode && episode.sort;
+    const bangumiSort = rawSort == null || rawSort === "" ? NaN : Number(rawSort);
+    return hasEpisodeZero && Number.isFinite(bangumiSort) && bangumiSort >= 0
+      ? bangumiSort
+      : localNo;
+  }
+
   function isCurrentEpisodeNumber(episode, localNo, total) {
     const currentNo = Number(state.currentEpisodeNo);
     if (!Number.isFinite(currentNo) || currentNo <= 0) return false;
@@ -10630,7 +10645,7 @@
     const episode = state.episodes.find((ep) => Number(ep.id) === episodeId);
     if (!episode) return;
     const tip = ensureEpisodeTooltip();
-    tip.innerHTML = renderEpisodeTooltipContent(episode, getEpisodeLocalNo(episode), getEpisodeCollectionType(episode.id) === 2);
+    tip.innerHTML = renderEpisodeTooltipContent(episode, getEpisodeDisplayNo(episode), getEpisodeCollectionType(episode.id) === 2);
     tip.style.display = "block";
     const rect = button.getBoundingClientRect();
     const width = tip.offsetWidth;
@@ -10689,6 +10704,7 @@
 
   function formatEpisodeSort(sort) {
     if (!Number.isFinite(sort)) return "?";
+    if (sort === 0) return "0";
     return sort < 10 ? `0${sort}` : String(sort);
   }
 
