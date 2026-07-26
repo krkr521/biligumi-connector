@@ -22,6 +22,24 @@ const extensionSource = readSource(EXTENSION_PATH);
 
 // No route/storage adapter usage: must be byte-identical across both builds.
 const IDENTICAL_FUNCTIONS = [
+  "normalizeCollectionMappings",
+  "normalizeCollectionMappingRule",
+  "normalizeCollectionSegmentProgress",
+  "parseCollectionPartTitle",
+  "parseChineseNumber",
+  "parseCollectionFragment",
+  "getCollectionPartRows",
+  "getCurrentCollectionPartContext",
+  "getCollectionMappingRules",
+  "getCollectionMappingResolution",
+  "getCollectionMappingRule",
+  "getCollectionMappedEpisodeNo",
+  "putCollectionMappingRule",
+  "removeCollectionMappingRule",
+  "formatCollectionRangeBindingPrompt",
+  "formatCollectionSourceRange",
+  "isCurrentCollectionPartAutoMarkEligible",
+  "getCollectionSegmentProgressKey",
   "renderLongVideoBindingPrompt",
   "resolveLongVideoBindingSubject",
   "buildLongVideoBindingPromptState",
@@ -34,6 +52,17 @@ const IDENTICAL_FUNCTIONS = [
 for (const name of IDENTICAL_FUNCTIONS) {
   const userscriptBlock = extractFunction(userscriptSource, name);
   const extensionBlock = extractFunction(extensionSource, name);
+  assert.equal(extensionBlock, userscriptBlock, `${name} must stay identical between userscript and extension`);
+}
+
+for (const name of [
+  "buildCollectionRangeBindingProposal",
+  "getSubjectMainEpisodeCountForMapping",
+  "recordCurrentCollectionSegmentProgressIfNeeded",
+  "clearCurrentCollectionSegmentProgress",
+]) {
+  const userscriptBlock = extractFunction(userscriptSource, name, { async: true });
+  const extensionBlock = extractFunction(extensionSource, name, { async: true });
   assert.equal(extensionBlock, userscriptBlock, `${name} must stay identical between userscript and extension`);
 }
 

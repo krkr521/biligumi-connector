@@ -35,7 +35,7 @@ function readLogicBlock(filePath) {
   assert.notEqual(start, -1, `Missing long-video logic start in ${filePath}`);
   assert.notEqual(medianStart, -1, `Missing long-video logic median helper in ${filePath}`);
   assert.notEqual(end, -1, `Missing long-video logic end in ${filePath}`);
-  return source.slice(start, end);
+  return source.slice(start, end).replace(/\r\n/g, "\n");
 }
 
 const userscriptLogic = readLogicBlock(userscriptPath);

@@ -41,11 +41,13 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.1";
+  const SCRIPT_VERSION = "0.3.2";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
     bindingSubjects: "biligumi.bindingSubjects",
+    collectionMappings: "biligumi.collectionMappings",
+    collectionSegmentProgress: "biligumi.collectionSegmentProgress",
     whitelist: "biligumi.whitelist",
     whitelistLabels: "biligumi.whitelistLabels",
     panelCollapsed: "biligumi.panelCollapsed",
@@ -171,6 +173,8 @@
     token: readValue(STORAGE.token, ""),
     bindings: readJsonValue(STORAGE.bindings, {}),
     bindingSubjects: readJsonValue(STORAGE.bindingSubjects, {}),
+    collectionMappings: normalizeCollectionMappings(readJsonValue(STORAGE.collectionMappings, {})),
+    collectionSegmentProgress: normalizeCollectionSegmentProgress(readJsonValue(STORAGE.collectionSegmentProgress, {})),
     whitelist: readListValue(STORAGE.whitelist, []),
     whitelistLabels: readJsonValue(STORAGE.whitelistLabels, {}),
     subjectId: null,
@@ -2698,6 +2702,13 @@
     if (latestBindingSubjects && typeof latestBindingSubjects === "object" && !Array.isArray(latestBindingSubjects)) {
       state.bindingSubjects = latestBindingSubjects;
     }
+    state.collectionMappings = normalizeCollectionMappings(readJsonValue(STORAGE.collectionMappings, {}));
+    const collectionContext = getCurrentCollectionPartContext();
+    if (collectionContext) {
+      const collectionRule = getCollectionMappingRule(collectionContext);
+      if (collectionRule) return Number(collectionRule.subjectId) || null;
+      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
+    }
     for (const key of getDirectBindingKeysForCurrentPage()) {
       if (state.bindings[key]) {
         migrateCurrentBindingKeys(state.bindings[key]);
@@ -3073,6 +3084,7 @@
       ${headerHtml}
       ${renderPanelProgressSlot()}
       ${renderSearchOrSubject()}
+      ${renderCollectionMappingHint()}
       ${state.message ? `<div class="biligumi-notice">${escapeHtml(state.message)}</div>` : ""}
       ${state.error ? `<div class="biligumi-notice error">${escapeHtml(state.error)}</div>` : ""}
       <div class="biligumi-foot">
@@ -3787,6 +3799,23 @@
         </div>
       </div>
     `;
+  }
+
+  function renderCollectionMappingHint() {
+    const context = getCurrentCollectionPartContext();
+    if (!context) return "";
+    const rule = getCollectionMappingRule(context);
+    if (rule) {
+      const targetNo = getCollectionMappedEpisodeNo(context, rule);
+      const targetLabel = Number.isFinite(targetNo) && targetNo > 0
+        ? `Bangumi 第 ${formatEpisodeSort(targetNo)} 集`
+        : "特殊分P（不自动标记）";
+      return `<div class="biligumi-notice">合集映射：${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}。解绑会只删除当前范围映射。</div>`;
+    }
+    if (getCollectionMappingRules(context.bvid).length) {
+      return `<div class="biligumi-notice">检测到合集；当前分P「${escapeHtml(context.title)}」尚未映射。请为这一段绑定正确的 Bangumi 条目。</div>`;
+    }
+    return `<div class="biligumi-notice">检测到多条目合集（${context.parsedPartCount} 个可识别分P）。如当前绑定不正确，请先解绑；重新绑定时会建议建立范围映射，而不是绑定整个 BV。</div>`;
   }
 
   function renderStandaloneSearchPanel(nonMainKeyword = "") {
@@ -5132,15 +5161,44 @@
   }
 
   async function bindSubject(subjectId, routeContext = captureRouteContext()) {
-    const bindingKeys = getBindingKeysForCurrentPage();
     ensureRouteContext(routeContext, "页面已切换，已取消绑定；请在当前页面重新操作。");
+    const legacyBindingKeys = getBindingKeysForCurrentPage();
+    const collectionProposal = await buildCollectionRangeBindingProposal(subjectId);
+    if (!isRouteContextCurrent(routeContext)) return;
+    if (collectionProposal && !window.confirm(formatCollectionRangeBindingPrompt(collectionProposal, subjectId))) {
+      state.busy = false;
+      state.message = "已取消绑定；没有修改合集映射。";
+      state.error = "";
+      render();
+      return;
+    }
     let applied = false;
-    await updateBindings((bindings) => {
-      if (!isRouteContextCurrent(routeContext)) return false;
-      for (const key of bindingKeys) bindings[key] = subjectId;
-      applied = true;
-      return true;
-    });
+    if (collectionProposal) {
+      await updateStoredCollectionMappings((mappings) => {
+        if (!isRouteContextCurrent(routeContext)) return false;
+        putCollectionMappingRule(mappings, { ...collectionProposal.rule, subjectId: Number(subjectId) });
+        applied = true;
+        return true;
+      });
+      if (applied) {
+        await updateBindings((bindings) => {
+          let changed = false;
+          for (const key of legacyBindingKeys) {
+            if (!Object.prototype.hasOwnProperty.call(bindings, key)) continue;
+            delete bindings[key];
+            changed = true;
+          }
+          return changed;
+        });
+      }
+    } else {
+      await updateBindings((bindings) => {
+        if (!isRouteContextCurrent(routeContext)) return false;
+        for (const key of legacyBindingKeys) bindings[key] = subjectId;
+        applied = true;
+        return true;
+      });
+    }
     if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.bindingGuardMessage = "";
     state.subjectId = subjectId;
@@ -5166,20 +5224,35 @@
       render();
       return;
     }
-    const ok = window.confirm("只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？");
+    const collectionContext = getCurrentCollectionPartContext();
+    const collectionRule = collectionContext && getCollectionMappingRule(collectionContext);
+    const ok = window.confirm(collectionRule
+      ? `只删除合集范围“${formatCollectionSourceRange(collectionRule)}”的绑定，不会影响其他范围或删除 Bangumi 记录。确定解绑吗？`
+      : "只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？");
     if (!ok) return;
     const routeContext = captureRouteContext();
     const subjectId = Number(state.subjectId);
-    const bindingKeys = getBindingKeysForCurrentPage();
     let applied = false;
-    await updateBindings((bindings) => {
-      if (!isRouteContextCurrent(routeContext)) return false;
-      applied = true;
-      for (const key of bindingKeys) {
-        if (Number(bindings[key]) === subjectId) delete bindings[key];
-      }
-      return true;
-    });
+    if (collectionRule) {
+      await updateStoredCollectionMappings((mappings) => {
+        if (!isRouteContextCurrent(routeContext)) return false;
+        applied = removeCollectionMappingRule(mappings, collectionContext.bvid, collectionRule.id);
+        return applied;
+      });
+    } else {
+      const bindingKeys = getBindingKeysForCurrentPage();
+      await updateBindings((bindings) => {
+        if (!isRouteContextCurrent(routeContext)) return false;
+        applied = true;
+        let changed = false;
+        for (const key of bindingKeys) {
+          if (Number(bindings[key]) !== subjectId) continue;
+          delete bindings[key];
+          changed = true;
+        }
+        return changed;
+      });
+    }
     if (!applied || !isRouteContextCurrent(routeContext)) return;
     state.subjectId = null;
     state.collectionDeleteConfirmSubjectId = null;
@@ -5198,7 +5271,7 @@
     state.episodes = [];
     state.episodeCollections = [];
     await clearLongVideoEpisodeModeDecision();
-    state.message = "已解除当前 B站页面和 Bangumi 条目的绑定。";
+    state.message = collectionRule ? "已删除当前合集范围映射。" : "已解除当前 B站页面和 Bangumi 条目的绑定。";
     state.error = "";
     removeSubjectInfoPanel();
     removeCharacterStrip();
@@ -5233,15 +5306,16 @@
       return;
     }
     const subjectId = Number(state.subjectId);
-    const requestKey = `${subjectId}|${state.token || ""}`;
+    const routeContext = captureRouteContext();
+    const requestKey = `${subjectId}|${state.token || ""}|${routeContext.pageKey}|${routeContext.routeSeq}|${routeContext.href}`;
     if (subjectBundleRequests.has(requestKey)) return subjectBundleRequests.get(requestKey);
-    const promise = loadSubjectBundleFresh(subjectId, state.token || "")
+    const promise = loadSubjectBundleFresh(subjectId, state.token || "", routeContext)
       .finally(() => subjectBundleRequests.delete(requestKey));
     subjectBundleRequests.set(requestKey, promise);
     return promise;
   }
 
-  async function loadSubjectBundleFresh(subjectId, tokenSnapshot) {
+  async function loadSubjectBundleFresh(subjectId, tokenSnapshot, routeContext = captureRouteContext()) {
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
     try {
@@ -5249,7 +5323,7 @@
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
-      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (!isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
         advancePanelLoad(label, loadId);
         return value;
@@ -5261,7 +5335,7 @@
         collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
         tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
       ]);
-      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (!isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
       await rememberBindingSubject(subject);
       state.subjectInfoLinks = {};
@@ -5287,13 +5361,14 @@
     if (!state.subjectId) return;
     const subjectId = Number(state.subjectId);
     const tokenSnapshot = state.token || "";
+    const routeContext = captureRouteContext();
     let loadId = 0;
     try {
       const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
-      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (!isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
         advancePanelLoad(label, loadId);
         return value;
@@ -5305,7 +5380,7 @@
         collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
         tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
       ]);
-      if (Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (!isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
       await rememberBindingSubject(subject);
       state.subjectInfoLinks = {};
@@ -6008,6 +6083,7 @@
     const longVideoGuess = video ? refreshLongVideoEpisodeGuess(video) : null;
     const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
     if (!state.token || !state.subjectId || !hasCollection() || state.autoEpisodeSyncing) return;
+    if (!isCurrentCollectionPartAutoMarkEligible()) return;
     if (longVideoModeEnabled && (!longVideoGuess || !longVideoGuess.active || !longVideoGuess.episode || !longVideoGuess.autoMarkSafe)) return;
     const currentEpisode = getCurrentNormalEpisode();
     if (!currentEpisode || getEpisodeCollectionType(currentEpisode.id) === 2) return;
@@ -6020,6 +6096,7 @@
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
     updateAutoWatchJumpState(video, syncKey, watchedPercent);
     if (watchedPercent < getAutoWatchThreshold()) return;
+    if (!(await recordCurrentCollectionSegmentProgressIfNeeded())) return;
     if (state.autoWatchBlockedKey === syncKey) return;
     if (state.autoEpisodeSyncLastKey === syncKey) return;
     if (state.autoWatchAuthBlocked) return;
@@ -6034,6 +6111,7 @@
     try {
       await patchEpisodes([Number(currentEpisode.id)], 2, "", false);
       applySingleEpisodeProgress(Number(currentEpisode.id), 2);
+      await clearCurrentCollectionSegmentProgress();
       clearAutoWatchFailureRecord(syncKey);
       state.busy = false;
       state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeLocalNo(currentEpisode))} 集看过。`;
@@ -9002,6 +9080,13 @@
   }
 
   function detectCurrentEpisodeNo(rawTitle) {
+    const collectionContext = getCurrentCollectionPartContext();
+    if (collectionContext) {
+      const collectionRule = getCollectionMappingRule(collectionContext);
+      if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
+      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
+      if (collectionContext.episodeNo > 0) return collectionContext.episodeNo;
+    }
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
     if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
@@ -9058,6 +9143,382 @@
     render();
   }
 
+  function normalizeCollectionMappings(value) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const result = {};
+    for (const [rawBvid, rawRules] of Object.entries(source)) {
+      const bvid = String(rawBvid || "").toUpperCase();
+      if (!/^BV[\w]+$/i.test(bvid) || !Array.isArray(rawRules)) continue;
+      const rules = rawRules.map(normalizeCollectionMappingRule).filter(Boolean);
+      if (rules.length) result[bvid] = rules;
+    }
+    return result;
+  }
+
+  function normalizeCollectionMappingRule(value) {
+    const rule = value && typeof value === "object" ? value : {};
+    const seasonKey = String(rule.seasonKey || "").trim();
+    const sourceStart = Number(rule.sourceStart);
+    const sourceEnd = Number(rule.sourceEnd);
+    const targetStart = rule.targetStart == null ? null : Number(rule.targetStart);
+    const subjectId = Number(rule.subjectId);
+    if (!seasonKey || !Number.isFinite(sourceStart) || !Number.isFinite(sourceEnd) || sourceEnd < sourceStart) return null;
+    if (!Number.isFinite(subjectId) || subjectId <= 0) return null;
+    if (targetStart != null && (!Number.isFinite(targetStart) || targetStart <= 0)) return null;
+    return {
+      id: String(rule.id || `${seasonKey}:${sourceStart}-${sourceEnd}`),
+      seasonKey,
+      sourceStart,
+      sourceEnd,
+      targetStart,
+      subjectId,
+      segmentCount: Math.max(1, Math.min(8, Math.round(Number(rule.segmentCount) || 1))),
+      autoProgress: rule.autoProgress !== false && targetStart != null,
+      createdAt: Number(rule.createdAt) || Date.now(),
+    };
+  }
+
+  function normalizeCollectionSegmentProgress(value) {
+    const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    const result = {};
+    for (const [key, rawEntry] of Object.entries(source)) {
+      const entry = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
+      const completed = Array.from(new Set((Array.isArray(entry.completed) ? entry.completed : [])
+        .map(Number)
+        .filter((part) => Number.isInteger(part) && part > 0 && part <= 8)))
+        .sort((left, right) => left - right);
+      if (!completed.length) continue;
+      result[String(key)] = {
+        completed,
+        updatedAt: Number(entry.updatedAt) || Date.now(),
+      };
+    }
+    return result;
+  }
+
+  function parseCollectionPartTitle(value) {
+    const text = stripTrailingDurationText(String(value || "").replace(/\s+/g, " ").trim())
+      .replace(/[【】\[\]]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return null;
+
+    const seasonPatterns = [
+      /^(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[话話集])?(?:\s*[-_.．]?\s*(上|下|前|后|後|A|B|1|2))?$/i,
+      /^(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E|EP)?\.?\s*0*(\d{1,3})(?:\s*[-_.．]?\s*(A|B|上|下|1|2))?$/i,
+    ];
+    for (const [index, pattern] of seasonPatterns.entries()) {
+      const match = text.match(pattern);
+      if (!match) continue;
+      const seasonNo = index === 0 ? parseChineseNumber(match[1]) : Number(match[1]);
+      const episodeNo = Number(match[2]);
+      const fragment = parseCollectionFragment(match[3]);
+      if (!Number.isFinite(seasonNo) || seasonNo <= 0 || !Number.isFinite(episodeNo) || episodeNo < 0) return null;
+      return {
+        seasonKey: `season:${seasonNo}`,
+        seasonNo,
+        episodeNo,
+        fragmentIndex: fragment.index,
+        fragmentCount: fragment.count,
+        label: text,
+      };
+    }
+
+    const decimalMatch = text.match(/^0*(\d{1,3})\s*[.．]\s*([12])$/);
+    if (decimalMatch) {
+      return {
+        seasonKey: "default",
+        seasonNo: null,
+        episodeNo: Number(decimalMatch[1]),
+        fragmentIndex: Number(decimalMatch[2]),
+        fragmentCount: 2,
+        label: text,
+      };
+    }
+
+    const splitMatch = text.match(/^(?:(?:E|EP)\s*)?(?:第\s*)?0*(\d{1,3})\s*(?:[话話集])?\s*[-_.．]?\s*(上|下|前|后|後|A|B)$/i);
+    if (splitMatch) {
+      const fragment = parseCollectionFragment(splitMatch[2]);
+      return {
+        seasonKey: "default",
+        seasonNo: null,
+        episodeNo: Number(splitMatch[1]),
+        fragmentIndex: fragment.index,
+        fragmentCount: fragment.count,
+        label: text,
+      };
+    }
+    return null;
+  }
+
+  function parseChineseNumber(value) {
+    const text = String(value || "").trim();
+    if (/^\d+$/.test(text)) return Number(text);
+    const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    if (text === "十") return 10;
+    const tenIndex = text.indexOf("十");
+    if (tenIndex >= 0) {
+      const tens = tenIndex === 0 ? 1 : digits[text[tenIndex - 1]];
+      const ones = tenIndex === text.length - 1 ? 0 : digits[text[tenIndex + 1]];
+      return Number.isFinite(tens) && Number.isFinite(ones) ? tens * 10 + ones : NaN;
+    }
+    return text.length === 1 && Object.prototype.hasOwnProperty.call(digits, text) ? digits[text] : NaN;
+  }
+
+  function parseCollectionFragment(value) {
+    const token = String(value || "").trim().toUpperCase();
+    if (!token) return { index: 1, count: 1 };
+    if (["上", "前", "A", "1"].includes(token)) return { index: 1, count: 2 };
+    if (["下", "后", "後", "B", "2"].includes(token)) return { index: 2, count: 2 };
+    return { index: 1, count: 1 };
+  }
+
+  function getCollectionPartRows() {
+    return getVideoPartListNodes().map((node, index) => {
+      const title = getVideoPartNodeTitle(node);
+      return {
+        partNo: index + 1,
+        title,
+        parsed: parseCollectionPartTitle(title),
+        active: isActiveVideoPartNode(node),
+      };
+    });
+  }
+
+  function getCurrentCollectionPartContext() {
+    const part = getCurrentVideoPartContext();
+    if (!part || part.partCount <= 1) return null;
+    const rows = getCollectionPartRows();
+    const parsedRows = rows.filter((row) => row.parsed);
+    if (parsedRows.length < 4) return null;
+    const currentRow = rows.find((row) => row.partNo === part.partNo) || null;
+    const parsed = currentRow && currentRow.parsed || parseCollectionPartTitle(part.title);
+    if (!parsed) return null;
+    const groupRows = parsedRows.filter((row) => row.parsed.seasonKey === parsed.seasonKey);
+    const logicalEpisodes = Array.from(new Set(groupRows.map((row) => row.parsed.episodeNo))).sort((a, b) => a - b);
+    if (logicalEpisodes.length < 2) return null;
+    const fragmentCounts = new Map();
+    groupRows.forEach((row) => {
+      const key = row.parsed.episodeNo;
+      fragmentCounts.set(key, Math.max(fragmentCounts.get(key) || 1, row.parsed.fragmentCount || 1));
+    });
+    return {
+      ...part,
+      ...parsed,
+      title: currentRow && currentRow.title || part.title,
+      groupStart: logicalEpisodes[0],
+      groupEnd: logicalEpisodes[logicalEpisodes.length - 1],
+      groupLogicalEpisodeCount: logicalEpisodes.length,
+      parsedPartCount: parsedRows.length,
+      segmentCount: fragmentCounts.get(parsed.episodeNo) || parsed.fragmentCount || 1,
+    };
+  }
+
+  function getCollectionMappingRules(bvid) {
+    const key = String(bvid || "").toUpperCase();
+    const mappings = state.collectionMappings && typeof state.collectionMappings === "object" ? state.collectionMappings : {};
+    return Array.isArray(mappings[key]) ? mappings[key] : [];
+  }
+
+  function getCollectionMappingResolution(context = getCurrentCollectionPartContext()) {
+    if (!context) return { rule: null, ambiguous: false };
+    const matches = getCollectionMappingRules(context.bvid).filter((rule) => (
+      rule.seasonKey === context.seasonKey
+      && context.episodeNo >= rule.sourceStart
+      && context.episodeNo <= rule.sourceEnd
+    ));
+    return { rule: matches.length === 1 ? matches[0] : null, ambiguous: matches.length > 1 };
+  }
+
+  function getCollectionMappingRule(context = getCurrentCollectionPartContext()) {
+    return getCollectionMappingResolution(context).rule;
+  }
+
+  function getCollectionMappedEpisodeNo(context, rule = getCollectionMappingRule(context)) {
+    if (!context || !rule || rule.targetStart == null) return null;
+    const target = Number(rule.targetStart) + Number(context.episodeNo) - Number(rule.sourceStart);
+    return Number.isFinite(target) && target > 0 ? target : null;
+  }
+
+  function putCollectionMappingRule(mappings, rule) {
+    const normalized = normalizeCollectionMappingRule(rule);
+    if (!normalized) throw new Error("合集映射范围无效");
+    const bvid = String(rule.bvid || getBvIdFromUrl() || "").toUpperCase();
+    if (!bvid) throw new Error("无法读取当前 BV 号");
+    const existing = Array.isArray(mappings[bvid]) ? mappings[bvid] : [];
+    mappings[bvid] = existing
+      .filter((item) => item.id !== normalized.id && !(
+        item.seasonKey === normalized.seasonKey
+        && item.sourceStart <= normalized.sourceEnd
+        && item.sourceEnd >= normalized.sourceStart
+      ))
+      .concat(normalized)
+      .sort((left, right) => left.seasonKey.localeCompare(right.seasonKey) || left.sourceStart - right.sourceStart);
+    return normalized;
+  }
+
+  function removeCollectionMappingRule(mappings, bvid, ruleId) {
+    const key = String(bvid || "").toUpperCase();
+    const rules = Array.isArray(mappings[key]) ? mappings[key] : [];
+    const next = rules.filter((rule) => rule.id !== ruleId);
+    if (next.length === rules.length) return false;
+    if (next.length) mappings[key] = next;
+    else delete mappings[key];
+    return true;
+  }
+
+  async function buildCollectionRangeBindingProposal(subjectId) {
+    const context = getCurrentCollectionPartContext();
+    if (!context) return null;
+    const existingResolution = getCollectionMappingResolution(context);
+    if (existingResolution.ambiguous) throw new Error("当前分P命中多条合集规则，请先删除冲突规则");
+    if (context.episodeNo === 0) {
+      return {
+        context,
+        episodeCount: 0,
+        special: true,
+        rule: {
+          bvid: context.bvid,
+          id: `${context.seasonKey}:0-0`,
+          seasonKey: context.seasonKey,
+          sourceStart: 0,
+          sourceEnd: 0,
+          targetStart: null,
+          subjectId: Number(subjectId),
+          segmentCount: 1,
+          autoProgress: false,
+        },
+      };
+    }
+    const episodeCount = await getSubjectMainEpisodeCountForMapping(subjectId);
+    if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
+      throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
+    }
+    const siblingRules = getCollectionMappingRules(context.bvid)
+      .filter((rule) => rule.seasonKey === context.seasonKey)
+      .sort((left, right) => left.sourceStart - right.sourceStart);
+    const priorRule = siblingRules.filter((rule) => rule.sourceEnd < context.episodeNo).at(-1) || null;
+    const sourceStart = priorRule && context.episodeNo <= priorRule.sourceEnd + 1
+      ? priorRule.sourceEnd + 1
+      : (context.episodeNo === context.groupStart ? context.groupStart : context.episodeNo);
+    const nextRule = siblingRules.find((rule) => rule.sourceStart > sourceStart) || null;
+    const continuesPriorSubject = Boolean(
+      priorRule
+      && priorRule.sourceEnd + 1 === sourceStart
+      && Number(priorRule.subjectId) === Number(subjectId)
+      && priorRule.targetStart != null
+    );
+    const targetStart = continuesPriorSubject
+      ? Number(priorRule.targetStart) + sourceStart - Number(priorRule.sourceStart)
+      : 1;
+    const remainingEpisodeCount = episodeCount - targetStart + 1;
+    if (remainingEpisodeCount <= 0) throw new Error("该 Bangumi 条目的正片范围已经映射完成");
+    let sourceEnd = Math.min(context.groupEnd, sourceStart + remainingEpisodeCount - 1);
+    if (nextRule) sourceEnd = Math.min(sourceEnd, nextRule.sourceStart - 1);
+    if (sourceEnd < sourceStart) throw new Error("自动建议的合集范围与已有规则冲突");
+    return {
+      context,
+      episodeCount,
+      special: false,
+      rule: {
+        bvid: context.bvid,
+        id: `${context.seasonKey}:${sourceStart}-${sourceEnd}`,
+        seasonKey: context.seasonKey,
+        sourceStart,
+        sourceEnd,
+        targetStart,
+        subjectId: Number(subjectId),
+        segmentCount: context.segmentCount,
+        autoProgress: true,
+      },
+    };
+  }
+
+  async function getSubjectMainEpisodeCountForMapping(subjectId) {
+    const safeSubjectId = Number(subjectId);
+    if (Number(state.subjectId) === safeSubjectId && getNormalEpisodes().length) return getNormalEpisodes().length;
+    const candidate = resolveLongVideoBindingSubject(safeSubjectId);
+    const known = Number(candidate && (candidate.eps || candidate.total_episodes));
+    if (Number.isFinite(known) && known > 0) return Math.round(known);
+    const response = await bgmRequest(`/v0/episodes?subject_id=${safeSubjectId}&type=0&limit=1&offset=0`);
+    const total = Number(response && response.total);
+    if (Number.isFinite(total) && total > 0) return Math.round(total);
+    return Array.isArray(response && response.data) ? response.data.length : 0;
+  }
+
+  function formatCollectionRangeBindingPrompt(proposal, subjectId) {
+    const rule = proposal.rule;
+    const subject = resolveLongVideoBindingSubject(subjectId);
+    const subjectName = subject ? displaySubjectName(subject) : `Bangumi subject ${subjectId}`;
+    if (proposal.special) {
+      return `检测到“${proposal.context.title}”是第0话/特殊分P。\n\n是否只把这个分P绑定到“${subjectName}”？该分P不会自动标记正片进度。`;
+    }
+    const splitNote = rule.segmentCount > 1 ? `；每集 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
+    const targetEnd = Number(rule.targetStart) + Number(rule.sourceEnd) - Number(rule.sourceStart);
+    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 Bangumi 第${rule.targetStart}-${targetEnd}集${splitNote}。\n\n确定保存这条范围映射吗？`;
+  }
+
+  function formatCollectionSourceRange(rule) {
+    const season = rule.seasonKey === "default" ? "未标季" : `第${String(rule.seasonKey).replace(/^season:/, "")}季`;
+    return `${season} 第${rule.sourceStart}-${rule.sourceEnd}集`;
+  }
+
+  function isCurrentCollectionPartAutoMarkEligible() {
+    const context = getCurrentCollectionPartContext();
+    if (!context) return true;
+    const resolution = getCollectionMappingResolution(context);
+    if (resolution.ambiguous) return false;
+    const rule = resolution.rule;
+    if (!rule) return getCollectionMappingRules(context.bvid).length === 0;
+    if (!rule.autoProgress || getCollectionMappedEpisodeNo(context, rule) == null) return false;
+    return true;
+  }
+
+  function getCollectionSegmentProgressKey(context, rule) {
+    if (!context || !rule) return "";
+    const targetEpisodeNo = getCollectionMappedEpisodeNo(context, rule);
+    if (targetEpisodeNo == null) return "";
+    return [
+      String(context.bvid || "").toUpperCase(),
+      String(rule.id || ""),
+      Number(rule.subjectId),
+      Number(targetEpisodeNo),
+    ].join("|");
+  }
+
+  async function recordCurrentCollectionSegmentProgressIfNeeded() {
+    const context = getCurrentCollectionPartContext();
+    if (!context) return true;
+    const rule = getCollectionMappingRule(context);
+    if (!rule || !rule.autoProgress) return false;
+    const segmentCount = Math.max(1, Number(context.segmentCount) || Number(rule.segmentCount) || 1);
+    if (segmentCount <= 1) return true;
+    const fragmentIndex = Math.max(1, Number(context.fragmentIndex) || 1);
+    const key = getCollectionSegmentProgressKey(context, rule);
+    if (!key) return false;
+    let complete = false;
+    await updateStoredCollectionSegmentProgress((progress) => {
+      const previous = progress[key] && Array.isArray(progress[key].completed) ? progress[key].completed : [];
+      const completed = Array.from(new Set(previous.concat(fragmentIndex))).sort((left, right) => left - right);
+      progress[key] = { completed, updatedAt: Date.now() };
+      complete = completed.filter((part) => part <= segmentCount).length >= segmentCount;
+      return completed.length !== previous.length;
+    });
+    return complete;
+  }
+
+  async function clearCurrentCollectionSegmentProgress() {
+    const context = getCurrentCollectionPartContext();
+    const rule = context && getCollectionMappingRule(context);
+    const key = getCollectionSegmentProgressKey(context, rule);
+    if (!key || Math.max(1, Number(context && context.segmentCount) || Number(rule && rule.segmentCount) || 1) <= 1) return;
+    await updateStoredCollectionSegmentProgress((progress) => {
+      if (!Object.prototype.hasOwnProperty.call(progress, key)) return false;
+      delete progress[key];
+      return true;
+    });
+  }
+
   function parseLongVideoPartTitle(value) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text) return null;
@@ -9098,7 +9559,7 @@
     ];
     for (const selector of fallbackSelectors) {
       const nodes = Array.from(document.querySelectorAll(selector));
-      if (nodes.length > 1 && nodes.length <= 50) return nodes;
+      if (nodes.length > 1 && nodes.length <= 500) return nodes;
     }
     return [];
   }
@@ -9130,7 +9591,8 @@
     const activeIndex = activeNode ? nodes.indexOf(activeNode) : -1;
     const urlPartNo = getCurrentPartNoFromUrl();
     const partNo = urlPartNo || (activeIndex >= 0 ? activeIndex + 1 : 1);
-    const selectedNode = activeNode || (partNo > 0 && partNo <= nodes.length ? nodes[partNo - 1] : null);
+    const urlNode = urlPartNo > 0 && urlPartNo <= nodes.length ? nodes[urlPartNo - 1] : null;
+    const selectedNode = urlNode || activeNode || (partNo > 0 && partNo <= nodes.length ? nodes[partNo - 1] : null);
     const title = getVideoPartNodeTitle(selectedNode);
     const parsed = parseLongVideoPartTitle(title) || {};
     return {
@@ -9766,6 +10228,26 @@
     });
   }
 
+  async function updateStoredCollectionMappings(update) {
+    return withBindingsLock(async () => {
+      const next = normalizeCollectionMappings(await readJsonValueFresh(STORAGE.collectionMappings, {}));
+      const changed = update(next) !== false;
+      if (changed) await writeJsonValueAsync(STORAGE.collectionMappings, next);
+      state.collectionMappings = next;
+      return next;
+    });
+  }
+
+  async function updateStoredCollectionSegmentProgress(update) {
+    return withBindingsLock(async () => {
+      const next = normalizeCollectionSegmentProgress(await readJsonValueFresh(STORAGE.collectionSegmentProgress, {}));
+      const changed = update(next) !== false;
+      if (changed) await writeJsonValueAsync(STORAGE.collectionSegmentProgress, next);
+      state.collectionSegmentProgress = next;
+      return next;
+    });
+  }
+
   function withBindingsLock(callback) {
     if (navigator.locks && typeof navigator.locks.request === "function") {
       return navigator.locks.request(BINDINGS_LOCK_NAME, { mode: "exclusive" }, callback);
@@ -9857,6 +10339,13 @@
   }
 
   function getCurrentVideoPartEpisodeNo() {
+    const collectionContext = getCurrentCollectionPartContext();
+    if (collectionContext) {
+      const collectionRule = getCollectionMappingRule(collectionContext);
+      if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
+      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
+      return collectionContext.episodeNo > 0 ? collectionContext.episodeNo : null;
+    }
     const part = getCurrentVideoPartContext();
     if (part && part.seasonNo) return null;
     if (part && part.partCount > 1) return part.partNo;
