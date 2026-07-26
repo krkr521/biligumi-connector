@@ -139,6 +139,11 @@
   const LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS = 5 * 60;
   const LONG_VIDEO_BIND_WAIT_TIMEOUT_MS = 8 * 1000;
   const LONG_VIDEO_BIND_WAIT_POLL_MS = 400;
+  const MIN_COLLECTION_PARSED_PARTS = 4;
+  const MAX_COLLECTION_SEGMENTS = 8;
+  const COLLECTION_PART_ROWS_CACHE_MS = 1500;
+  const COLLECTION_SEGMENT_PROGRESS_MAX_AGE_MS = 180 * 24 * 60 * 60 * 1000;
+  const COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES = 200;
   const DEFAULT_AUTO_WATCH_THRESHOLD = 50;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
   const DEFAULT_OPED_SKIP_HOTKEY = "Ctrl+Alt+ArrowRight";
@@ -4943,10 +4948,12 @@
 
   function updateStoredCollectionSegmentProgress(mutator) {
     return withBindingsLock(async () => {
-      const progress = normalizeCollectionSegmentProgress(readJsonValue(STORAGE.collectionSegmentProgress, {}));
+      const stored = readJsonValue(STORAGE.collectionSegmentProgress, {});
+      const progress = normalizeCollectionSegmentProgress(stored);
+      const normalizedChanged = JSON.stringify(progress) !== JSON.stringify(stored);
       const changed = mutator(progress) !== false;
       state.collectionSegmentProgress = progress;
-      if (changed) writeJsonValue(STORAGE.collectionSegmentProgress, progress);
+      if (changed || normalizedChanged) writeJsonValue(STORAGE.collectionSegmentProgress, progress);
       return progress;
     });
   }
@@ -9146,8 +9153,7 @@
     if (collectionContext) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
-      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
-      if (collectionContext.episodeNo > 0) return collectionContext.episodeNo;
+      return null;
     }
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
@@ -9234,7 +9240,7 @@
       sourceEnd,
       targetStart,
       subjectId,
-      segmentCount: Math.max(1, Math.min(8, Math.round(Number(rule.segmentCount) || 1))),
+      segmentCount: Math.max(1, Math.min(MAX_COLLECTION_SEGMENTS, Math.round(Number(rule.segmentCount) || 1))),
       autoProgress: rule.autoProgress !== false && targetStart != null,
       createdAt: Number(rule.createdAt) || Date.now(),
     };
@@ -9242,20 +9248,25 @@
 
   function normalizeCollectionSegmentProgress(value) {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
-    const result = {};
+    const now = Date.now();
+    const cutoff = now - COLLECTION_SEGMENT_PROGRESS_MAX_AGE_MS;
+    const entries = [];
     for (const [key, rawEntry] of Object.entries(source)) {
       const entry = rawEntry && typeof rawEntry === "object" ? rawEntry : {};
       const completed = Array.from(new Set((Array.isArray(entry.completed) ? entry.completed : [])
         .map(Number)
-        .filter((part) => Number.isInteger(part) && part > 0 && part <= 8)))
+        .filter((part) => Number.isInteger(part) && part > 0 && part <= MAX_COLLECTION_SEGMENTS)))
         .sort((left, right) => left - right);
       if (!completed.length) continue;
-      result[String(key)] = {
-        completed,
-        updatedAt: Number(entry.updatedAt) || Date.now(),
-      };
+      const updatedAt = Number(entry.updatedAt) || now;
+      if (updatedAt < cutoff) continue;
+      entries.push([String(key), { completed, updatedAt }]);
     }
-    return result;
+    return Object.fromEntries(
+      entries
+        .sort((left, right) => right[1].updatedAt - left[1].updatedAt)
+        .slice(0, COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES),
+    );
   }
 
   function parseCollectionPartTitle(value) {
@@ -9336,8 +9347,19 @@
     return { index: 1, count: 1 };
   }
 
-  function getCollectionPartRows() {
-    return getVideoPartListNodes().map((node, index) => {
+  function getCollectionPartRows(nodes = getVideoPartListNodes()) {
+    const now = Date.now();
+    const bvid = String(getBvIdFromUrl() || "").toUpperCase();
+    const cache = getCollectionPartRows.cache;
+    if (cache
+      && cache.bvid === bvid
+      && cache.count === nodes.length
+      && cache.firstNode === nodes[0]
+      && cache.lastNode === nodes[nodes.length - 1]
+      && now - cache.updatedAt < COLLECTION_PART_ROWS_CACHE_MS) {
+      return cache.rows;
+    }
+    const rows = nodes.map((node, index) => {
       const title = getVideoPartNodeTitle(node);
       return {
         partNo: index + 1,
@@ -9346,14 +9368,25 @@
         active: isActiveVideoPartNode(node),
       };
     });
+    getCollectionPartRows.cache = {
+      bvid,
+      count: nodes.length,
+      firstNode: nodes[0],
+      lastNode: nodes[nodes.length - 1],
+      rows,
+      updatedAt: now,
+    };
+    return rows;
   }
 
   function getCurrentCollectionPartContext() {
-    const part = getCurrentVideoPartContext();
+    const nodes = getVideoPartListNodes();
+    const part = getCurrentVideoPartContext(nodes);
     if (!part || part.partCount <= 1) return null;
-    const rows = getCollectionPartRows();
+    const rows = getCollectionPartRows(nodes);
     const parsedRows = rows.filter((row) => row.parsed);
-    if (parsedRows.length < 4) return null;
+    // Four recognizable parts is conservative enough to avoid treating an ordinary 2–3P upload as a collection.
+    if (parsedRows.length < MIN_COLLECTION_PARSED_PARTS) return null;
     const currentRow = rows.find((row) => row.partNo === part.partNo) || null;
     const parsed = currentRow && currentRow.parsed || parseCollectionPartTitle(part.title);
     if (!parsed) return null;
@@ -9457,6 +9490,8 @@
         },
       };
     }
+    // Intentionally fail closed: without the authoritative episode count a guessed range
+    // could bind or auto-mark the wrong Bangumi season.
     const episodeCount = await getSubjectMainEpisodeCountForMapping(subjectId);
     if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
       throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
@@ -9550,7 +9585,7 @@
     const resolution = getCollectionMappingResolution(context);
     if (resolution.ambiguous) return false;
     const rule = resolution.rule;
-    if (!rule) return getCollectionMappingRules(context.bvid).length === 0;
+    if (!rule) return false;
     if (!rule.autoProgress || getCollectionMappedEpisodeNo(context, rule) == null) return false;
     return true;
   }
@@ -9571,8 +9606,7 @@
     const context = getCurrentCollectionPartContext();
     if (!context) return true;
     const rule = getCollectionMappingRule(context);
-    // Match isCurrentCollectionPartAutoMarkEligible: no rules yet → legacy whole-BV path.
-    if (!rule) return getCollectionMappingRules(context.bvid).length === 0;
+    if (!rule) return false;
     if (!rule.autoProgress) return false;
     const segmentCount = Math.max(1, Number(context.segmentCount) || Number(rule.segmentCount) || 1);
     if (segmentCount <= 1) return true;
@@ -9672,10 +9706,9 @@
       .find(Boolean) || "";
   }
 
-  function getCurrentVideoPartContext() {
+  function getCurrentVideoPartContext(nodes = getVideoPartListNodes()) {
     const bvid = String(getBvIdFromUrl() || "").toUpperCase();
     if (!bvid) return null;
-    const nodes = getVideoPartListNodes();
     const activeNode = nodes.find(isActiveVideoPartNode) || null;
     const activeIndex = activeNode ? nodes.indexOf(activeNode) : -1;
     const urlPartNo = getCurrentPartNoFromUrl();
@@ -10354,8 +10387,7 @@
     if (collectionContext) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
-      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
-      return collectionContext.episodeNo > 0 ? collectionContext.episodeNo : null;
+      return null;
     }
     const part = getCurrentVideoPartContext();
     if (part && part.seasonNo) return null;

@@ -3,15 +3,41 @@
 const assert = require("node:assert/strict");
 const {
   USERSCRIPT_PATH,
+  EXTENSION_PATH,
   readSource,
   extractFunction,
+  extractConstants,
   runInSandbox,
 } = require("./_source");
 
 const source = readSource(USERSCRIPT_PATH);
+const extensionSource = readSource(EXTENSION_PATH);
 const functionSource = (name, async = false) => extractFunction(source, name, async ? { async: true } : {});
+const collectionConstants = extractConstants(source, [
+  "MIN_COLLECTION_PARSED_PARTS",
+  "MAX_COLLECTION_SEGMENTS",
+  "COLLECTION_PART_ROWS_CACHE_MS",
+  "COLLECTION_SEGMENT_PROGRESS_MAX_AGE_MS",
+  "COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES",
+]);
+assert.deepEqual(
+  { ...extractConstants(extensionSource, Object.keys(collectionConstants)) },
+  { ...collectionConstants },
+  "collection safety/cache constants must stay identical between userscript and extension",
+);
+assert.match(
+  extractFunction(source, "updateStoredCollectionSegmentProgress"),
+  /changed \|\| normalizedChanged/,
+  "userscript must persist lazy cleanup even when the current segment was already recorded",
+);
+assert.match(
+  extractFunction(extensionSource, "updateStoredCollectionSegmentProgress", { async: true }),
+  /changed \|\| normalizedChanged/,
+  "extension must persist lazy cleanup even when the current segment was already recorded",
+);
 
 const sandbox = {
+  ...collectionConstants,
   Date,
   state: { collectionMappings: {} },
   stripTrailingDurationText: (text) => String(text || "")
@@ -34,6 +60,7 @@ runInSandbox([
   functionSource("getCollectionMappedEpisodeNo"),
   functionSource("putCollectionMappingRule"),
   functionSource("removeCollectionMappingRule"),
+  functionSource("isCurrentCollectionPartAutoMarkEligible"),
   functionSource("buildCollectionRangeBindingProposal", true),
   functionSource("getCollectionSegmentProgressKey"),
   functionSource("recordCurrentCollectionSegmentProgressIfNeeded", true),
@@ -44,6 +71,7 @@ runInSandbox([
   getCollectionMappingResolution,
   getCollectionMappedEpisodeNo,
   putCollectionMappingRule,
+  isCurrentCollectionPartAutoMarkEligible,
   buildCollectionRangeBindingProposal,
   recordCurrentCollectionSegmentProgressIfNeeded,
 };`, sandbox);
@@ -73,6 +101,27 @@ assert.equal(sandbox.api.parseCollectionPartTitle("S2E13 标题").episodeNo, 13)
 assert.equal(sandbox.api.parseCollectionPartTitle("第1集上 前半").fragmentIndex, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("1080P"), null);
 assert.equal(sandbox.api.parseCollectionPartTitle("4K超清"), null);
+assert.equal(collectionConstants.MIN_COLLECTION_PARSED_PARTS, 4);
+assert.equal(collectionConstants.MAX_COLLECTION_SEGMENTS, 8);
+
+const now = Date.now();
+const progressFixture = {};
+for (let index = 0; index < 205; index += 1) {
+  progressFixture[`recent-${index}`] = { completed: [1, 9], updatedAt: now - index };
+}
+progressFixture.stale = {
+  completed: [1],
+  updatedAt: now - collectionConstants.COLLECTION_SEGMENT_PROGRESS_MAX_AGE_MS - 1,
+};
+const normalizedProgress = sandbox.normalizeCollectionSegmentProgress
+  ? sandbox.normalizeCollectionSegmentProgress(progressFixture)
+  : runInSandbox(
+    `${functionSource("normalizeCollectionSegmentProgress")};globalThis.readProgress = normalizeCollectionSegmentProgress;`,
+    { ...collectionConstants, Date },
+  ).readProgress(progressFixture);
+assert.equal(Object.keys(normalizedProgress).length, collectionConstants.COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES);
+assert.equal(normalizedProgress.stale, undefined, "abandoned partial progress expires lazily");
+assert.deepEqual(plain(normalizedProgress["recent-0"].completed), [1], "segment clamp uses the shared maximum");
 
 const bvid = "BV15H3M65EED";
 const mappings = {};
@@ -213,14 +262,15 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
     "actual single-part episodes must auto-mark without waiting for a missing .2");
 
-  // No mapping rules yet: legacy auto-mark path must still be allowed.
+  // Collection-shaped uploads require an explicit range mapping before auto-mark.
   sandbox.getCollectionMappingRule = () => null;
   sandbox.getCollectionMappingRules = () => [];
   currentContext = {
     bvid, seasonKey: "default", episodeNo: 1, segmentCount: 2, fragmentIndex: 1,
   };
-  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
-    "collection-shaped multi-P without rules must not block legacy auto-mark");
+  assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), false);
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "collection-shaped multi-P without rules must fail closed");
 
   // Other ranges already mapped, current part unmapped → block.
   sandbox.getCollectionMappingRules = () => [splitRule];
@@ -250,14 +300,19 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   for (let episode = 0; episode <= 24; episode += 1) collectionTitles.push(`第二季${episode}`);
   for (let episode = 1; episode <= 4; episode += 1) collectionTitles.push(`第三季${episode}`);
   collectionTitles.push("点点关注不迷路");
+  let collectionTitleReadCount = 0;
   const collectionNodes = collectionTitles.map((title, index) => ({
     className: index === 0 ? "active" : "",
     textContent: title,
-    getAttribute: (name) => name === "title" ? title : "",
+    getAttribute: (name) => {
+      collectionTitleReadCount += 1;
+      return name === "title" ? title : "";
+    },
     querySelectorAll: () => [],
   }));
   let currentPartNo = 1;
   const collectionDomSandbox = {
+    ...collectionConstants,
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? collectionNodes : [],
@@ -279,6 +334,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     functionSource("getCurrentCollectionPartContext"),
   ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", collectionDomSandbox);
   let liveContext = collectionDomSandbox.readCollectionContext();
+  const readsAfterInitialParse = collectionTitleReadCount;
   assert.equal(collectionNodes.length, 76);
   assert.equal(liveContext.episodeNo, 1);
   assert.equal(liveContext.segmentCount, 2);
@@ -286,6 +342,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(liveContext.parsedPartCount, 75);
   currentPartNo = 47;
   liveContext = collectionDomSandbox.readCollectionContext();
+  assert.equal(collectionTitleReadCount - readsAfterInitialParse, 2,
+    "short-lived row cache reads only the selected title instead of reparsing all 76 titles");
   assert.equal(liveContext.episodeNo, 0);
   assert.equal(liveContext.seasonKey, "season:2");
   assert.equal(liveContext.groupEnd, 24);
@@ -304,6 +362,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     querySelectorAll: () => [],
   }));
   const incompleteSandbox = {
+    ...collectionConstants,
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? incompleteNodes : [],
@@ -327,6 +386,17 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   const incompleteContext = incompleteSandbox.readCollectionContext();
   assert.equal(incompleteContext.episodeNo, 2);
   assert.equal(incompleteContext.segmentCount, 1, "missing .2 must not invent a second required segment");
+
+  const failClosedSandbox = {
+    getCurrentCollectionPartContext: () => ({ bvid, episodeNo: 1 }),
+    getCollectionMappingRule: () => null,
+    detectEpisodeNo: () => { throw new Error("legacy title fallback must not run"); },
+  };
+  runInSandbox(
+    `${functionSource("detectCurrentEpisodeNo")};globalThis.readEpisode = detectCurrentEpisodeNo;`,
+    failClosedSandbox,
+  );
+  assert.equal(failClosedSandbox.readEpisode("1.2"), null, "no-rule collection does not reinterpret 1.2 as episode 1");
 
   console.log("collection range mapping tests passed");
 })().catch((error) => {
