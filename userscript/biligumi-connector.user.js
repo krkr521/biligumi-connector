@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.1
+// @version      0.7.2
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -39,7 +39,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.1";
+  const SCRIPT_VERSION = "0.7.2";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -2583,13 +2583,39 @@
 
   function observeRouteChanges() {
     let lastHref = location.href;
-    const observer = new MutationObserver(() => {
-      if (lastHref === location.href) return;
+    let lastPageKey = getPageKey();
+    const observer = new MutationObserver((mutations) => {
+      const hrefChanged = lastHref !== location.href;
+      // Class mutations fire constantly across the whole player UI, so bail out
+      // cheaply unless the batch actually touches the official episode list.
+      if (!hrefChanged && (!isOfficialBangumiPage() || !mutations.some(mutationTouchesOfficialBangumiEpisodeList))) return;
+      const currentPageKey = getPageKey();
+      if (!hrefChanged && lastPageKey === currentPageKey) return;
       const previousRawTitle = state.rawTitle;
+      const previousPageKey = state.pageKey || lastPageKey;
       lastHref = location.href;
-      scheduleRouteRefresh(previousRawTitle);
+      lastPageKey = currentPageKey;
+      scheduleRouteRefresh(previousRawTitle, previousPageKey);
     });
-    observer.observe(document.documentElement, { childList: true, subtree: true });
+    observer.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+  }
+
+  function mutationTouchesOfficialBangumiEpisodeList(mutation) {
+    const target = mutation && mutation.target;
+    const targetElement = target && (target.nodeType === 1 ? target : target.parentElement);
+    if (targetElement && targetElement.closest && targetElement.closest("#eplist_module")) return true;
+    return Array.from(mutation && mutation.addedNodes || []).some((node) => (
+      node && node.nodeType === 1 && (
+        node.id === "eplist_module"
+        || (node.closest && node.closest("#eplist_module"))
+        || (node.querySelector && node.querySelector("#eplist_module"))
+      )
+    ));
   }
 
   function hookHistoryNavigation() {
@@ -2599,15 +2625,16 @@
       history[method] = function (...args) {
         const previousHref = location.href;
         const previousRawTitle = state.rawTitle;
+        const previousPageKey = state.pageKey;
         const result = original.apply(this, args);
-        if (previousHref !== location.href) scheduleRouteRefresh(previousRawTitle);
+        if (previousHref !== location.href) scheduleRouteRefresh(previousRawTitle, previousPageKey);
         return result;
       };
     });
-    window.addEventListener("popstate", () => scheduleRouteRefresh(state.rawTitle));
+    window.addEventListener("popstate", () => scheduleRouteRefresh(state.rawTitle, state.pageKey));
   }
 
-  function scheduleRouteRefresh(previousRawTitle) {
+  function scheduleRouteRefresh(previousRawTitle, previousPageKey = state.pageKey) {
     const seq = ++routeRefreshSeq;
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
@@ -2621,16 +2648,18 @@
     render();
     [350, 900, 1800, 3000].forEach((delay, index, list) => {
       window.setTimeout(() => {
-        refreshAfterRouteChange(seq, previousRawTitle, index === list.length - 1);
+        refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, index === list.length - 1);
       }, delay);
     });
   }
 
-  function refreshAfterRouteChange(seq, previousRawTitle, force) {
+  function refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, force) {
     if (seq !== routeRefreshSeq) return;
     const currentRawTitle = getPageTitle();
     const titleChanged = normalizeBindingToken(currentRawTitle) !== normalizeBindingToken(previousRawTitle);
-    if (!force && previousRawTitle && !titleChanged) return;
+    // An unknown previous key (first load) must not force a refresh on its own.
+    const pageKeyChanged = Boolean(previousPageKey) && getPageKey() !== previousPageKey;
+    if (!force && previousRawTitle && !titleChanged && !pageKeyChanged) return;
     routeRefreshSeq += 1;
 
     refreshPageContext();
@@ -2673,10 +2702,9 @@
 
   function refreshPageContext() {
     const rawTitle = getPageTitle();
-    const seriesTitle = getSeriesTitle();
     state.pageKey = getPageKey();
     state.rawTitle = rawTitle;
-    state.pageTitle = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : cleanTitle(seriesTitle || rawTitle);
+    state.pageTitle = resolveCurrentPageTitle(rawTitle);
     state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
       ? null
       : detectCurrentEpisodeNo(rawTitle);
@@ -5269,6 +5297,13 @@
   function getDirectBindingKeysForCurrentPage() {
     const longVideoPartKey = getCurrentLongVideoPartBindingKey();
     if (longVideoPartKey) return [longVideoPartKey];
+    const officialSectionKeys = getOfficialBangumiSectionBindingKeys();
+    // Distinct sections stay isolated for write/read once the section key is
+    // stable. Plain season/media keys are intentionally omitted here so
+    // mini-sections do not inherit or overwrite the main-season binding; the
+    // section key itself is returned in every base variant so bindings written
+    // before the media id became visible still resolve.
+    if (officialSectionKeys.length) return officialSectionKeys;
     return [
       state.pageKey,
       getStableBiliSubjectKey(),
@@ -8029,7 +8064,7 @@
   }
 
   function getPageKey() {
-    return getStableBiliSubjectKey() || getCurrentRouteKey();
+    return getOfficialBangumiSectionBindingKey() || getStableBiliSubjectKey() || getCurrentRouteKey();
   }
 
   function getCurrentRouteKey() {
@@ -8052,10 +8087,39 @@
     const seasonId = initial.season_id || mediaInfo.season_id || mediaInfo.seasonId || mediaInfo.season_id_str;
     const mediaId = initial.media_id || mediaInfo.media_id || mediaInfo.mediaId || mediaInfo.media_id_str;
     const season = getPathToken("ss") || seasonId;
-    const media = getPathToken("md") || mediaId;
+    const media = getPathToken("md") || mediaId || getOfficialBangumiMediaIdFromDom();
     if (season) return `bili:ss${stripBiliPrefix(season, "ss")}`;
     if (media) return `bili:md${stripBiliPrefix(media, "md")}`;
     return "";
+  }
+
+  function getOfficialBangumiMediaIdFromDom() {
+    if (!isOfficialBangumiPage()) return "";
+    const href = document.querySelector("a[href*='/bangumi/media/md']")?.getAttribute("href") || "";
+    const match = href.match(/\/bangumi\/media\/md(\d+)/i);
+    return match ? match[1] : "";
+  }
+
+  function getOfficialBangumiSectionBindingKey() {
+    return getOfficialBangumiSectionBindingKeys()[0] || "";
+  }
+
+  function getOfficialBangumiSectionBindingKeys() {
+    const sectionTitle = getOfficialBangumiDistinctSectionTitle();
+    if (!sectionTitle) return [];
+    const sectionToken = normalizeBindingToken(sectionTitle);
+    if (!sectionToken) return [];
+    // The media id link renders later than the season key while the page loads,
+    // so emit every base variant. Reads/writes then stay consistent no matter
+    // which base was computable at write time.
+    const mediaId = getOfficialBangumiMediaIdFromDom();
+    const baseKeys = [];
+    if (mediaId) baseKeys.push(`bili:md${mediaId}`);
+    const stableKey = getStableBiliSubjectKey();
+    if (stableKey) baseKeys.push(stableKey);
+    return baseKeys
+      .filter((value, index, list) => list.indexOf(value) === index)
+      .map((baseKey) => `${baseKey}|section:${sectionToken}`);
   }
 
   function getTitleBindingKey() {
@@ -8071,7 +8135,7 @@
   }
 
   function getTitleBindingInfo() {
-    const sourceTitle = getSeriesTitle() || getPageTitle();
+    const sourceTitle = resolveCurrentPageTitle();
     const cleanedTitle = cleanTitle(sourceTitle);
     const sourceToken = normalizeTitleMatchToken(sourceTitle);
     const token = normalizeBindingToken(cleanedTitle);
@@ -8115,8 +8179,9 @@
     if (!names.length) return false;
     const rawTitle = getPageTitle();
     const normalizedRawTitle = normalizeTitleText(rawTitle);
-    const fullTitleTokens = [getSeriesTitle(), rawTitle].map(normalizeTitleMatchToken).filter(Boolean);
+    const fullTitleTokens = [getOfficialBangumiContextTitle(), getSeriesTitle(), rawTitle].map(normalizeTitleMatchToken).filter(Boolean);
     const candidates = [
+      getOfficialBangumiContextTitle(),
       getSeriesTitle(),
       rawTitle,
       titleInfo.cleanedTitle,
@@ -8771,8 +8836,111 @@
       epInfo.season_title,
       epInfo.seasonTitle,
       document.querySelector(".media-title, .media-info-title, .media-name")?.textContent,
+      getOfficialBangumiMediaTitleFromDom(),
     ];
     return candidates.map((value) => String(value || "").trim()).find(Boolean) || "";
+  }
+
+  function getOfficialBangumiMediaTitleFromDom() {
+    if (!isOfficialBangumiPage()) return "";
+    const direct = document.querySelector("a[class*='mediainfo_mediaTitle'][href*='/bangumi/media/md']");
+    const directText = String(direct && direct.textContent || "").replace(/\s+/g, " ").trim();
+    if (directText) return directText;
+    const mediaId = getOfficialBangumiMediaIdFromDom();
+    const candidates = Array.from(document.querySelectorAll("a[href*='/bangumi/media/md']"))
+      .map((node) => ({
+        text: String(node.textContent || "").replace(/\s+/g, " ").trim(),
+        href: String(node.getAttribute("href") || ""),
+      }))
+      .filter((item) => item.text);
+    if (mediaId) {
+      const matched = candidates.find((item) => new RegExp(`/bangumi/media/md${mediaId}(?:\\D|$)`, "i").test(item.href));
+      if (matched) return matched.text;
+    }
+    return candidates.sort((left, right) => right.text.length - left.text.length)[0]?.text || "";
+  }
+
+  function stripOfficialBangumiProgressSuffix(value) {
+    return String(value || "")
+      .replace(/[（(]\s*0*[0-9]{1,3}(?:\.[0-9]+)?\s*\/\s*0*[0-9]{1,3}(?:\.[0-9]+)?\s*[）)]/g, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function getOfficialBangumiSectionTitle() {
+    if (!isOfficialBangumiPage()) return "";
+    // Prefer live DOM section UI first. Skipping DOM when the list does not yet
+    // contain the current ep was racing section switches against page-title extract.
+    const selectors = [
+      "#eplist_module [class*='SectionSelector_sectionItem'][class*='SectionSelector_active']",
+      "#eplist_module [class*='sectionItem'][class*='active']",
+      "#eplist_module [class*='eplist_list_title'] h4",
+      "#eplist_module [class*='eplist_list_title']",
+    ];
+    for (const selector of selectors) {
+      const text = stripOfficialBangumiProgressSuffix(
+        String(document.querySelector(selector)?.textContent || "").replace(/\s+/g, " ").trim(),
+      );
+      if (text) return text;
+    }
+    return extractOfficialBangumiSectionTitleFromPageTitle();
+  }
+
+  function extractOfficialBangumiSectionTitleFromPageTitle(rawTitle = getPageTitle(), seriesTitle = getSeriesTitle()) {
+    const raw = normalizeTitleText(rawTitle);
+    const series = normalizeTitleText(seriesTitle);
+    if (!raw || !series || !raw.toLowerCase().startsWith(series.toLowerCase())) return "";
+    let remainder = raw.slice(series.length)
+      .replace(/^[\s\-~～〜－–—―|｜·・•、，,;；:：／/]+/, "")
+      .replace(/^[#＃]\s*0*\d{1,3}(?:\.\d+)?\s*/i, "")
+      .trim();
+    // Always strip explicit episode markers (第N话 / N集).
+    remainder = remainder.replace(/(?:第\s*)?0*\d{1,3}(?:\.\d+)?\s*(?:话|話|集)\s*$/i, "").trim();
+    // Strip bare trailing episode numbers only after CJK so OVA2 / 电影1-style
+    // ASCII+digit labels are preserved, while "元祖迷你42" still cleans to 元祖迷你.
+    remainder = remainder.replace(/(.*[\u3400-\u9fff\u3040-\u30ff\u31f0-\u31ff])(?:第\s*)?0*\d{1,3}(?:\.\d+)?\s*$/u, "$1").trim();
+    return remainder;
+  }
+
+  function normalizeOfficialBangumiSectionTitle(value) {
+    return cleanTitle(stripOfficialBangumiProgressSuffix(value)).replace(/\s*(?:动画|動畫)\s*$/i, "").trim();
+  }
+
+  function isOfficialBangumiSectionContainedInSeries(sectionTitle, seriesTitle = getSeriesTitle()) {
+    const seriesToken = normalizeBindingToken(cleanTitle(seriesTitle));
+    const sectionToken = normalizeBindingToken(sectionTitle);
+    if (!sectionToken || !seriesToken) return false;
+    if (seriesToken === sectionToken) return true;
+    // Season/part tags are usually a trailing fragment of the series title
+    // (e.g. series "...第三季", section "第三季"). Avoid broad includes() that
+    // drops short legitimate section labels merely appearing mid-series.
+    if (seriesToken.endsWith(sectionToken)) return true;
+    if (/^(?:第?[0-9一二三四五六七八九十百千两兩]+(?:季|期|部|部分|章|篇)|season\s*\d+|s\d+)$/i.test(sectionTitle)
+      && seriesToken.includes(sectionToken)) {
+      return true;
+    }
+    return false;
+  }
+
+  function getOfficialBangumiDistinctSectionTitle() {
+    const sectionTitle = normalizeOfficialBangumiSectionTitle(getOfficialBangumiSectionTitle());
+    if (!sectionTitle || /^(?:正片|本篇|选集|選集|剧集|劇集|全部|全集)$/i.test(sectionTitle)) return "";
+    const sectionToken = normalizeBindingToken(sectionTitle);
+    if (!sectionToken || isOfficialBangumiSectionContainedInSeries(sectionTitle)) return "";
+    return sectionTitle;
+  }
+
+  function getOfficialBangumiContextTitle() {
+    const seriesTitle = cleanTitle(getSeriesTitle());
+    const sectionTitle = getOfficialBangumiDistinctSectionTitle();
+    if (!sectionTitle) return seriesTitle;
+    if (!seriesTitle) return sectionTitle;
+    return `${seriesTitle} ${sectionTitle}`;
+  }
+
+  function resolveCurrentPageTitle(rawTitle = getPageTitle()) {
+    if (shouldUseRawTitleForPreview(rawTitle)) return cleanTitle(rawTitle);
+    return cleanTitle(getOfficialBangumiContextTitle() || getSeriesTitle() || rawTitle);
   }
 
   function cleanTitle(title) {
