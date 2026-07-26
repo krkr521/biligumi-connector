@@ -2617,12 +2617,13 @@
   function mutationTouchesOfficialBangumiEpisodeList(mutation) {
     const target = mutation && mutation.target;
     const targetElement = target && (target.nodeType === 1 ? target : target.parentElement);
-    if (targetElement && targetElement.closest && targetElement.closest("#eplist_module")) return true;
+    const selector = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='SectionSelector_SectionSelector']";
+    if (targetElement && targetElement.closest && targetElement.closest(selector)) return true;
     return Array.from(mutation && mutation.addedNodes || []).some((node) => (
       node && node.nodeType === 1 && (
-        node.id === "eplist_module"
-        || (node.closest && node.closest("#eplist_module"))
-        || (node.querySelector && node.querySelector("#eplist_module"))
+        (node.matches && node.matches(selector))
+        || (node.closest && node.closest(selector))
+        || (node.querySelector && node.querySelector(selector))
       )
     ));
   }
@@ -2747,12 +2748,16 @@
       if (getCollectionMappingRules(collectionContext.bvid).length) return null;
     }
     for (const key of getDirectBindingKeysForCurrentPage()) {
-      if (state.bindings[key]) {
-        migrateCurrentBindingKeys(state.bindings[key]);
-        return state.bindings[key];
-      }
+      const directSubjectId = state.bindings[key];
+      if (!directSubjectId || !canReuseOfficialDirectBinding(directSubjectId)) continue;
+      migrateCurrentBindingKeys(directSubjectId);
+      return directSubjectId;
     }
     if (getCurrentLongVideoPartBindingKey()) return null;
+    // Official Bangumi pages have live ss/md/section identities. If none of
+    // those exact keys is bound, do not reuse a title binding from another
+    // season and then migrate it onto the current season.
+    if (isOfficialBangumiPage() && getOfficialBangumiBaseBindingKeys().length) return null;
     const titleKey = getTitleBindingKey();
     const sameOwnerSubjectId = titleKey && state.bindings[titleKey];
     if (sameOwnerSubjectId && canReuseTitleBinding(sameOwnerSubjectId)) {
@@ -2775,6 +2780,24 @@
       state.message = state.bindingGuardMessage;
     }
     return null;
+  }
+
+  function canReuseOfficialDirectBinding(subjectId) {
+    if (!isOfficialBangumiPage()) return true;
+    const evidence = state.bindingSubjects && state.bindingSubjects[String(subjectId)];
+    const names = evidence && Array.isArray(evidence.names) ? evidence.names : [];
+    if (!names.length) return true;
+    const titleInfo = getTitleBindingInfo();
+    if (doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo)) return true;
+    const currentSeason = getTitleSeasonNumber(titleInfo.sourceTitle);
+    const evidenceSeasons = names.map(getTitleSeasonNumber).filter((value) => value > 0);
+    const hasCurrentSeason = evidenceSeasons.includes(currentSeason);
+    if (currentSeason > 1 && !hasCurrentSeason) {
+      state.bindingGuardMessage = "检测到官方番剧已切换季度，旧绑定与当前季度不一致；请为当前季度重新选择 Bangumi 条目。";
+      state.message = state.bindingGuardMessage;
+      return false;
+    }
+    return true;
   }
 
   function migrateCurrentBindingKeys(subjectId) {
@@ -5398,10 +5421,11 @@
     const officialSectionKeys = getOfficialBangumiSectionBindingKeys();
     // Distinct sections stay isolated for write/read once the section key is
     // stable. Plain season/media keys are intentionally omitted here so
-    // mini-sections do not inherit or overwrite the main-season binding; the
-    // section key itself is returned in every base variant so bindings written
-    // before the media id became visible still resolve.
+    // mini-sections do not inherit or overwrite the main-season binding.
+    // Only the current live URL/DOM bases are allowed to avoid stale seasons.
     if (officialSectionKeys.length) return officialSectionKeys;
+    const officialBaseKeys = getOfficialBangumiBaseBindingKeys();
+    if (officialBaseKeys.length) return officialBaseKeys;
     return [
       state.pageKey,
       getStableBiliSubjectKey(),
@@ -8189,8 +8213,14 @@
     const mediaInfo = initial.mediaInfo || initial.media_info || {};
     const seasonId = initial.season_id || mediaInfo.season_id || mediaInfo.seasonId || mediaInfo.season_id_str;
     const mediaId = initial.media_id || mediaInfo.media_id || mediaInfo.mediaId || mediaInfo.media_id_str;
-    const season = getPathToken("ss") || seasonId;
-    const media = getPathToken("md") || mediaId || getOfficialBangumiMediaIdFromDom();
+    const pathSeason = getPathToken("ss");
+    const pathMedia = getPathToken("md");
+    if (pathSeason) return `bili:ss${stripBiliPrefix(pathSeason, "ss")}`;
+    if (pathMedia) return `bili:md${stripBiliPrefix(pathMedia, "md")}`;
+    const liveMediaId = getOfficialBangumiMediaIdFromDom();
+    if (liveMediaId) return `bili:md${liveMediaId}`;
+    const season = seasonId;
+    const media = mediaId;
     if (season) return `bili:ss${stripBiliPrefix(season, "ss")}`;
     if (media) return `bili:md${stripBiliPrefix(media, "md")}`;
     return "";
@@ -8207,21 +8237,28 @@
     return getOfficialBangumiSectionBindingKeys()[0] || "";
   }
 
+  function getOfficialBangumiBaseBindingKeys() {
+    if (!isOfficialBangumiPage()) return [];
+    const liveKeys = [];
+    const pathSeason = getPathToken("ss");
+    const pathMedia = getPathToken("md");
+    if (pathMedia) liveKeys.push(`bili:md${stripBiliPrefix(pathMedia, "md")}`);
+    const mediaId = getOfficialBangumiMediaIdFromDom();
+    if (mediaId) liveKeys.push(`bili:md${mediaId}`);
+    if (pathSeason) liveKeys.push(`bili:ss${stripBiliPrefix(pathSeason, "ss")}`);
+    if (liveKeys.length) return liveKeys.filter((value, index, list) => list.indexOf(value) === index);
+    const fallbackKey = getStableBiliSubjectKey();
+    return fallbackKey ? [fallbackKey] : [];
+  }
+
   function getOfficialBangumiSectionBindingKeys() {
     const sectionTitle = getOfficialBangumiDistinctSectionTitle();
     if (!sectionTitle) return [];
     const sectionToken = normalizeBindingToken(sectionTitle);
     if (!sectionToken) return [];
-    // The media id link renders later than the season key while the page loads,
-    // so emit every base variant. Reads/writes then stay consistent no matter
-    // which base was computable at write time.
-    const mediaId = getOfficialBangumiMediaIdFromDom();
-    const baseKeys = [];
-    if (mediaId) baseKeys.push(`bili:md${mediaId}`);
-    const stableKey = getStableBiliSubjectKey();
-    if (stableKey) baseKeys.push(stableKey);
-    return baseKeys
-      .filter((value, index, list) => list.indexOf(value) === index)
+    // Only live URL/DOM bases participate when available. This prevents stale
+    // __INITIAL_STATE__ from carrying a previous season into a SPA switch.
+    return getOfficialBangumiBaseBindingKeys()
       .map((baseKey) => `${baseKey}|section:${sectionToken}`);
   }
 
@@ -8926,6 +8963,8 @@
   }
 
   function getSeriesTitle() {
+    const liveOfficialTitle = getOfficialBangumiMediaTitleFromDom();
+    if (liveOfficialTitle) return liveOfficialTitle;
     const initial = window.__INITIAL_STATE__ || {};
     const mediaInfo = initial.mediaInfo || initial.media_info || {};
     const epInfo = initial.epInfo || initial.ep_info || {};
@@ -8939,7 +8978,6 @@
       epInfo.season_title,
       epInfo.seasonTitle,
       document.querySelector(".media-title, .media-info-title, .media-name")?.textContent,
-      getOfficialBangumiMediaTitleFromDom(),
     ];
     return candidates.map((value) => String(value || "").trim()).find(Boolean) || "";
   }
@@ -8975,10 +9013,10 @@
     // Prefer live DOM section UI first. Skipping DOM when the list does not yet
     // contain the current ep was racing section switches against page-title extract.
     const selectors = [
-      "#eplist_module [class*='SectionSelector_sectionItem'][class*='SectionSelector_active']",
-      "#eplist_module [class*='sectionItem'][class*='active']",
-      "#eplist_module [class*='eplist_list_title'] h4",
-      "#eplist_module [class*='eplist_list_title']",
+      "[class*='SectionSelector_sectionItem'][class*='SectionSelector_active']",
+      "[class*='sectionItem'][class*='active']",
+      "[class*='eplist_list_title'] h4",
+      "[class*='eplist_list_title']",
     ];
     for (const selector of selectors) {
       const text = stripOfficialBangumiProgressSuffix(

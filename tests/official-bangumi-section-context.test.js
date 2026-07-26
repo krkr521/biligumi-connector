@@ -25,6 +25,7 @@ const CONTEXT_FUNCTIONS = [
   "getOfficialBangumiContextTitle",
   "resolveCurrentPageTitle",
   "getOfficialBangumiMediaIdFromDom",
+  "getOfficialBangumiBaseBindingKeys",
   "getOfficialBangumiSectionBindingKey",
   "getOfficialBangumiSectionBindingKeys",
 ];
@@ -127,6 +128,11 @@ const sandbox = {
   normalizeBindingToken: (value) => String(value || "").trim().toLowerCase().replace(/\s+/g, ""),
   shouldUseRawTitleForPreview: () => false,
   getPageTitle: () => rawTitle,
+  getPathToken: (prefix) => {
+    const match = sandbox.location.pathname.match(new RegExp(`/${prefix}(\\d+)`, "i"));
+    return match ? `${prefix}${match[1]}` : "";
+  },
+  stripBiliPrefix: (value, prefix) => String(value || "").replace(new RegExp(`^${prefix}`, "i"), ""),
   getStableBiliSubjectKey: () => "bili:ss29308",
 };
 
@@ -141,6 +147,7 @@ runInSandbox(
     getOfficialBangumiContextTitle,
     resolveCurrentPageTitle,
     getOfficialBangumiMediaIdFromDom,
+    getOfficialBangumiBaseBindingKeys,
     getOfficialBangumiSectionBindingKey,
     getOfficialBangumiSectionBindingKeys,
     isOfficialBangumiSectionContainedInSeries,
@@ -170,8 +177,8 @@ assert.equal(
 );
 assert.deepEqual(
   [...sandbox.api.getOfficialBangumiSectionBindingKeys()],
-  ["bili:md28224078|section:元祖迷你", "bili:ss29308|section:元祖迷你"],
-  "every base variant is emitted so bindings written before the media id renders still resolve",
+  ["bili:md28224078|section:元祖迷你"],
+  "an ep route with live media identity must not include a stale initial season key",
 );
 
 // EP path with list already containing the current episode still prefers active SectionSelector.
