@@ -9937,6 +9937,15 @@
   function parseLongVideoPartTitle(value) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text) return null;
+    const chineseRangeMatch = text.match(/(?:^|[^\d一二两兩三四五六七八九十百~～–—至到-])(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[-~～–—至到]\s*(?:第\s*)?0*(\d{1,3}))?/i);
+    if (chineseRangeMatch) {
+      const seasonNo = parseChineseNumber(chineseRangeMatch[1]);
+      const episodeStart = Number(chineseRangeMatch[2]);
+      const episodeEnd = Number(chineseRangeMatch[3] || chineseRangeMatch[2]);
+      if (seasonNo > 0 && episodeStart > 0 && episodeEnd >= episodeStart) {
+        return { seasonNo, episodeStart, episodeEnd, rangeLabel: `第${seasonNo}季 ${episodeStart}-${episodeEnd}` };
+      }
+    }
     const rangeMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3})(?:\s*[-~～–—至到]\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3}))?/i);
     if (rangeMatch) {
       const seasonNo = Number(rangeMatch[1]);
@@ -9945,6 +9954,11 @@
       if (seasonNo > 0 && episodeStart > 0 && episodeEnd >= episodeStart) {
         return { seasonNo, episodeStart, episodeEnd, rangeLabel: `S${seasonNo} ${episodeStart}-${episodeEnd}` };
       }
+    }
+    const chineseSeasonMatch = text.match(/(?:^|[^\d一二两兩三四五六七八九十百~～–—至到-])(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季(?:$|\s)/i);
+    if (chineseSeasonMatch) {
+      const seasonNo = parseChineseNumber(chineseSeasonMatch[1]);
+      if (seasonNo > 0) return { seasonNo, episodeStart: null, episodeEnd: null, rangeLabel: `第${seasonNo}季` };
     }
     const seasonMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})(?:\b|\s)/i);
     const seasonNo = seasonMatch ? Number(seasonMatch[1]) : 0;
@@ -10547,7 +10561,17 @@
 
   function renderLongVideoEpisodeHint() {
     const guess = state.longVideoEpisodeGuess;
-    if (!guess || !guess.active) return "";
+    if (!guess || !guess.active) {
+      if (isCurrentVideoAutoProgressDisabled() || getLongVideoEpisodeModeDecision() !== true) return "";
+      const video = getActiveVideoElement();
+      const duration = getLongVideoDurationSeconds(video);
+      if (!Number.isFinite(duration) || duration <= LONG_VIDEO_MIN_DURATION_SECONDS) return "";
+      const detection = getLongVideoDetection(video);
+      if (detection.active) return "";
+      const reason = String(detection.reason || "当前参数无法推测分集。");
+      const actions = renderLongVideoOffsetActions();
+      return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">实验推测暂不可用：${escapeHtml(reason)} 请把播放进度移到第一集正片真正开始的位置，再设置起点。</div>${actions}</div>`;
+    }
     const actions = renderLongVideoOffsetActions();
     let text = "";
     if (guess.stage === "prelude") {

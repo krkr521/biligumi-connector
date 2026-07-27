@@ -151,6 +151,7 @@ const realHelpers = [
   extractFunction(userscriptSource, "escapeHtml"),
   extractFunction(userscriptSource, "getCurrentPartNoFromUrl"),
   extractFunction(userscriptSource, "stripTrailingDurationText"),
+  extractFunction(userscriptSource, "parseChineseNumber"),
 ].join("\n");
 
 vm.createContext(sandbox);
@@ -169,6 +170,7 @@ vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
   parseLongVideoPartTitle,
   selectLongVideoEpisodeSegment,
   getCurrentVideoPartContext,
+  getCurrentLongVideoPartBindingKey,
   getLongVideoDecisionKey,
   getCurrentVideoProgressKey,
   getEffectiveLongVideoOffsetSeconds,
@@ -178,6 +180,7 @@ vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
   clearLongVideoVideoOffset,
   setCurrentVideoAutoProgressDisabled,
   clearLongVideoEpisodeModeDecision,
+  renderLongVideoEpisodeHint,
   getNormalEpisodes,
   escapeHtml,
   getCurrentPartNoFromUrl,
@@ -211,6 +214,14 @@ assert.equal(parsedSeasonRange.seasonNo, 2);
 assert.equal(parsedSeasonRange.episodeStart, 13);
 assert.equal(parsedSeasonRange.episodeEnd, 15);
 assert.equal(logic.parseLongVideoPartTitle("Season 3").seasonNo, 3);
+const parsedChineseSeasonRange = logic.parseLongVideoPartTitle("第一季1-12");
+assert.equal(parsedChineseSeasonRange.seasonNo, 1);
+assert.equal(parsedChineseSeasonRange.episodeStart, 1);
+assert.equal(parsedChineseSeasonRange.episodeEnd, 12);
+assert.equal(logic.parseLongVideoPartTitle("租借女友 第二季 1-12").seasonNo, 2);
+assert.equal(logic.parseLongVideoPartTitle("第三季").seasonNo, 3);
+assert.equal(logic.parseLongVideoPartTitle("租借女友 第1-5季"), null,
+  "a whole-title season range must not be mistaken for the fifth part season");
 
 const fifteenEpisodes = Array.from({ length: 15 }, (_, index) => ({ ...episodes[index % episodes.length], id: index + 101 }));
 const rangedSegment = logic.selectLongVideoEpisodeSegment(fifteenEpisodes, parsedSeasonRange);
@@ -264,6 +275,37 @@ assert.equal(implausiblyShortRange.segment.rangeApplied, true);
 assert.equal(implausiblyShortRange.rangeTimingMismatch, true);
 assert.equal(implausiblyShortRange.autoMarkSafe, false);
 sandbox.state.episodes = episodes;
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+
+const chinesePartNodes = [
+  ["第一季1-12", false],
+  ["第二季1-12", true],
+  ["第三季1-12", false],
+  ["第四季1-12", false],
+  ["第五季1-12", false],
+].map(([title, active]) => ({
+  className: `simple-base-item video-pod__item${active ? " active" : ""}`,
+  textContent: `${title} 06:03:08`,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const chinesePartContainer = { children: chinesePartNodes };
+chinesePartNodes.forEach((node) => {
+  node.parentElement = chinesePartContainer;
+  node.closest = (selector) => selector === ".video-pod__list" ? chinesePartContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.includes(".video-pod__list") ? chinesePartNodes[1] : null;
+const chineseCurrentPart = logic.getCurrentVideoPartContext();
+assert.equal(chineseCurrentPart.partNo, 2);
+assert.equal(chineseCurrentPart.partCount, 5);
+assert.equal(chineseCurrentPart.seasonNo, 2);
+assert.equal(chineseCurrentPart.episodeStart, 1);
+assert.equal(chineseCurrentPart.episodeEnd, 12);
+assert.equal(logic.getLongVideoDecisionKey(), "bvid:BV1TEST:p2");
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p2",
+  "a Chinese season change must isolate the next part binding");
 sandbox.document.querySelector = () => null;
 sandbox.document.querySelectorAll = () => [];
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
@@ -377,6 +419,21 @@ const tenMinuteOverflow = logic.getLongVideoDetection({ duration: timeline.endTi
 assert.equal(tenMinuteOverflow.active, true);
 assert.equal(tenMinuteOverflow.autoMarkSafe, false);
 assert.equal(logic.getLongVideoDetection({ duration: timeline.endTime - 46 * 60 }).active, false);
+
+// An invalid default offset must not hide the control needed to correct it.
+sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime - 46 * 60, currentTime: 10 });
+sandbox.state.longVideoEpisodeGuess = null;
+sandbox.state.disabledAutoProgressVideos = {};
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+const calibrationHint = logic.renderLongVideoEpisodeHint();
+assert.match(calibrationHint, /实验推测暂不可用/);
+assert.match(calibrationHint, /首集起点加全季时长已超过视频总长/);
+assert.match(calibrationHint, /data-action="capture-long-video-video-offset"/,
+  "inactive long-video detection must still expose the start-offset action");
+sandbox.state.longVideoEpisodeModes = {};
+assert.equal(logic.renderLongVideoEpisodeHint(), "",
+  "unconfirmed long videos must not show calibration controls");
+sandbox.getActiveVideoElement = () => null;
 
 sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, false);
