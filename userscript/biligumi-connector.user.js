@@ -9541,9 +9541,9 @@
 
   function parseBareCollectionEpisodeTitle(value) {
     const text = stripTrailingDurationText(String(value || "").replace(/\s+/g, " ").trim());
-    const match = text.match(/^0*(\d{1,3})$/);
+    const match = text.match(/^(?:0*(\d{1,3})|\(\s*0*(\d{1,3})\s*\)|（\s*0*(\d{1,3})\s*）)$/);
     if (!match) return null;
-    const episodeNo = Number(match[1]);
+    const episodeNo = Number(match[1] || match[2] || match[3]);
     if (!Number.isFinite(episodeNo) || episodeNo < 0) return null;
     return {
       seasonKey: "default",

@@ -154,6 +154,8 @@ assert.equal(sandbox.api.parseCollectionPartTitle("1080P"), null);
 assert.equal(sandbox.api.parseCollectionPartTitle("4K超清"), null);
 assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("01 02:06:56").episodeNo, 1);
 assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("16").episodeNo, 16);
+assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("(13) 32:43").episodeNo, 13);
+assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("（13）").episodeNo, 13);
 assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("1080P"), null);
 assert.equal(collectionConstants.MIN_COLLECTION_PARSED_PARTS, 4);
 assert.equal(collectionConstants.MAX_COLLECTION_SEGMENTS, 8);
@@ -495,6 +497,21 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(proposal.rule.sourceStart, 1);
   assert.equal(proposal.rule.sourceEnd, 8,
     "a 16P numeric collection bound to an 8-episode subject proposes the first 1-8 batch");
+  const parenthesizedContext = readBareNumericContext(
+    Array.from({ length: 51 }, (_, index) => `(${index + 1}) 32:43`),
+    12,
+  );
+  assert.equal(parenthesizedContext.episodeNo, 13);
+  assert.equal(parenthesizedContext.groupStart, 1);
+  assert.equal(parenthesizedContext.groupEnd, 51);
+  assert.equal(parenthesizedContext.parsedPartCount, 51);
+  sandbox.state.collectionMappings = {};
+  currentContext = parenthesizedContext;
+  sandbox.getSubjectMainEpisodeCountForMapping = async () => 12;
+  proposal = await sandbox.api.buildCollectionRangeBindingProposal(338424);
+  assert.equal(proposal.rule.sourceStart, 13);
+  assert.equal(proposal.rule.sourceEnd, 24,
+    "P13 in a 51-part parenthesized list starts the next 12-episode batch");
   assert.equal(readBareNumericContext(["01", "02", "03"]), null,
     "three plain numeric parts are too ambiguous to be a collection");
   assert.equal(readBareNumericContext(["01", "02", "04", "05"]), null,
