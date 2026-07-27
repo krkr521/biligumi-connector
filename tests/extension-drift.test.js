@@ -41,6 +41,7 @@ const IDENTICAL_FUNCTIONS = [
   "putCollectionMappingRule",
   "removeCollectionMappingRule",
   "formatCollectionRangeBindingPrompt",
+  "formatLongVideoRangeGroupBindingPrompt",
   "formatCollectionSourceRange",
   "formatCollectionTargetEpisodeLabel",
   "formatCollectionTargetRange",
@@ -52,6 +53,10 @@ const IDENTICAL_FUNCTIONS = [
   "getCurrentVideoPartEpisodeNo",
   "getCurrentVideoPartContext",
   "getVideoPartListNodes",
+  "getCurrentLongVideoRangeGroupContext",
+  "getCurrentLongVideoRangeGroupKey",
+  "getCurrentLongVideoBindingSource",
+  "applyLongVideoRangeGroupBinding",
   "getCurrentSeasonSearchKeyword",
   "isExplicitLongVideoPartRange",
   "getBilibiliCollectionTitle",
@@ -78,6 +83,7 @@ for (const name of IDENTICAL_FUNCTIONS) {
 
 for (const name of [
   "buildCollectionRangeBindingProposal",
+  "buildLongVideoRangeGroupBindingProposal",
   "getSubjectMainEpisodeCountForMapping",
   "getSubjectMainEpisodeInfoForMapping",
   "recordCurrentCollectionSegmentProgressIfNeeded",

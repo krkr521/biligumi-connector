@@ -2747,7 +2747,7 @@
     for (const key of getDirectBindingKeysForCurrentPage()) {
       const directSubjectId = state.bindings[key];
       if (!directSubjectId || !canReuseOfficialDirectBinding(directSubjectId)) continue;
-      migrateCurrentBindingKeys(directSubjectId);
+      if (!/^bili:BV[\w]+:range:s\d+:\d+-\d+$/i.test(key)) migrateCurrentBindingKeys(directSubjectId);
       return directSubjectId;
     }
     if (collectionLayout) return null;
@@ -3879,6 +3879,13 @@
     if (!layout) return "";
     if (layout.currentKind === "long-range") {
       const range = layout.currentLongVideo && layout.currentLongVideo.rangeLabel || layout.part.title;
+      const bindingSource = state.subjectId ? getCurrentLongVideoBindingSource(state.subjectId) : null;
+      if (bindingSource && bindingSource.type === "group") {
+        return `<div class="biligumi-notice">当前分P已继承第${bindingSource.group.seasonNo}季 ${bindingSource.group.groupStart}-${bindingSource.group.groupEnd}集连续范围组的 Bangumi 绑定；长视频起点和自动识别决定仍按本分P单独保存。</div>`;
+      }
+      if (bindingSource && bindingSource.type === "part") {
+        return `<div class="biligumi-notice">当前长视频分P「${escapeHtml(layout.part.title)}」使用独立 Bangumi 绑定，不会继承整 BV；分集范围为 ${escapeHtml(range)}。</div>`;
+      }
       return `<div class="biligumi-notice">检测到混合合集；当前分P「${escapeHtml(layout.part.title)}」表示 ${escapeHtml(range)} 的长视频段。已停止继承整 BV 绑定，请为这一段绑定正确条目后再进行分集推测。</div>`;
     }
     return `<div class="biligumi-notice">检测到混合合集，但当前分P「${escapeHtml(layout.part.title)}」无法识别为正片，已停止继承整 BV 绑定和自动进度。</div>`;
@@ -5245,6 +5252,10 @@
     const legacyBindingKeys = getBindingKeysForCurrentPage();
     const collectionProposal = await buildCollectionRangeBindingProposal(subjectId);
     if (!isRouteContextCurrent(routeContext)) return;
+    const longVideoRangeProposal = collectionProposal
+      ? null
+      : await buildLongVideoRangeGroupBindingProposal(subjectId);
+    if (!isRouteContextCurrent(routeContext)) return;
     if (collectionProposal && !window.confirm(formatCollectionRangeBindingPrompt(collectionProposal, subjectId))) {
       state.busy = false;
       state.message = "已取消绑定；没有修改合集映射。";
@@ -5253,6 +5264,7 @@
       return;
     }
     let applied = false;
+    let rangeGroupWriteOutcome = "";
     if (collectionProposal) {
       await updateStoredCollectionMappings((mappings) => {
         if (!isRouteContextCurrent(routeContext)) return false;
@@ -5272,9 +5284,23 @@
         });
       }
     } else {
+      const useLongVideoRangeGroup = Boolean(
+        longVideoRangeProposal
+        && (longVideoRangeProposal.alreadyBound
+          || window.confirm(formatLongVideoRangeGroupBindingPrompt(longVideoRangeProposal, subjectId)))
+      );
       await updateBindings((bindings) => {
         if (!isRouteContextCurrent(routeContext)) return false;
-        for (const key of legacyBindingKeys) bindings[key] = subjectId;
+        if (useLongVideoRangeGroup) {
+          rangeGroupWriteOutcome = applyLongVideoRangeGroupBinding(
+            bindings,
+            longVideoRangeProposal,
+            legacyBindingKeys,
+            subjectId,
+          );
+        } else {
+          for (const key of legacyBindingKeys) bindings[key] = subjectId;
+        }
         applied = true;
         return true;
       });
@@ -5296,6 +5322,11 @@
     state.previewCharacterFailedKey = "";
     state.searchResults = [];
     await loadSubjectBundle();
+    if (rangeGroupWriteOutcome === "part-conflict") {
+      state.message = "该连续范围组刚被其他页面绑定到不同条目；为避免覆盖，本次只绑定了当前分P。";
+      state.error = "";
+      render();
+    }
   }
 
   async function unbindSubject() {
@@ -5307,8 +5338,13 @@
     }
     const collectionContext = getCurrentCollectionPartContext();
     const collectionRule = collectionContext && getCollectionMappingRule(collectionContext);
+    const longVideoBindingSource = collectionRule ? null : getCurrentLongVideoBindingSource(state.subjectId);
     const ok = window.confirm(collectionRule
       ? `只删除合集范围“${formatCollectionSourceRange(collectionRule)}”的绑定，不会影响其他范围或删除 Bangumi 记录。确定解绑吗？`
+      : longVideoBindingSource && longVideoBindingSource.type === "group"
+      ? `当前条目继承自第${longVideoBindingSource.group.seasonNo}季 ${longVideoBindingSource.group.groupStart}-${longVideoBindingSource.group.groupEnd}集的范围组。解绑会停止该组其他分P继续继承，但不会删除已有的分P覆盖或 Bangumi 记录。确定吗？`
+      : longVideoBindingSource && longVideoBindingSource.type === "part" && longVideoBindingSource.fallbackSubjectId
+      ? "当前分P存在单独覆盖；删除后会恢复同一范围组的继承绑定。确定吗？"
       : "只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？");
     if (!ok) return;
     const routeContext = captureRouteContext();
@@ -5321,7 +5357,9 @@
         return applied;
       });
     } else {
-      const bindingKeys = getBindingKeysForCurrentPage();
+      const bindingKeys = longVideoBindingSource
+        ? [longVideoBindingSource.key]
+        : getBindingKeysForCurrentPage();
       await updateBindings((bindings) => {
         if (!isRouteContextCurrent(routeContext)) return false;
         applied = true;
@@ -5335,6 +5373,13 @@
       });
     }
     if (!applied || !isRouteContextCurrent(routeContext)) return;
+    if (longVideoBindingSource && longVideoBindingSource.type === "part" && longVideoBindingSource.fallbackSubjectId) {
+      const changed = refreshCurrentBindingIfChanged();
+      state.message = "已删除当前分P覆盖，恢复同一连续范围组的继承绑定。";
+      state.error = "";
+      if (!changed) render();
+      return;
+    }
     state.subjectId = null;
     state.collectionDeleteConfirmSubjectId = null;
     state.subject = null;
@@ -5374,7 +5419,9 @@
 
   function getDirectBindingKeysForCurrentPage() {
     const longVideoPartKey = getCurrentLongVideoPartBindingKey();
-    if (longVideoPartKey) return [longVideoPartKey];
+    if (longVideoPartKey) {
+      return [longVideoPartKey, getCurrentLongVideoRangeGroupKey()].filter(Boolean);
+    }
     const collectionLayout = getCurrentCollectionLayoutContext();
     if (collectionLayout && collectionLayout.currentKind !== "episode") {
       return [`bili:${collectionLayout.part.bvid}:p${collectionLayout.part.partNo}`];
@@ -5393,6 +5440,42 @@
       location.pathname,
       getBvIdFromUrl(),
     ].filter(Boolean).filter((value, index, list) => list.indexOf(value) === index);
+  }
+
+  function getCurrentLongVideoBindingSource(subjectId, bindings = state.bindings) {
+    const safeSubjectId = Number(subjectId);
+    const partKey = getCurrentLongVideoPartBindingKey();
+    const group = getCurrentLongVideoRangeGroupContext();
+    if (!safeSubjectId || !partKey) return null;
+    if (Number(bindings && bindings[partKey]) === safeSubjectId) {
+      return {
+        type: "part",
+        key: partKey,
+        group,
+        fallbackSubjectId: Number(group && bindings && bindings[group.key]) || null,
+      };
+    }
+    if (group && Number(bindings && bindings[group.key]) === safeSubjectId) {
+      return { type: "group", key: group.key, group, fallbackSubjectId: null };
+    }
+    return null;
+  }
+
+  function applyLongVideoRangeGroupBinding(bindings, proposal, partKeys, subjectId) {
+    const safeSubjectId = Number(subjectId);
+    const keys = Array.isArray(partKeys) ? partKeys.filter(Boolean) : [];
+    const existingGroupSubjectId = Number(proposal && bindings && bindings[proposal.key]) || null;
+    if (existingGroupSubjectId && existingGroupSubjectId !== safeSubjectId) {
+      keys.forEach((key) => {
+        bindings[key] = safeSubjectId;
+      });
+      return "part-conflict";
+    }
+    keys.forEach((key) => {
+      delete bindings[key];
+    });
+    bindings[proposal.key] = safeSubjectId;
+    return "group";
   }
 
   async function loadSubjectBundle() {
@@ -9940,6 +10023,28 @@
     };
   }
 
+  async function buildLongVideoRangeGroupBindingProposal(subjectId) {
+    const context = getCurrentLongVideoRangeGroupContext();
+    const safeSubjectId = Number(subjectId);
+    if (!context || !Number.isFinite(safeSubjectId) || safeSubjectId <= 0) return null;
+    const bindings = readJsonValue(STORAGE.bindings, {});
+    const existingSubjectId = Number(bindings && bindings[context.key]) || null;
+    if (existingSubjectId && existingSubjectId !== safeSubjectId) return null;
+    let episodeCount = 0;
+    try {
+      episodeCount = await getSubjectMainEpisodeCountForMapping(safeSubjectId);
+    } catch (_) {
+      return null;
+    }
+    if (!Number.isFinite(episodeCount) || episodeCount < context.groupEnd) return null;
+    return {
+      ...context,
+      subjectId: safeSubjectId,
+      episodeCount,
+      alreadyBound: existingSubjectId === safeSubjectId,
+    };
+  }
+
   async function getSubjectMainEpisodeCountForMapping(subjectId) {
     const safeSubjectId = Number(subjectId);
     if (Number(state.subjectId) === safeSubjectId && getNormalEpisodes().length) return getNormalEpisodes().length;
@@ -9991,6 +10096,12 @@
       ? `\n\n这将替换已有映射「${formatCollectionSourceRange(proposal.replacesRule)}」，不会留下被截断的前半段。`
       : "";
     return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 ${targetRange}${splitNote}。${zeroNote}${replaceNote}\n\n确定保存这条范围映射吗？`;
+  }
+
+  function formatLongVideoRangeGroupBindingPrompt(proposal, subjectId) {
+    const subject = resolveLongVideoBindingSubject(subjectId);
+    const subjectName = subject ? displaySubjectName(subject) : `Bangumi subject ${subjectId}`;
+    return `检测到同一季度被连续拆成 ${proposal.partCount} 个长视频分P（第${proposal.seasonNo}季 ${proposal.groupStart}-${proposal.groupEnd}集）。\n\n“${subjectName}”有 ${proposal.episodeCount} 集正片，可以让这些分P共用一次绑定；各分P的长视频起点和自动识别决定仍单独保存。\n\n确定应用到这一整组吗？\n\n取消只会绑定当前分P。`;
   }
 
   function formatCollectionSourceRange(rule) {
@@ -10186,6 +10297,52 @@
     if (!part || part.partCount <= 1 || !part.seasonNo) return "";
     if (getLongVideoEpisodeModeDecision() !== true && !isExplicitLongVideoPartRange(part)) return "";
     return `bili:${part.bvid}:p${part.partNo}`;
+  }
+
+  function getCurrentLongVideoRangeGroupContext(part = getCurrentVideoPartContext(), nodes = getVideoPartListNodes()) {
+    if (!part || !isExplicitLongVideoPartRange(part) || !Array.isArray(nodes) || nodes.length < 2) return null;
+    const ranges = nodes
+      .map((node, index) => {
+        const parsed = parseLongVideoPartTitle(getVideoPartNodeTitle(node));
+        return {
+          partNo: index + 1,
+          seasonNo: Number(parsed && parsed.seasonNo),
+          episodeStart: Number(parsed && parsed.episodeStart),
+          episodeEnd: Number(parsed && parsed.episodeEnd),
+        };
+      })
+      .filter((range) => range.seasonNo === Number(part.seasonNo) && isExplicitLongVideoPartRange(range))
+      .sort((left, right) => left.partNo - right.partNo);
+    const runs = [];
+    ranges.forEach((range) => {
+      const run = runs[runs.length - 1];
+      const previous = run && run[run.length - 1];
+      if (
+        previous
+        && range.partNo === previous.partNo + 1
+        && range.episodeStart === previous.episodeEnd + 1
+      ) {
+        run.push(range);
+      } else {
+        runs.push([range]);
+      }
+    });
+    const currentRun = runs.find((run) => run.some((range) => range.partNo === Number(part.partNo))) || null;
+    if (!currentRun || currentRun.length < 2) return null;
+    const groupStart = currentRun[0].episodeStart;
+    const groupEnd = currentRun[currentRun.length - 1].episodeEnd;
+    return {
+      key: `bili:${part.bvid}:range:s${part.seasonNo}:${groupStart}-${groupEnd}`,
+      bvid: part.bvid,
+      seasonNo: Number(part.seasonNo),
+      groupStart,
+      groupEnd,
+      partCount: currentRun.length,
+    };
+  }
+
+  function getCurrentLongVideoRangeGroupKey() {
+    return getCurrentLongVideoRangeGroupContext()?.key || "";
   }
 
   function isExplicitLongVideoPartRange(part = getCurrentVideoPartContext()) {

@@ -129,6 +129,7 @@ const sandbox = {
     disabledAutoProgressVideos: {},
     rawTitle: "普通超长视频",
     subjectId: 1,
+    bindings: {},
     episodes,
   },
   location: new URL("https://www.bilibili.com/video/BV1TEST"),
@@ -137,6 +138,9 @@ const sandbox = {
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
   getPrimaryDomOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
   getActiveVideoElement: () => null,
+  mainEpisodeCount: 24,
+  readJsonValue: (key, fallback) => key === SRC_STORAGE.bindings ? sandbox.state.bindings : fallback,
+  getSubjectMainEpisodeCountForMapping: async () => sandbox.mainEpisodeCount,
   autoWatchThreshold: 50,
   getAutoWatchThreshold: () => sandbox.autoWatchThreshold,
   isOfficialBangumiPage: () => false,
@@ -155,9 +159,10 @@ const realHelpers = [
   extractFunction(userscriptSource, "stripTrailingDurationText"),
   extractFunction(userscriptSource, "parseChineseNumber"),
 ].join("\n");
+const rangeGroupProposalSource = extractFunction(userscriptSource, "buildLongVideoRangeGroupBindingProposal", { async: true });
 
 vm.createContext(sandbox);
-vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
+vm.runInContext(`${userscriptLogic}\n${userscriptBindingKeys}\n${rangeGroupProposalSource}\n${realHelpers}\n;globalThis.logic = {
   buildLongVideoEpisodeTimeline,
   getEpisodeDurationSeconds,
   parseEpisodeDurationText,
@@ -174,6 +179,13 @@ vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
   selectLongVideoEpisodeSegment,
   getCurrentVideoPartContext,
   getCurrentLongVideoPartBindingKey,
+  getCurrentLongVideoRangeGroupContext,
+  getCurrentLongVideoRangeGroupKey,
+  getCurrentLongVideoBindingSource,
+  applyLongVideoRangeGroupBinding,
+  getDirectBindingKeysForCurrentPage,
+  getBindingKeysForCurrentPage,
+  buildLongVideoRangeGroupBindingProposal,
   getLongVideoDecisionKey,
   getCurrentVideoProgressKey,
   getEffectiveLongVideoOffsetSeconds,
@@ -318,9 +330,121 @@ assert.equal(chineseCurrentPart.episodeEnd, 12);
 assert.equal(logic.getLongVideoDecisionKey(), "bvid:BV1TEST:p2");
 assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p2",
   "a Chinese season change must isolate the next part binding");
+
+const inheritedRangeNodes = [
+  ["第一季01-08", false],
+  ["第一季09-16", true],
+  ["第一季17-24", false],
+].map(([title, active]) => ({
+  className: `simple-base-item video-pod__item${active ? " active" : ""}`,
+  textContent: `${title} 05:02:57`,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const inheritedRangeContainer = { children: inheritedRangeNodes };
+inheritedRangeNodes.forEach((node) => {
+  node.parentElement = inheritedRangeContainer;
+  node.closest = (selector) => selector === ".video-pod__list" ? inheritedRangeContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.includes(".video-pod__list") ? inheritedRangeNodes[1] : null;
+const inheritedRangeContext = logic.getCurrentLongVideoRangeGroupContext();
+assert.equal(inheritedRangeContext.groupStart, 1);
+assert.equal(inheritedRangeContext.groupEnd, 24);
+assert.equal(inheritedRangeContext.partCount, 3);
+assert.equal(inheritedRangeContext.key, "bili:BV1TEST:range:s1:1-24");
+assert.deepEqual(
+  Array.from(logic.getDirectBindingKeysForCurrentPage()),
+  ["bili:BV1TEST:p2", "bili:BV1TEST:range:s1:1-24"],
+  "reads prefer an exact part override before the validated range group",
+);
+assert.deepEqual(
+  Array.from(logic.getBindingKeysForCurrentPage()),
+  ["bili:BV1TEST:p2"],
+  "ordinary writes stay part-scoped until the range-group proposal is accepted",
+);
+sandbox.state.bindings = {};
+sandbox.mainEpisodeCount = 24;
+let inheritedRangeProposal = await logic.buildLongVideoRangeGroupBindingProposal(42);
+assert.equal(inheritedRangeProposal.key, "bili:BV1TEST:range:s1:1-24");
+assert.equal(inheritedRangeProposal.episodeCount, 24);
+sandbox.mainEpisodeCount = 12;
+assert.equal(
+  await logic.buildLongVideoRangeGroupBindingProposal(42),
+  null,
+  "a 12-episode Bangumi entry cannot be inherited across a source range ending at episode 24",
+);
+sandbox.mainEpisodeCount = 24;
+sandbox.state.bindings = { "bili:BV1TEST:range:s1:1-24": 77 };
+assert.equal(
+  await logic.buildLongVideoRangeGroupBindingProposal(42),
+  null,
+  "an existing conflicting range-group binding is never overwritten implicitly",
+);
+sandbox.state.bindings = {
+  "bili:BV1TEST:p2": 42,
+  "bili:BV1TEST:range:s1:1-24": 77,
+};
+const exactBindingSource = logic.getCurrentLongVideoBindingSource(42);
+assert.equal(exactBindingSource.type, "part");
+assert.equal(exactBindingSource.fallbackSubjectId, 77);
+const racedBindings = { "bili:BV1TEST:range:s1:1-24": 77 };
+assert.equal(
+  logic.applyLongVideoRangeGroupBinding(
+    racedBindings,
+    { key: "bili:BV1TEST:range:s1:1-24" },
+    ["bili:BV1TEST:p2"],
+    42,
+  ),
+  "part-conflict",
+  "a conflict introduced after the proposal must fall back inside the storage write",
+);
+assert.equal(racedBindings["bili:BV1TEST:range:s1:1-24"], 77, "the concurrent group binding is preserved");
+assert.equal(racedBindings["bili:BV1TEST:p2"], 42, "only the current part is written after a race");
+
+const gappedRangeNodes = [
+  ["第一季01-08", true],
+  ["第一季10-16", false],
+  ["第一季17-24", false],
+].map(([title, active]) => ({
+  className: `simple-base-item video-pod__item${active ? " active" : ""}`,
+  textContent: title,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const gappedRangeContainer = { children: gappedRangeNodes };
+gappedRangeNodes.forEach((node) => {
+  node.parentElement = gappedRangeContainer;
+  node.closest = (selector) => selector === ".video-pod__list" ? gappedRangeContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.includes(".video-pod__list") ? gappedRangeNodes[0] : null;
+assert.equal(logic.getCurrentLongVideoRangeGroupContext(), null, "a range gap disables inheritance");
+
+const interleavedSeasonNodes = [
+  ["第一季01-08", true],
+  ["第二季01-08", false],
+  ["第一季09-16", false],
+].map(([title, active]) => ({
+  className: `simple-base-item video-pod__item${active ? " active" : ""}`,
+  textContent: title,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const interleavedSeasonContainer = { children: interleavedSeasonNodes };
+interleavedSeasonNodes.forEach((node) => {
+  node.parentElement = interleavedSeasonContainer;
+  node.closest = (selector) => selector === ".video-pod__list" ? interleavedSeasonContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.includes(".video-pod__list") ? interleavedSeasonNodes[0] : null;
+assert.equal(
+  logic.getCurrentLongVideoRangeGroupContext(),
+  null,
+  "same-season ranges separated by another season cannot form an inherited group",
+);
+
 sandbox.document.querySelector = () => null;
 sandbox.document.querySelectorAll = () => [];
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+sandbox.state.bindings = {};
 
 const oneMissing = episodes.map((episode, index) => index === 4 ? { ...episode, duration_seconds: 0 } : episode);
 const oneMissingTimeline = logic.buildLongVideoEpisodeTimeline(oneMissing, 0);

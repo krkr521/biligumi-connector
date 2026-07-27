@@ -61,6 +61,29 @@ assert.deepEqual(
   ["bili:BV1V4XFBWEGT:p51"],
   "manual binding on an unmapped tail part stays isolated to that BV part",
 );
+const inheritedRangeHintSandbox = {
+  state: { subjectId: 42 },
+  getCurrentCollectionPartContext: () => null,
+  getCurrentCollectionLayoutContext: () => ({
+    currentKind: "long-range",
+    part: { title: "第一季09-16" },
+    currentLongVideo: { rangeLabel: "第1季 9-16" },
+  }),
+  getCurrentLongVideoBindingSource: () => ({
+    type: "group",
+    group: { seasonNo: 1, groupStart: 1, groupEnd: 24 },
+  }),
+  escapeHtml: (value) => String(value),
+};
+runInSandbox(
+  `${functionSource("renderCollectionMappingHint")};globalThis.renderInheritedRangeHint = renderCollectionMappingHint;`,
+  inheritedRangeHintSandbox,
+);
+assert.match(
+  inheritedRangeHintSandbox.renderInheritedRangeHint(),
+  /已继承第1季 1-24集连续范围组/,
+  "an inherited long-video range explains that rebinding is not required",
+);
 let delayedLayoutReady = false;
 const delayedLayoutSandbox = {
   STORAGE: {
