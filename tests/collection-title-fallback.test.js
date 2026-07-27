@@ -58,6 +58,7 @@ const suggestSandbox = {
     if (value === overallCollectionNode.value) return "与奔驰于透明之夜的你 谈一场看不见的恋爱";
     return String(value || "").trim();
   },
+  getCurrentSeasonSearchKeyword: () => "",
   getBilibiliCollectionTitle: () => overallCollectionNode.value,
 };
 runInSandbox(`${suggestTitleSource}
@@ -69,6 +70,13 @@ assert.equal(
 );
 suggestSandbox.state.subject = { name: "已绑定条目" };
 assert.equal(suggestSandbox.api.suggestSearchKeyword(), "已绑定条目", "a bound subject still has highest priority");
+suggestSandbox.state.subject = null;
+suggestSandbox.getCurrentSeasonSearchKeyword = () => "药屋少女の呢喃 第2季";
+assert.equal(
+  suggestSandbox.api.suggestSearchKeyword(),
+  "药屋少女の呢喃 第2季",
+  "an active season inferred from the part title is preferred over a cross-season collection title",
+);
 
 const renderPreviewSource = extractFunction(source, "renderInlineAutoPreview");
 const missingKeywordSandbox = {
@@ -116,6 +124,30 @@ assert.match(
   emptyResultSandbox.api.renderNonMainPreviewStatus("", "示例番剧"),
   /按「示例番剧」没有找到自动候选，请修改上方搜索词后手动搜索/,
   "empty automatic results show the attempted keyword and a manual-search next step",
+);
+
+const seasonKeywordSource = extractFunction(source, "getCurrentSeasonSearchKeyword");
+const seasonKeywordSandbox = {
+  state: { rawTitle: "【药屋少女の呢喃 第1-2季】4K超清未删减完整版" },
+  currentSeason: 2,
+  getCurrentCollectionPartContext: () => null,
+  getCurrentVideoPartContext: () => ({ seasonNo: seasonKeywordSandbox.currentSeason }),
+  getPageTitle: () => seasonKeywordSandbox.state.rawTitle,
+  cleanTitle: (value) => String(value || "").includes("药屋少女") ? "药屋少女の呢喃" : "",
+  getTitleSeasonNumber: () => 0,
+};
+runInSandbox(`${seasonKeywordSource}
+;globalThis.api = { getCurrentSeasonSearchKeyword };`, seasonKeywordSandbox);
+assert.equal(
+  seasonKeywordSandbox.api.getCurrentSeasonSearchKeyword(),
+  "药屋少女の呢喃 第2季",
+  "a ranged multi-season page uses the active second-season part for automatic search",
+);
+seasonKeywordSandbox.currentSeason = 1;
+assert.equal(
+  seasonKeywordSandbox.api.getCurrentSeasonSearchKeyword(),
+  "药屋少女の呢喃",
+  "the first season keeps the base work title because Bangumi commonly omits a first-season suffix",
 );
 
 console.log("collection title fallback tests passed");

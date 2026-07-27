@@ -168,6 +168,7 @@ vm.runInContext(`${userscriptLogic}\n${realHelpers}\n;globalThis.logic = {
   shouldOfferLongVideoBindingPrompt,
   getLongVideoBindReadiness,
   parseLongVideoPartTitle,
+  isExplicitLongVideoPartRange,
   selectLongVideoEpisodeSegment,
   getCurrentVideoPartContext,
   getCurrentLongVideoPartBindingKey,
@@ -218,6 +219,12 @@ const parsedChineseSeasonRange = logic.parseLongVideoPartTitle("第一季1-12");
 assert.equal(parsedChineseSeasonRange.seasonNo, 1);
 assert.equal(parsedChineseSeasonRange.episodeStart, 1);
 assert.equal(parsedChineseSeasonRange.episodeEnd, 12);
+assert.equal(logic.isExplicitLongVideoPartRange(parsedChineseSeasonRange), true);
+assert.equal(
+  logic.isExplicitLongVideoPartRange(logic.parseLongVideoPartTitle("第二季1")),
+  false,
+  "a single episode title is not an explicit long-video range",
+);
 assert.equal(logic.parseLongVideoPartTitle("租借女友 第二季 1-12").seasonNo, 2);
 assert.equal(logic.parseLongVideoPartTitle("第三季").seasonNo, 3);
 assert.equal(logic.parseLongVideoPartTitle("租借女友 第1-5季"), null,
@@ -260,7 +267,10 @@ assert.equal(currentPart.seasonNo, 2);
 assert.equal(currentPart.episodeStart, 13);
 assert.equal(logic.getLongVideoDecisionKey(), "bvid:BV1TEST:p3");
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
-assert.equal(logic.getLongVideoEpisodeModeDecision(), true, "Legacy BV-wide decision should remain compatible");
+assert.equal(logic.getLongVideoEpisodeModeDecision(), null,
+  "an explicit ranged part requires its own decision instead of inheriting a BV-wide one");
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p3",
+  "an explicit ranged part is binding-isolated before its long-video decision");
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true, "bvid:BV1TEST:p3": false };
 assert.equal(logic.getLongVideoEpisodeModeDecision(), false, "Part-specific decision should override a legacy BV-wide decision");
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST:p3": true };

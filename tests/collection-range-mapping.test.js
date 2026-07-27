@@ -35,6 +35,129 @@ assert.match(
   /changed \|\| normalizedChanged/,
   "extension must persist lazy cleanup even when the current segment was already recorded",
 );
+for (const [label, currentBindingSource] of [
+  ["userscript", extractFunction(source, "getCurrentBinding")],
+  ["extension", extractFunction(extensionSource, "getCurrentBinding")],
+]) {
+  assert.match(currentBindingSource, /if \(collectionRule\) return Number\(collectionRule\.subjectId\) \|\| null;\s+return null;/,
+    `${label} must not inherit a whole-BV binding for an unmapped recognized episode`);
+  assert.match(currentBindingSource, /if \(collectionLayout\) return null;/,
+    `${label} must fail closed on long-range and non-content parts of a recognized mixed collection`);
+}
+const isolatedWriteSandbox = {
+  getCurrentLongVideoPartBindingKey: () => "",
+  getCurrentCollectionLayoutContext: () => ({ currentKind: "unmapped" }),
+  getDirectBindingKeysForCurrentPage: () => ["bili:BV1V4XFBWEGT:p51"],
+  getTitleBindingKey: () => {
+    throw new Error("a non-content part must not write the shared title key");
+  },
+};
+runInSandbox(
+  `${functionSource("getBindingKeysForCurrentPage")};globalThis.readBindingKeys = getBindingKeysForCurrentPage;`,
+  isolatedWriteSandbox,
+);
+assert.deepEqual(
+  [...isolatedWriteSandbox.readBindingKeys()],
+  ["bili:BV1V4XFBWEGT:p51"],
+  "manual binding on an unmapped tail part stays isolated to that BV part",
+);
+let delayedLayoutReady = false;
+const delayedLayoutSandbox = {
+  STORAGE: {
+    bindings: "bindings",
+    bindingSubjects: "bindingSubjects",
+    collectionMappings: "collectionMappings",
+  },
+  routeRefreshSeq: 0,
+  state: {
+    subjectId: 95225,
+    bindings: { "bili:BV1V4XFBWEGT": 95225 },
+    bindingSubjects: {},
+    collectionMappings: {},
+    subject: { id: 95225 },
+    subjectInfoLinks: { old: true },
+    subjectInfoWebRows: [{ old: true }],
+    characters: [{ old: true }],
+    characterError: "old",
+    collection: { old: true },
+    episodes: [{ old: true }],
+    episodeCollections: [{ old: true }],
+    busy: true,
+    error: "old",
+    message: "old",
+    bindingGuardMessage: "",
+    autoEpisodeSyncing: true,
+    autoEpisodeSyncLastKey: "old",
+    longVideoEpisodeGuess: { active: true },
+    longVideoEpisodeRenderKey: "old",
+    longVideoDetectionCache: { old: true },
+    longVideoDetectionKeyMemo: "old",
+  },
+  readJsonValue(key, fallback) {
+    if (key === "bindings") return delayedLayoutSandbox.state.bindings;
+    if (key === "bindingSubjects") return {};
+    if (key === "collectionMappings") return {};
+    return fallback;
+  },
+  normalizeCollectionMappings: (value) => value,
+  getCurrentCollectionPartContext: () => null,
+  getCollectionMappingRule: () => null,
+  getCurrentCollectionLayoutContext: () => delayedLayoutReady ? ({ currentKind: "long-range" }) : null,
+  getDirectBindingKeysForCurrentPage: () => delayedLayoutReady
+    ? ["bili:BV1V4XFBWEGT:p49"]
+    : ["bili:BV1V4XFBWEGT"],
+  canReuseOfficialDirectBinding: () => true,
+  migrateCurrentBindingKeys: () => {},
+  getCurrentLongVideoPartBindingKey: () => "",
+  isOfficialBangumiPage: () => false,
+  getOfficialBangumiBaseBindingKeys: () => [],
+  getTitleBindingKey: () => "",
+  canReuseTitleBinding: () => false,
+  getCrossOwnerTitleBinding: () => null,
+  getNonMainTitleBinding: () => null,
+  getTitleBindingInfo: () => ({ lowConfidence: false, token: "" }),
+  getTitleBindingSubjectIdsByToken: () => [],
+  clearLongVideoBindingPrompt: () => {},
+  finishPanelLoad: () => {},
+  removeSubjectInfoPanel: () => {},
+  removeCharacterStrip: () => {},
+  recognitionRefreshes: 0,
+  refreshCurrentEpisodeRecognitionState: () => {
+    delayedLayoutSandbox.recognitionRefreshes += 1;
+  },
+  renders: 0,
+  render: () => {
+    delayedLayoutSandbox.renders += 1;
+  },
+  shouldRenderFullPanel: () => false,
+  loadSubjectBundle: async () => {},
+  showError: () => {},
+};
+runInSandbox(
+  [
+    functionSource("getCurrentBinding"),
+    functionSource("refreshCurrentBindingIfChanged"),
+    "globalThis.refreshSettledBinding = refreshCurrentBindingIfChanged;",
+  ].join("\n"),
+  delayedLayoutSandbox,
+);
+assert.equal(
+  delayedLayoutSandbox.refreshSettledBinding(),
+  false,
+  "an early read before the 51P list appears leaves the existing binding untouched",
+);
+delayedLayoutReady = true;
+assert.equal(
+  delayedLayoutSandbox.refreshSettledBinding(),
+  true,
+  "the settled mixed layout triggers a binding re-read",
+);
+assert.equal(delayedLayoutSandbox.state.subjectId, null, "the stale whole-BV subject is removed after layout discovery");
+assert.equal(delayedLayoutSandbox.state.subject, null, "the stale subject bundle is cleared");
+assert.equal(delayedLayoutSandbox.state.episodes.length, 0, "stale first-season episodes are cleared");
+assert.equal(delayedLayoutSandbox.routeRefreshSeq, 1, "in-flight requests for the stale subject are invalidated");
+assert.equal(delayedLayoutSandbox.recognitionRefreshes, 1);
+assert.equal(delayedLayoutSandbox.renders, 1);
 for (const [label, bindSource] of [
   ["userscript", extractFunction(source, "bindSubject", { async: true })],
   ["extension", extractFunction(extensionSource, "bindSubject", { async: true })],
@@ -84,6 +207,7 @@ const sandbox = {
   ...collectionConstants,
   Date,
   state: { collectionMappings: {} },
+  getCurrentCollectionLayoutContext: () => null,
   stripTrailingDurationText: (text) => String(text || "")
     .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
     .replace(/\s+/g, " ")
@@ -143,6 +267,11 @@ assert.equal(sandbox.api.parseCollectionPartTitle("第1集上").fragmentIndex, 1
 assert.equal(sandbox.api.parseCollectionPartTitle("第1集下").fragmentIndex, 2);
 assert.equal(sandbox.api.parseCollectionPartTitle("EP01-A").fragmentIndex, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("EP01-B").fragmentIndex, 2);
+assert.deepEqual(plain(sandbox.api.parseCollectionPartTitle("1.1.2")), {
+  seasonKey: "season:1", seasonNo: 1, episodeNo: 1, fragmentIndex: 2,
+  fragmentCount: 2, hierarchical: true, label: "1.1.2",
+});
+assert.equal(sandbox.api.parseCollectionPartTitle("1.24.1").episodeNo, 24);
 assert.equal(sandbox.api.parseCollectionPartTitle("S2E13").seasonKey, "season:2");
 assert.equal(sandbox.api.parseCollectionPartTitle("1.1 相遇").episodeNo, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("1.1 相遇").fragmentIndex, 1);
@@ -423,6 +552,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     functionSource("getCurrentVideoPartContext"),
     functionSource("getCollectionPartRows"),
     functionSource("getQualifiedCollectionPartRows"),
+    functionSource("getCurrentCollectionLayoutContext"),
     functionSource("getCurrentCollectionPartContext"),
   ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", collectionDomSandbox);
   let liveContext = collectionDomSandbox.readCollectionContext();
@@ -477,6 +607,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
       functionSource("getCurrentVideoPartContext"),
       functionSource("getCollectionPartRows"),
       functionSource("getQualifiedCollectionPartRows"),
+      functionSource("getCurrentCollectionLayoutContext"),
       functionSource("getCurrentCollectionPartContext"),
     ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", numericSandbox);
     return plain(numericSandbox.readCollectionContext());
@@ -547,11 +678,84 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     functionSource("getCurrentVideoPartContext"),
     functionSource("getCollectionPartRows"),
     functionSource("getQualifiedCollectionPartRows"),
+    functionSource("getCurrentCollectionLayoutContext"),
     functionSource("getCurrentCollectionPartContext"),
   ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", incompleteSandbox);
   const incompleteContext = incompleteSandbox.readCollectionContext();
   assert.equal(incompleteContext.episodeNo, 2);
   assert.equal(incompleteContext.segmentCount, 1, "missing .2 must not invent a second required segment");
+
+  const hybridTitles = [];
+  for (let episode = 1; episode <= 24; episode += 1) {
+    hybridTitles.push(`1.${episode}.1`, `1.${episode}.2`);
+  }
+  hybridTitles.push("第二季1-12", "第二季13-24", "谢谢观看，点点关注不迷路");
+  const hybridNodes = hybridTitles.map((title, index) => ({
+    className: index === 0 ? "page-item active" : "page-item",
+    textContent: title,
+    getAttribute: (name) => name === "title" ? title : "",
+    querySelectorAll: () => [],
+  }));
+  let hybridPartNo = 2;
+  const hybridSandbox = {
+    ...collectionConstants,
+    document: {
+      querySelector: () => null,
+      querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? hybridNodes : [],
+    },
+    getBvIdFromUrl: () => "BV1V4XFBWEGT",
+    getCurrentPartNoFromUrl: () => hybridPartNo,
+    stripTrailingDurationText: sandbox.stripTrailingDurationText,
+  };
+  runInSandbox([
+    functionSource("parseChineseNumber"),
+    functionSource("parseCollectionFragment"),
+    functionSource("parseCollectionPartTitle"),
+    functionSource("parseBareCollectionEpisodeTitle"),
+    functionSource("parseLongVideoPartTitle"),
+    functionSource("getVideoPartListNodes"),
+    functionSource("isActiveVideoPartNode"),
+    functionSource("getVideoPartNodeTitle"),
+    functionSource("getCurrentVideoPartContext"),
+    functionSource("getCollectionPartRows"),
+    functionSource("getQualifiedCollectionPartRows"),
+    functionSource("getCurrentCollectionLayoutContext"),
+    functionSource("getCurrentCollectionPartContext"),
+  ].join("\n") + `
+;globalThis.readHybridLayout = getCurrentCollectionLayoutContext;
+globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox);
+  let hybridContext = hybridSandbox.readHybridContext();
+  assert.equal(hybridNodes.length, 51);
+  assert.equal(hybridContext.seasonKey, "season:1");
+  assert.equal(hybridContext.episodeNo, 1);
+  assert.equal(hybridContext.fragmentIndex, 2);
+  assert.equal(hybridContext.segmentCount, 2);
+  assert.equal(hybridContext.groupEnd, 24);
+  assert.equal(hybridContext.parsedPartCount, 48);
+  hybridPartNo = 49;
+  let hybridLayout = hybridSandbox.readHybridLayout();
+  assert.equal(hybridSandbox.readHybridContext(), null);
+  assert.equal(hybridLayout.currentKind, "long-range");
+  assert.equal(hybridLayout.currentLongVideo.seasonNo, 2);
+  assert.equal(hybridLayout.currentLongVideo.episodeStart, 1);
+  assert.equal(hybridLayout.currentLongVideo.episodeEnd, 12);
+  hybridPartNo = 50;
+  hybridLayout = hybridSandbox.readHybridLayout();
+  assert.equal(hybridLayout.currentKind, "long-range");
+  assert.equal(hybridLayout.currentLongVideo.episodeStart, 13);
+  assert.equal(hybridLayout.currentLongVideo.episodeEnd, 24);
+  hybridPartNo = 51;
+  hybridLayout = hybridSandbox.readHybridLayout();
+  assert.equal(hybridLayout.currentKind, "unmapped");
+  assert.equal(hybridSandbox.readHybridContext(), null);
+  currentContext = null;
+  sandbox.getCurrentCollectionLayoutContext = () => ({ currentKind: "unmapped" });
+  assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), false,
+    "an unrecognized tail item in a confirmed collection must never auto-mark progress");
+  sandbox.getCurrentCollectionLayoutContext = () => null;
+
+  assert.equal(readBareNumericContext(["1.2.3", "2.4.6", "3.6.7", "4.8.1"]), null,
+    "isolated dotted version-like labels must not qualify without a complete hierarchical sequence");
 
   const failClosedSandbox = {
     getCurrentCollectionPartContext: () => ({ bvid, episodeNo: 1 }),

@@ -2741,14 +2741,16 @@
     if (collectionContext) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return Number(collectionRule.subjectId) || null;
-      if (getCollectionMappingRules(collectionContext.bvid).length) return null;
+      return null;
     }
+    const collectionLayout = getCurrentCollectionLayoutContext();
     for (const key of getDirectBindingKeysForCurrentPage()) {
       const directSubjectId = state.bindings[key];
       if (!directSubjectId || !canReuseOfficialDirectBinding(directSubjectId)) continue;
       migrateCurrentBindingKeys(directSubjectId);
       return directSubjectId;
     }
+    if (collectionLayout) return null;
     if (getCurrentLongVideoPartBindingKey()) return null;
     // Official Bangumi pages have live ss/md/section identities. If none of
     // those exact keys is bound, do not reuse a title binding from another
@@ -3859,19 +3861,27 @@
 
   function renderCollectionMappingHint() {
     const context = getCurrentCollectionPartContext();
-    if (!context) return "";
-    const rule = getCollectionMappingRule(context);
-    if (rule) {
-      const targetNo = getCollectionMappedEpisodeNo(context, rule);
-      const targetLabel = Number.isFinite(targetNo) && targetNo > 0
-        ? formatCollectionTargetEpisodeLabel(targetNo, rule)
-        : "特殊分P（不自动标记）";
-      return `<div class="biligumi-notice">合集映射：${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}。解绑会只删除当前范围映射。</div>`;
+    if (context) {
+      const rule = getCollectionMappingRule(context);
+      if (rule) {
+        const targetNo = getCollectionMappedEpisodeNo(context, rule);
+        const targetLabel = Number.isFinite(targetNo) && targetNo > 0
+          ? formatCollectionTargetEpisodeLabel(targetNo, rule)
+          : "特殊分P（不自动标记）";
+        return `<div class="biligumi-notice">合集映射：${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}。解绑会只删除当前范围映射。</div>`;
+      }
+      if (getCollectionMappingRules(context.bvid).length) {
+        return `<div class="biligumi-notice">检测到合集；当前分P「${escapeHtml(context.title)}」尚未映射。请为这一段绑定正确的 Bangumi 条目。</div>`;
+      }
+      return `<div class="biligumi-notice">检测到多条目合集（${context.parsedPartCount} 个可识别分P）。当前未建立范围映射，已停止继承整 BV 绑定；请选择正确的 Bangumi 条目。</div>`;
     }
-    if (getCollectionMappingRules(context.bvid).length) {
-      return `<div class="biligumi-notice">检测到合集；当前分P「${escapeHtml(context.title)}」尚未映射。请为这一段绑定正确的 Bangumi 条目。</div>`;
+    const layout = getCurrentCollectionLayoutContext();
+    if (!layout) return "";
+    if (layout.currentKind === "long-range") {
+      const range = layout.currentLongVideo && layout.currentLongVideo.rangeLabel || layout.part.title;
+      return `<div class="biligumi-notice">检测到混合合集；当前分P「${escapeHtml(layout.part.title)}」表示 ${escapeHtml(range)} 的长视频段。已停止继承整 BV 绑定，请为这一段绑定正确条目后再进行分集推测。</div>`;
     }
-    return `<div class="biligumi-notice">检测到多条目合集（${context.parsedPartCount} 个可识别分P）。如当前绑定不正确，请先解绑；重新绑定时会建议建立范围映射，而不是绑定整个 BV。</div>`;
+    return `<div class="biligumi-notice">检测到混合合集，但当前分P「${escapeHtml(layout.part.title)}」无法识别为正片，已停止继承整 BV 绑定和自动进度。</div>`;
   }
 
   function renderStandaloneSearchPanel(nonMainKeyword = "") {
@@ -5352,6 +5362,10 @@
   function getBindingKeysForCurrentPage() {
     const longVideoPartKey = getCurrentLongVideoPartBindingKey();
     if (longVideoPartKey) return [longVideoPartKey];
+    const collectionLayout = getCurrentCollectionLayoutContext();
+    if (collectionLayout && collectionLayout.currentKind !== "episode") {
+      return getDirectBindingKeysForCurrentPage();
+    }
     return [
       ...getDirectBindingKeysForCurrentPage(),
       getTitleBindingKey(),
@@ -5361,6 +5375,10 @@
   function getDirectBindingKeysForCurrentPage() {
     const longVideoPartKey = getCurrentLongVideoPartBindingKey();
     if (longVideoPartKey) return [longVideoPartKey];
+    const collectionLayout = getCurrentCollectionLayoutContext();
+    if (collectionLayout && collectionLayout.currentKind !== "episode") {
+      return [`bili:${collectionLayout.part.bvid}:p${collectionLayout.part.partNo}`];
+    }
     const officialSectionKeys = getOfficialBangumiSectionBindingKeys();
     // Distinct sections stay isolated for write/read once the section key is
     // stable. Plain season/media keys are intentionally omitted here so
@@ -9287,7 +9305,23 @@
   function suggestSearchKeyword() {
     return state.subject
       ? displaySubjectName(state.subject)
-      : cleanTitle(getBilibiliCollectionTitle()) || state.pageTitle;
+      : getCurrentSeasonSearchKeyword() || cleanTitle(getBilibiliCollectionTitle()) || state.pageTitle;
+  }
+
+  function getCurrentSeasonSearchKeyword() {
+    const collectionContext = getCurrentCollectionPartContext();
+    const partContext = collectionContext || getCurrentVideoPartContext();
+    const seasonNo = Number(partContext && partContext.seasonNo);
+    if (!Number.isInteger(seasonNo) || seasonNo <= 0) return "";
+    const rawTitle = String(state.rawTitle || getPageTitle() || "");
+    const withoutSeasonRange = rawTitle
+      .replace(/(?:第\s*)?[一二两兩三四五六七八九十百\d]{1,4}\s*[-~～–—至到]\s*[一二两兩三四五六七八九十百\d]{1,4}\s*季/gi, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const baseTitle = cleanTitle(withoutSeasonRange);
+    if (!baseTitle) return "";
+    if (getTitleSeasonNumber(baseTitle) === seasonNo) return baseTitle;
+    return seasonNo === 1 ? baseTitle : `${baseTitle} 第${seasonNo}季`;
   }
 
   function detectEpisodeNo(text) {
@@ -9374,6 +9408,7 @@
   function refreshEpisodeContextIfChanged(seq) {
     if (seq !== episodeContextRefreshSeq) return;
     const rawTitle = getPageTitle();
+    refreshCurrentBindingIfChanged();
     if (isCurrentVideoAutoProgressDisabled()) {
       if (state.currentEpisodeNo !== null) {
         state.rawTitle = rawTitle;
@@ -9390,6 +9425,49 @@
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
     render();
+  }
+
+  function refreshCurrentBindingIfChanged() {
+    const nextSubjectId = Number(getCurrentBinding()) || null;
+    const currentSubjectId = Number(state.subjectId) || null;
+    if (nextSubjectId === currentSubjectId) return false;
+    // The multi-P list can appear after the panel has already read a legacy
+    // whole-BV binding. Invalidate that early load once the real layout settles.
+    routeRefreshSeq += 1;
+    state.subjectId = nextSubjectId;
+    state.subject = null;
+    state.subjectInfoLinks = {};
+    state.subjectInfoWebRows = [];
+    state.characters = [];
+    state.characterError = "";
+    state.previewSubject = null;
+    state.previewCharacters = [];
+    state.previewCharacterError = "";
+    state.previewCharacterKey = "";
+    state.previewCharacterBusy = false;
+    state.collection = null;
+    state.episodes = [];
+    state.episodeCollections = [];
+    state.searchResults = [];
+    state.busy = false;
+    state.error = "";
+    state.message = state.bindingGuardMessage || "";
+    state.autoEpisodeSyncing = false;
+    state.autoEpisodeSyncLastKey = "";
+    state.autoWatchFailures = {};
+    state.longVideoEpisodeGuess = null;
+    state.longVideoEpisodeRenderKey = "";
+    state.longVideoDetectionCache = null;
+    state.longVideoDetectionKeyMemo = null;
+    clearLongVideoBindingPrompt();
+    state.longVideoIdentifyDismissedKey = "";
+    finishPanelLoad();
+    removeSubjectInfoPanel();
+    removeCharacterStrip();
+    refreshCurrentEpisodeRecognitionState();
+    render();
+    if (nextSubjectId && shouldRenderFullPanel()) loadSubjectBundle().catch(showError);
+    return true;
   }
 
   function normalizeCollectionMappings(value) {
@@ -9457,6 +9535,26 @@
       .replace(/\s+/g, " ")
       .trim();
     if (!text) return null;
+
+    // Hierarchical split labels (season.episode.fragment) are accepted only
+    // after list-level validation in getQualifiedCollectionPartRows.
+    const hierarchicalMatch = text.match(/^0*(\d{1,2})\s*[.．]\s*0*(\d{1,3})\s*[.．]\s*0*([1-8])(?:\s+.+)?$/);
+    if (hierarchicalMatch) {
+      const seasonNo = Number(hierarchicalMatch[1]);
+      const episodeNo = Number(hierarchicalMatch[2]);
+      const fragmentIndex = Number(hierarchicalMatch[3]);
+      if (seasonNo > 0 && episodeNo >= 0 && fragmentIndex > 0 && fragmentIndex <= MAX_COLLECTION_SEGMENTS) {
+        return {
+          seasonKey: `season:${seasonNo}`,
+          seasonNo,
+          episodeNo,
+          fragmentIndex,
+          fragmentCount: Math.max(2, fragmentIndex),
+          hierarchical: true,
+          label: text,
+        };
+      }
+    }
 
     // Allow optional free-text after the episode token (e.g. "1.1 相遇", "第二季1 开端").
     const seasonPatterns = [
@@ -9566,6 +9664,7 @@
         title,
         parsed: structuredParsed || bareNumericParsed,
         bareNumeric: Boolean(bareNumericParsed),
+        longVideo: parseLongVideoPartTitle(title),
         active: isActiveVideoPartNode(node),
       };
     });
@@ -9582,6 +9681,7 @@
 
   function getQualifiedCollectionPartRows(rows) {
     const qualifiedBarePartNos = new Set();
+    const qualifiedHierarchicalPartNos = new Set();
     let run = [];
     const finishRun = () => {
       if (run.length >= MIN_COLLECTION_PARSED_PARTS) {
@@ -9605,10 +9705,52 @@
       run.push(row);
     });
     finishRun();
-    return rows.filter((row) => row.parsed && (!row.bareNumeric || qualifiedBarePartNos.has(row.partNo)));
+    const hierarchicalGroups = new Map();
+    rows.forEach((row) => {
+      if (!row.parsed || !row.parsed.hierarchical) return;
+      const key = row.parsed.seasonKey;
+      if (!hierarchicalGroups.has(key)) hierarchicalGroups.set(key, []);
+      hierarchicalGroups.get(key).push(row);
+    });
+    hierarchicalGroups.forEach((group) => {
+      const ordered = group.slice().sort((left, right) => left.partNo - right.partNo);
+      const fragmentsByEpisode = new Map();
+      ordered.forEach((row) => {
+        const episodeNo = row.parsed.episodeNo;
+        if (!fragmentsByEpisode.has(episodeNo)) fragmentsByEpisode.set(episodeNo, new Set());
+        fragmentsByEpisode.get(episodeNo).add(row.parsed.fragmentIndex);
+      });
+      const episodes = Array.from(fragmentsByEpisode.keys()).sort((left, right) => left - right);
+      const fragmentCount = ordered.reduce((maximum, row) => Math.max(maximum, row.parsed.fragmentIndex), 0);
+      const consecutiveEpisodes = episodes.every((episodeNo, index) => index === 0 || episodeNo === episodes[index - 1] + 1);
+      const completeFragments = fragmentCount >= 2 && episodes.every((episodeNo) => {
+        const fragments = fragmentsByEpisode.get(episodeNo);
+        if (!fragments || fragments.size !== fragmentCount) return false;
+        for (let fragment = 1; fragment <= fragmentCount; fragment += 1) {
+          if (!fragments.has(fragment)) return false;
+        }
+        return true;
+      });
+      const orderedSequence = ordered.every((row, index) => {
+        if (index === 0) return row.parsed.fragmentIndex === 1;
+        const previous = ordered[index - 1];
+        return row.parsed.episodeNo === previous.parsed.episodeNo
+          ? row.parsed.fragmentIndex === previous.parsed.fragmentIndex + 1
+          : row.parsed.episodeNo === previous.parsed.episodeNo + 1 && row.parsed.fragmentIndex === 1;
+      });
+      if (episodes.length < MIN_COLLECTION_PARSED_PARTS || !consecutiveEpisodes || !completeFragments || !orderedSequence) return;
+      ordered.forEach((row) => qualifiedHierarchicalPartNos.add(row.partNo));
+    });
+    return rows.filter((row) => row.parsed && (
+      row.bareNumeric
+        ? qualifiedBarePartNos.has(row.partNo)
+        : row.parsed.hierarchical
+          ? qualifiedHierarchicalPartNos.has(row.partNo)
+          : true
+    ));
   }
 
-  function getCurrentCollectionPartContext() {
+  function getCurrentCollectionLayoutContext() {
     const nodes = getVideoPartListNodes();
     const part = getCurrentVideoPartContext(nodes);
     if (!part || part.partCount <= 1) return null;
@@ -9616,9 +9758,29 @@
     const parsedRows = getQualifiedCollectionPartRows(rows);
     // Four recognizable parts is conservative enough to avoid treating an ordinary 2–3P upload as a collection.
     if (parsedRows.length < MIN_COLLECTION_PARSED_PARTS) return null;
-    const currentRow = parsedRows.find((row) => row.partNo === part.partNo) || null;
-    const parsed = currentRow && currentRow.parsed || parseCollectionPartTitle(part.title);
-    if (!parsed) return null;
+    const currentRow = rows.find((row) => row.partNo === part.partNo) || null;
+    const qualifiedCurrentRow = parsedRows.find((row) => row.partNo === part.partNo) || null;
+    const currentLongVideo = currentRow && currentRow.longVideo || parseLongVideoPartTitle(part.title);
+    const isLongRange = currentLongVideo
+      && Number.isInteger(Number(currentLongVideo.episodeStart))
+      && Number.isInteger(Number(currentLongVideo.episodeEnd))
+      && Number(currentLongVideo.episodeEnd) >= Number(currentLongVideo.episodeStart);
+    return {
+      part,
+      rows,
+      parsedRows,
+      currentRow,
+      currentParsed: qualifiedCurrentRow && qualifiedCurrentRow.parsed || null,
+      currentLongVideo: isLongRange ? currentLongVideo : null,
+      currentKind: qualifiedCurrentRow ? "episode" : (isLongRange ? "long-range" : "unmapped"),
+    };
+  }
+
+  function getCurrentCollectionPartContext() {
+    const layout = getCurrentCollectionLayoutContext();
+    if (!layout || layout.currentKind !== "episode" || !layout.currentParsed) return null;
+    const { part, parsedRows } = layout;
+    const parsed = layout.currentParsed;
     const groupRows = parsedRows.filter((row) => row.parsed.seasonKey === parsed.seasonKey);
     const logicalEpisodes = Array.from(new Set(groupRows.map((row) => row.parsed.episodeNo))).sort((a, b) => a - b);
     if (logicalEpisodes.length < 2) return null;
@@ -9633,7 +9795,7 @@
     return {
       ...part,
       ...parsed,
-      title: currentRow && currentRow.title || part.title,
+      title: layout.currentRow && layout.currentRow.title || part.title,
       groupStart: logicalEpisodes[0],
       groupEnd: logicalEpisodes[logicalEpisodes.length - 1],
       groupLogicalEpisodeCount: logicalEpisodes.length,
@@ -9840,6 +10002,8 @@
   }
 
   function isCurrentCollectionPartAutoMarkEligible() {
+    const layout = getCurrentCollectionLayoutContext();
+    if (layout && layout.currentKind === "unmapped") return false;
     const context = getCurrentCollectionPartContext();
     if (!context) return true;
     const resolution = getCollectionMappingResolution(context);
@@ -10005,8 +10169,15 @@
 
   function getCurrentLongVideoPartBindingKey() {
     const part = getCurrentVideoPartContext();
-    if (getLongVideoEpisodeModeDecision() !== true || !part || part.partCount <= 1 || !part.seasonNo) return "";
+    if (!part || part.partCount <= 1 || !part.seasonNo) return "";
+    if (getLongVideoEpisodeModeDecision() !== true && !isExplicitLongVideoPartRange(part)) return "";
     return `bili:${part.bvid}:p${part.partNo}`;
+  }
+
+  function isExplicitLongVideoPartRange(part = getCurrentVideoPartContext()) {
+    const start = Number(part && part.episodeStart);
+    const end = Number(part && part.episodeEnd);
+    return Boolean(part && part.seasonNo && Number.isInteger(start) && Number.isInteger(end) && start > 0 && end > start);
   }
 
   function selectLongVideoEpisodeSegment(episodes, part) {
@@ -10229,6 +10400,7 @@
     const key = getLongVideoDecisionKey();
     if (!key || !state.longVideoEpisodeModes) return null;
     if (Object.prototype.hasOwnProperty.call(state.longVideoEpisodeModes, key)) return state.longVideoEpisodeModes[key] === true;
+    if (isExplicitLongVideoPartRange(getCurrentVideoPartContext())) return null;
     const legacyKey = getLongVideoLegacyDecisionKey();
     if (legacyKey && legacyKey !== key && Object.prototype.hasOwnProperty.call(state.longVideoEpisodeModes, legacyKey)) {
       return state.longVideoEpisodeModes[legacyKey] === true;
