@@ -9475,6 +9475,22 @@
     return null;
   }
 
+  function parseBareCollectionEpisodeTitle(value) {
+    const text = stripTrailingDurationText(String(value || "").replace(/\s+/g, " ").trim());
+    const match = text.match(/^0*(\d{1,3})$/);
+    if (!match) return null;
+    const episodeNo = Number(match[1]);
+    if (!Number.isFinite(episodeNo) || episodeNo < 0) return null;
+    return {
+      seasonKey: "default",
+      seasonNo: null,
+      episodeNo,
+      fragmentIndex: 1,
+      fragmentCount: 1,
+      label: text,
+    };
+  }
+
   function parseChineseNumber(value) {
     const text = String(value || "").trim();
     if (/^\d+$/.test(text)) return Number(text);
@@ -9511,10 +9527,13 @@
     }
     const rows = nodes.map((node, index) => {
       const title = getVideoPartNodeTitle(node);
+      const structuredParsed = parseCollectionPartTitle(title);
+      const bareNumericParsed = structuredParsed ? null : parseBareCollectionEpisodeTitle(title);
       return {
         partNo: index + 1,
         title,
-        parsed: parseCollectionPartTitle(title),
+        parsed: structuredParsed || bareNumericParsed,
+        bareNumeric: Boolean(bareNumericParsed),
         active: isActiveVideoPartNode(node),
       };
     });
@@ -9529,15 +9548,43 @@
     return rows;
   }
 
+  function getQualifiedCollectionPartRows(rows) {
+    const qualifiedBarePartNos = new Set();
+    let run = [];
+    const finishRun = () => {
+      if (run.length >= MIN_COLLECTION_PARSED_PARTS) {
+        run.forEach((row) => qualifiedBarePartNos.add(row.partNo));
+      }
+      run = [];
+    };
+    rows.forEach((row) => {
+      if (!row.parsed || !row.bareNumeric) {
+        finishRun();
+        return;
+      }
+      const previous = run[run.length - 1] || null;
+      if (previous
+        && row.partNo === previous.partNo + 1
+        && row.parsed.episodeNo === previous.parsed.episodeNo + 1) {
+        run.push(row);
+        return;
+      }
+      finishRun();
+      run.push(row);
+    });
+    finishRun();
+    return rows.filter((row) => row.parsed && (!row.bareNumeric || qualifiedBarePartNos.has(row.partNo)));
+  }
+
   function getCurrentCollectionPartContext() {
     const nodes = getVideoPartListNodes();
     const part = getCurrentVideoPartContext(nodes);
     if (!part || part.partCount <= 1) return null;
     const rows = getCollectionPartRows(nodes);
-    const parsedRows = rows.filter((row) => row.parsed);
+    const parsedRows = getQualifiedCollectionPartRows(rows);
     // Four recognizable parts is conservative enough to avoid treating an ordinary 2–3P upload as a collection.
     if (parsedRows.length < MIN_COLLECTION_PARSED_PARTS) return null;
-    const currentRow = rows.find((row) => row.partNo === part.partNo) || null;
+    const currentRow = parsedRows.find((row) => row.partNo === part.partNo) || null;
     const parsed = currentRow && currentRow.parsed || parseCollectionPartTitle(part.title);
     if (!parsed) return null;
     const groupRows = parsedRows.filter((row) => row.parsed.seasonKey === parsed.seasonKey);

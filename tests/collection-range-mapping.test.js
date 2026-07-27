@@ -97,6 +97,7 @@ runInSandbox([
   functionSource("normalizeCollectionMappingRule"),
   functionSource("normalizeCollectionSegmentProgress"),
   functionSource("parseCollectionPartTitle"),
+  functionSource("parseBareCollectionEpisodeTitle"),
   functionSource("parseChineseNumber"),
   functionSource("parseCollectionFragment"),
   functionSource("getCollectionMappingRules"),
@@ -115,6 +116,7 @@ runInSandbox([
 ;globalThis.api = {
   normalizeCollectionMappings,
   parseCollectionPartTitle,
+  parseBareCollectionEpisodeTitle,
   getCollectionMappingResolution,
   getCollectionMappedEpisodeNo,
   putCollectionMappingRule,
@@ -150,6 +152,9 @@ assert.equal(sandbox.api.parseCollectionPartTitle("S2E13 标题").episodeNo, 13)
 assert.equal(sandbox.api.parseCollectionPartTitle("第1集上 前半").fragmentIndex, 1);
 assert.equal(sandbox.api.parseCollectionPartTitle("1080P"), null);
 assert.equal(sandbox.api.parseCollectionPartTitle("4K超清"), null);
+assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("01 02:06:56").episodeNo, 1);
+assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("16").episodeNo, 16);
+assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("1080P"), null);
 assert.equal(collectionConstants.MIN_COLLECTION_PARSED_PARTS, 4);
 assert.equal(collectionConstants.MAX_COLLECTION_SEGMENTS, 8);
 
@@ -408,12 +413,14 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     functionSource("parseChineseNumber"),
     functionSource("parseCollectionFragment"),
     functionSource("parseCollectionPartTitle"),
+    functionSource("parseBareCollectionEpisodeTitle"),
     functionSource("parseLongVideoPartTitle"),
     functionSource("getVideoPartListNodes"),
     functionSource("isActiveVideoPartNode"),
     functionSource("getVideoPartNodeTitle"),
     functionSource("getCurrentVideoPartContext"),
     functionSource("getCollectionPartRows"),
+    functionSource("getQualifiedCollectionPartRows"),
     functionSource("getCurrentCollectionPartContext"),
   ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", collectionDomSandbox);
   let liveContext = collectionDomSandbox.readCollectionContext();
@@ -435,6 +442,63 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(liveContext.seasonKey, "season:3");
   assert.equal(liveContext.episodeNo, 1);
   assert.equal(liveContext.groupEnd, 4);
+
+  // Re:Zero-style lists use only "01", "02", ... labels. A contiguous run of
+  // at least four plain numeric parts is collection-shaped, but shorter or
+  // discontinuous numeric multi-P lists stay out of the mapping flow.
+  function readBareNumericContext(titles, activeIndex = 0) {
+    const numericNodes = titles.map((title, index) => ({
+      className: index === activeIndex ? "page-item active" : "page-item",
+      textContent: title,
+      getAttribute: (name) => name === "title" ? title : "",
+      querySelectorAll: () => [],
+    }));
+    const numericSandbox = {
+      ...collectionConstants,
+      document: {
+        querySelector: () => null,
+        querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? numericNodes : [],
+      },
+      getBvIdFromUrl: () => bvid,
+      getCurrentPartNoFromUrl: () => activeIndex + 1,
+      stripTrailingDurationText: sandbox.stripTrailingDurationText,
+    };
+    runInSandbox([
+      functionSource("parseChineseNumber"),
+      functionSource("parseCollectionFragment"),
+      functionSource("parseCollectionPartTitle"),
+      functionSource("parseBareCollectionEpisodeTitle"),
+      functionSource("parseLongVideoPartTitle"),
+      functionSource("getVideoPartListNodes"),
+      functionSource("isActiveVideoPartNode"),
+      functionSource("getVideoPartNodeTitle"),
+      functionSource("getCurrentVideoPartContext"),
+      functionSource("getCollectionPartRows"),
+      functionSource("getQualifiedCollectionPartRows"),
+      functionSource("getCurrentCollectionPartContext"),
+    ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", numericSandbox);
+    return plain(numericSandbox.readCollectionContext());
+  }
+
+  const plainNumericContext = readBareNumericContext(
+    Array.from({ length: 16 }, (_, index) => `${String(index + 1).padStart(2, "0")} ${index ? "29:59" : "02:06:56"}`),
+  );
+  assert.equal(plainNumericContext.episodeNo, 1);
+  assert.equal(plainNumericContext.groupStart, 1);
+  assert.equal(plainNumericContext.groupEnd, 16);
+  assert.equal(plainNumericContext.parsedPartCount, 16);
+  sandbox.state.collectionMappings = {};
+  currentContext = plainNumericContext;
+  sandbox.getSubjectMainEpisodeCountForMapping = async () => 8;
+  sandbox.apiEpisodeZero = false;
+  proposal = await sandbox.api.buildCollectionRangeBindingProposal(425998);
+  assert.equal(proposal.rule.sourceStart, 1);
+  assert.equal(proposal.rule.sourceEnd, 8,
+    "a 16P numeric collection bound to an 8-episode subject proposes the first 1-8 batch");
+  assert.equal(readBareNumericContext(["01", "02", "03"]), null,
+    "three plain numeric parts are too ambiguous to be a collection");
+  assert.equal(readBareNumericContext(["01", "02", "04", "05"]), null,
+    "four discontinuous numeric labels must not trigger range binding");
 
   // Incomplete decimal split list: only "2.1" for episode 2 → segmentCount is 1, not 2.
   const incompleteTitles = ["1.1", "1.2", "2.1", "3.1", "3.2"];
@@ -458,12 +522,14 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     functionSource("parseChineseNumber"),
     functionSource("parseCollectionFragment"),
     functionSource("parseCollectionPartTitle"),
+    functionSource("parseBareCollectionEpisodeTitle"),
     functionSource("parseLongVideoPartTitle"),
     functionSource("getVideoPartListNodes"),
     functionSource("isActiveVideoPartNode"),
     functionSource("getVideoPartNodeTitle"),
     functionSource("getCurrentVideoPartContext"),
     functionSource("getCollectionPartRows"),
+    functionSource("getQualifiedCollectionPartRows"),
     functionSource("getCurrentCollectionPartContext"),
   ].join("\n") + ";globalThis.readCollectionContext = getCurrentCollectionPartContext;", incompleteSandbox);
   const incompleteContext = incompleteSandbox.readCollectionContext();
