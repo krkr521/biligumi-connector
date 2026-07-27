@@ -4162,7 +4162,7 @@
                 <input id="biligumi-auto-watch-threshold" type="range" min="10" max="100" step="10" data-role="settings-auto-watch-threshold" value="${autoWatchThreshold}">
                 <span class="biligumi-threshold-value" data-role="settings-auto-watch-threshold-value">${autoWatchThreshold}%</span>
               </div>
-              <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。播放器进度达到此比例后自动把当前集标为看过；单次向前跳转超过 5 分钟或打开页面时已在标准线之后，不会触发。</div>
+              <div class="biligumi-settings-help">当前来源：${escapeHtml(autoWatchScopeLabel)}。普通视频按本视频进度，自动分集按推测到的当前集局部进度；达到此比例后自动标记。单次向前跳转超过 5 分钟或打开页面时已在标准线之后，不会触发。</div>
             </div>
             <div class="biligumi-settings-field">
               <label class="biligumi-settings-check">
@@ -6256,15 +6256,14 @@
     if (!currentEpisode || getEpisodeCollectionType(currentEpisode.id) === 2) return;
     if (!video) return;
     if (longVideoGuess && longVideoGuess.active && (!longVideoGuess.episode || !longVideoGuess.autoMarkSafe)) return;
-    const duration = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeDuration) : Number(video.duration);
-    const currentTime = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeElapsed) : Number(video.currentTime);
-    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(currentTime) || currentTime <= 0) return;
-    const watchedPercent = Math.floor((currentTime / duration) * 100);
+    const progress = getAutoWatchProgressSample(video, longVideoGuess);
+    if (!progress) return;
+    const watchedPercent = progress.watchedPercent;
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
     updateAutoWatchJumpState(video, syncKey, watchedPercent);
     if (watchedPercent < getAutoWatchThreshold()) return;
-    if (!(await recordCurrentCollectionSegmentProgressIfNeeded())) return;
     if (state.autoWatchBlockedKey === syncKey) return;
+    if (!(await recordCurrentCollectionSegmentProgressIfNeeded())) return;
     if (state.autoEpisodeSyncLastKey === syncKey) return;
     if (state.autoWatchAuthBlocked) return;
     const failure = getAutoWatchFailureRecord(syncKey);
@@ -6291,6 +6290,19 @@
     } finally {
       state.autoEpisodeSyncing = false;
     }
+  }
+
+  function getAutoWatchProgressSample(video, longVideoGuess) {
+    const usesInferredEpisode = Boolean(longVideoGuess && longVideoGuess.active);
+    const duration = usesInferredEpisode ? Number(longVideoGuess.episodeDuration) : Number(video && video.duration);
+    const elapsed = usesInferredEpisode ? Number(longVideoGuess.episodeElapsed) : Number(video && video.currentTime);
+    if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(elapsed) || elapsed <= 0) return null;
+    return {
+      duration,
+      elapsed,
+      watchedPercent: Math.max(0, Math.min(100, Math.floor((elapsed / duration) * 100))),
+      usesInferredEpisode,
+    };
   }
 
   function getAutoWatchFailureRecord(syncKey) {
@@ -7302,11 +7314,8 @@
     const currentEpisode = getCurrentNormalEpisode();
     if (!currentEpisode) return;
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
-    const duration = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeDuration) : Number(video.duration);
-    const threshold = getAutoWatchThreshold();
-    const progressTime = longVideoGuess && longVideoGuess.active ? Number(longVideoGuess.episodeElapsed) : end;
-    const watchedPercent = Number.isFinite(duration) && duration > 0 ? Math.floor((progressTime / duration) * 100) : 0;
-    if (end - start >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS && watchedPercent >= threshold) {
+    const progress = getAutoWatchProgressSample(video, longVideoGuess);
+    if (end - start >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS && progress) {
       state.autoWatchBlockedKey = syncKey;
     }
   }
@@ -7315,15 +7324,20 @@
     const currentTime = Number(video.currentTime);
     if (!Number.isFinite(currentTime)) return;
     if (state.autoWatchLastVideoKey && state.autoWatchLastVideoKey !== syncKey) {
-      state.autoWatchBlockedKey = "";
+      if (state.autoWatchBlockedKey !== syncKey) state.autoWatchBlockedKey = "";
       state.autoWatchSeekStartTime = null;
     }
     const lastTime = state.autoWatchLastVideoKey === syncKey ? Number(state.autoWatchLastVideoTime) : 0;
     const firstObservationAtOrPastThreshold = !lastTime && watchedPercent >= getAutoWatchThreshold();
     const jumpedForward = lastTime > 0 && currentTime - lastTime >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS;
-    if (firstObservationAtOrPastThreshold || (jumpedForward && watchedPercent >= getAutoWatchThreshold())) {
+    if (firstObservationAtOrPastThreshold || jumpedForward) {
       state.autoWatchBlockedKey = syncKey;
-    } else if (state.autoWatchBlockedKey === syncKey && watchedPercent < getAutoWatchThreshold()) {
+    } else if (
+      state.autoWatchBlockedKey === syncKey
+      && watchedPercent < getAutoWatchThreshold()
+      && lastTime > 0
+      && currentTime < lastTime
+    ) {
       state.autoWatchBlockedKey = "";
     }
     state.autoWatchLastVideoKey = syncKey;
@@ -10789,7 +10803,8 @@
         ? ` · 分P ${escapeHtml(segment.rangeLabel || segment.part?.title || "")}`
         : (segment.rangeFallback ? ` · ${escapeHtml(segment.rangeLabel || "分P范围")} 无法与条目对应，已按整季估算` : "");
       const safety = guess.autoMarkSafe ? "" : " · 仅显示推测，不会自动标记";
-      text = `实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${safety}`;
+      const autoMark = guess.autoMarkSafe ? ` · 达到设置的 ${getAutoWatchThreshold()}% 后自动标记` : "";
+      text = `实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${autoMark}${safety}`;
     }
     return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">${text}</div>${actions}</div>`;
   }

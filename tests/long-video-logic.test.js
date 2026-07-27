@@ -137,6 +137,8 @@ const sandbox = {
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
   getPrimaryDomOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
   getActiveVideoElement: () => null,
+  autoWatchThreshold: 50,
+  getAutoWatchThreshold: () => sandbox.autoWatchThreshold,
   isOfficialBangumiPage: () => false,
   detectCurrentEpisodeNo: () => null,
   pad2: (value) => String(value).padStart(2, "0"),
@@ -429,6 +431,22 @@ const tenMinuteOverflow = logic.getLongVideoDetection({ duration: timeline.endTi
 assert.equal(tenMinuteOverflow.active, true);
 assert.equal(tenMinuteOverflow.autoMarkSafe, false);
 assert.equal(logic.getLongVideoDetection({ duration: timeline.endTime - 46 * 60 }).active, false);
+
+sandbox.autoWatchThreshold = 80;
+sandbox.state.longVideoEpisodeGuess = {
+  active: true,
+  stage: "episode",
+  episode: { name: "Episode 3" },
+  episodeNo: 3,
+  episodePercent: 42,
+  autoMarkSafe: true,
+  segment: {},
+};
+assert.match(
+  logic.renderLongVideoEpisodeHint(),
+  /达到设置的 80% 后自动标记/,
+  "the long-video hint exposes the shared automatic-mark threshold",
+);
 
 // An invalid default offset must not hide the control needed to correct it.
 sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime - 46 * 60, currentTime: 10 });

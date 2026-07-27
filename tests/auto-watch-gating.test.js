@@ -35,6 +35,7 @@ const GATING_CONSTANTS = extractConstants(userscriptSource, [
 
 const GATING_FUNCTIONS = [
   ["checkAutoWatchProgress", { async: true }],
+  ["getAutoWatchProgressSample"],
   ["getAutoWatchFailureRecord"],
   ["writeAutoWatchFailureRecord"],
   ["clearAutoWatchFailureRecord"],
@@ -89,6 +90,7 @@ assert.ok(
 
 const GATING_SOURCE = [
   extractFunction(userscriptSource, "checkAutoWatchProgress", { async: true }),
+  extractFunction(userscriptSource, "getAutoWatchProgressSample"),
   extractFunction(userscriptSource, "getAutoWatchFailureRecord"),
   extractFunction(userscriptSource, "writeAutoWatchFailureRecord"),
   extractFunction(userscriptSource, "clearAutoWatchFailureRecord"),
@@ -133,7 +135,9 @@ function createSandbox() {
     seekGuess: null,
     longVideoMode: null,
     autoProgressDisabled: false,
+    autoWatchThreshold: 50,
     patchCalls: 0,
+    segmentRecordCalls: 0,
     patchImpl: async () => {},
     renderCount: 0,
   };
@@ -144,13 +148,16 @@ function createSandbox() {
     refreshLongVideoEpisodeGuess: () => sandbox.seekGuess,
     getLongVideoEpisodeModeDecision: () => sandbox.longVideoMode,
     isCurrentCollectionPartAutoMarkEligible: () => true,
-    recordCurrentCollectionSegmentProgressIfNeeded: async () => true,
+    recordCurrentCollectionSegmentProgressIfNeeded: async () => {
+      sandbox.segmentRecordCalls += 1;
+      return true;
+    },
     clearCurrentCollectionSegmentProgress: async () => {},
     hasCollection: () => true,
     getCurrentNormalEpisode: () => sandbox.currentEpisode,
     getEpisodeCollectionType: () => 0,
     getAutoWatchScopeKey: () => "scope",
-    getAutoWatchThreshold: () => 50,
+    getAutoWatchThreshold: () => sandbox.autoWatchThreshold,
     patchEpisodes: (...args) => {
       sandbox.patchCalls += 1;
       return sandbox.patchImpl(...args);
@@ -183,7 +190,7 @@ async function playTo(sandbox, times) {
 // Drives playback across the 50% threshold with realistic (< 5 min) deltas so
 // the seek/jump guard stays quiet, exactly like natural playback.
 async function crossThresholdNaturally(sandbox) {
-  await playTo(sandbox, [100, 7000, 7100, 7200]);
+  await playTo(sandbox, [6900, 7000, 7100, 7200]);
 }
 
 function rejectWith(status, extra = {}) {
@@ -206,6 +213,80 @@ function rejectWith(status, extra = {}) {
     assert.equal(sandbox.state.autoEpisodeSyncLastKey, "7:11:scope");
     await playTo(sandbox, [7300, 7400, 7500]);
     assert.equal(sandbox.patchCalls, 1, "the same episode must never be marked twice");
+  }
+
+  // 1b) Long-video inference uses the current setting against the inferred
+  // episode's local progress, never the whole video's multi-hour progress.
+  {
+    const sandbox = createSandbox();
+    sandbox.autoWatchThreshold = 80;
+    sandbox.longVideoMode = true;
+    sandbox.video.duration = 8 * 60 * 60;
+    sandbox.video.currentTime = 5 * 60 * 60;
+    sandbox.seekGuess = {
+      active: true,
+      episode: { id: 11 },
+      episodeNo: 1,
+      autoMarkSafe: true,
+      episodeDuration: 1000,
+      episodeElapsed: 790,
+    };
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.patchCalls, 0, "79% of the inferred episode must stay below an 80% setting");
+    sandbox.video.currentTime += 10;
+    sandbox.seekGuess = { ...sandbox.seekGuess, episodeElapsed: 800 };
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.patchCalls, 1, "80% of the inferred episode must use the shared 80% setting");
+  }
+
+  // 1c) A multi-hour whole-video position cannot mark a newly inferred episode.
+  {
+    const sandbox = createSandbox();
+    sandbox.longVideoMode = true;
+    sandbox.video.duration = 8 * 60 * 60;
+    sandbox.video.currentTime = 5 * 60 * 60;
+    sandbox.seekGuess = {
+      active: true,
+      episode: { id: 11 },
+      episodeNo: 6,
+      autoMarkSafe: true,
+      episodeDuration: 1000,
+      episodeElapsed: 10,
+    };
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.patchCalls, 0, "1% local progress must not inherit the whole video's percentage");
+  }
+
+  // 1d) A blocked jump must not even record a split-collection segment.
+  {
+    const sandbox = createSandbox();
+    sandbox.video.currentTime = 7200;
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.state.autoWatchBlockedKey, "7:11:scope");
+    assert.equal(sandbox.segmentRecordCalls, 0, "jump-blocked playback must be checked before segment progress is stored");
+    assert.equal(sandbox.patchCalls, 0);
+  }
+
+  // 1e) Pause and long-video safety switches remain hard gates.
+  {
+    const paused = createSandbox();
+    paused.autoProgressDisabled = true;
+    paused.video.currentTime = 7200;
+    await paused.api.checkAutoWatchProgress();
+    assert.equal(paused.patchCalls, 0, "the per-video pause switch must disable automatic marking");
+
+    const unsafe = createSandbox();
+    unsafe.longVideoMode = true;
+    unsafe.video.currentTime = 1000;
+    unsafe.seekGuess = {
+      active: true,
+      episode: { id: 11 },
+      autoMarkSafe: false,
+      episodeDuration: 1000,
+      episodeElapsed: 1000,
+    };
+    await unsafe.api.checkAutoWatchProgress();
+    assert.equal(unsafe.patchCalls, 0, "an unsafe inferred timeline must never mark even at 100%");
   }
 
   // 2a) 401 blocks auto-marking and repeated timeupdate checks do not retry.
@@ -368,6 +449,7 @@ function rejectWith(status, extra = {}) {
     await playTo(sandbox, [7000, 7100, 7200]);
     assert.equal(sandbox.patchCalls, 0, "checks must stop outside /video/* and /bangumi/play/*");
     sandbox.location = new URL("https://www.bilibili.com/video/BV1TEST");
+    sandbox.api.resetAutoWatchObservationState();
     await crossThresholdNaturally(sandbox);
     assert.equal(sandbox.patchCalls, 1, "checks must resume on a supported page");
   }
@@ -432,6 +514,27 @@ function rejectWith(status, extra = {}) {
     primeSeek(sandbox);
     sandbox.api.handleAutoWatchSeekEnd(sandbox.video);
     assert.equal(sandbox.state.autoWatchBlockedKey, "7:11:scope", "large forward jumps past the threshold stay blocked");
+  }
+
+  // A large forward jump landing below the threshold remains blocked later;
+  // seeking backward below the threshold explicitly releases it.
+  {
+    const sandbox = createSandbox();
+    sandbox.autoWatchThreshold = 80;
+    sandbox.longVideoMode = true;
+    sandbox.seekGuess = { active: true, episode: { id: 11 }, autoMarkSafe: true, episodeDuration: 1000, episodeElapsed: 400 };
+    primeSeek(sandbox, 1000, 1300);
+    sandbox.api.handleAutoWatchSeekEnd(sandbox.video);
+    assert.equal(sandbox.state.autoWatchBlockedKey, "7:11:scope", "a five-minute jump is blocked even when it lands at only 40%");
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.state.autoWatchBlockedKey, "7:11:scope", "playing onward below 80% must not silently clear the jump block");
+
+    sandbox.state.autoWatchSeekStartTime = 1300;
+    sandbox.video.currentTime = 1100;
+    sandbox.seekGuess = { ...sandbox.seekGuess, episodeElapsed: 200 };
+    sandbox.api.handleAutoWatchSeekEnd(sandbox.video);
+    await sandbox.api.checkAutoWatchProgress();
+    assert.equal(sandbox.state.autoWatchBlockedKey, "", "seeking backward below the threshold allows a fresh natural watch");
   }
 
   // Normal video mode: the same jump blocks; a small jump does not.
