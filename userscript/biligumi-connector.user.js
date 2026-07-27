@@ -4003,31 +4003,44 @@
 
   function renderInlineAutoPreview(keywordOverride = "") {
     const keyword = String(keywordOverride || "").trim() || getInlineAutoPreviewKeyword();
-    if (!keyword) return "";
+    if (!keyword) {
+      return `
+        <div class="biligumi-row">
+          <div class="biligumi-lite-note">未能从视频标题或合集标题识别作品名，因此没有执行自动推荐；请手动输入番名搜索。</div>
+        </div>
+      `;
+    }
     const isNonMain = Boolean(keywordOverride) || isNonMainPreviewPage();
+    const pageKeyword = cleanTitle(getOfficialBangumiContextTitle() || getSeriesTitle() || state.rawTitle || getPageTitle());
+    const collectionKeyword = keywordOverride ? "" : cleanTitle(getBilibiliCollectionTitle());
+    const isCollectionFallback = collectionKeyword
+      && normalizeBindingToken(collectionKeyword) === normalizeBindingToken(keyword)
+      && normalizeBindingToken(collectionKeyword) !== normalizeBindingToken(pageKeyword);
     const rows = state.nonMainResults
       .slice(0, 2)
       .map((subject) => renderNonMainCandidate(subject, { canBind: true, canOpen: isNonMain }))
       .join("");
     const note = isNonMain
       ? `检测到 PV / 预告，下面是按「${escapeHtml(keyword)}」匹配的跳转候选。`
-      : `下面是按「${escapeHtml(keyword)}」自动匹配的候选。`;
+      : isCollectionFallback
+        ? `当前视频标题未包含作品名，已改用合集标题「${escapeHtml(collectionKeyword)}」自动匹配。`
+        : `下面是按「${escapeHtml(keyword)}」自动匹配的候选。`;
     return `
       <div class="biligumi-row">
         <div class="biligumi-lite-note">${note}</div>
-        ${renderNonMainPreviewStatus(rows)}
+        ${renderNonMainPreviewStatus(rows, keyword)}
       </div>
     `;
   }
 
-  function renderNonMainPreviewStatus(rows) {
+  function renderNonMainPreviewStatus(rows, keyword = state.nonMainKeyword || "") {
     return state.nonMainBusy
       ? '<div class="biligumi-lite-note">正在轻量匹配 Bangumi...</div>'
       : state.nonMainError
         ? `<div class="biligumi-lite-note">${escapeHtml(state.nonMainError)} <button class="biligumi-lite-bind" data-action="refresh-non-main">重试</button></div>`
         : rows
           ? `<div class="biligumi-lite-results">${rows}</div>`
-          : '<div class="biligumi-lite-note">暂时没有匹配候选。</div>';
+          : `<div class="biligumi-lite-note">按「${escapeHtml(keyword)}」没有找到自动候选，请修改上方搜索词后手动搜索。</div>`;
   }
 
   function renderNonMainCandidate(subject, options = {}) {
@@ -8952,6 +8965,23 @@
     return document.title;
   }
 
+  function getBilibiliCollectionTitle() {
+    if (isOfficialBangumiPage()) return "";
+    const selectors = [
+      ".video-pod__header a[href*='/channel/collectiondetail'][title]",
+      ".video-pod__header a[href*='/channel/collectiondetail']",
+      "#multi_page a[href*='/channel/collectiondetail'][title]",
+      ".video-pod__item.simple .simple-base-item.active.head .title[title]",
+      ".bpx-player-ctrl-eplist-episodes-title.bpx-state-multi-active-item .bpx-player-ctrl-eplist-episodes-title-text",
+    ];
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      const title = element && getElementTitleText(element);
+      if (title && cleanTitle(title)) return title;
+    }
+    return "";
+  }
+
   function getElementTitleText(element) {
     const attrTitleRaw = String(element && element.getAttribute("title") || "").replace(/\s+/g, " ").trim();
     const visibleTitleRaw = String(element && element.textContent || "").replace(/\s+/g, " ").trim();
@@ -9319,7 +9349,9 @@
   }
 
   function suggestSearchKeyword() {
-    return state.subject ? displaySubjectName(state.subject) : state.pageTitle;
+    return state.subject
+      ? displaySubjectName(state.subject)
+      : cleanTitle(getBilibiliCollectionTitle()) || state.pageTitle;
   }
 
   function detectEpisodeNo(text) {
