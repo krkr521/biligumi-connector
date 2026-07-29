@@ -35,6 +35,8 @@ for (const name of [
 
 let domMediaId = "1587";
 let domMediaTitle = "Fate/stay night [Unlimited Blade Works] 第二季";
+let canonicalMediaLinkVisible = true;
+let extraMediaNodes = [];
 
 const mediaNode = {
   get textContent() {
@@ -59,13 +61,13 @@ const identitySandbox = {
   },
   document: {
     querySelector(selector) {
-      if (selector.includes("mediainfo_mediaTitle")) return mediaNode;
+      if (selector.includes("mediainfo_mediaTitle")) return canonicalMediaLinkVisible ? mediaNode : null;
       if (selector === "a[href*='/bangumi/media/md']") return mediaNode;
       if (selector.includes(".media-title")) return null;
       return null;
     },
     querySelectorAll(selector) {
-      return selector === "a[href*='/bangumi/media/md']" ? [mediaNode] : [];
+      return selector === "a[href*='/bangumi/media/md']" ? [mediaNode, ...extraMediaNodes] : [];
     },
   },
   state: { pageKey: "bili:ss1586" },
@@ -142,6 +144,27 @@ assert.deepEqual(
   [...identitySandbox.getDirectBindingKeysForCurrentPage()],
   ["bili:md1587", "bili:ss1587"],
 );
+
+identitySandbox.location.pathname = "/bangumi/play/ep29143";
+identitySandbox.location.href = "https://www.bilibili.com/bangumi/play/ep29143";
+canonicalMediaLinkVisible = false;
+extraMediaNodes = [{
+  getAttribute(name) {
+    return name === "href" ? "/bangumi/media/md99999999" : null;
+  },
+}];
+assert.equal(
+  identitySandbox.getStableBiliSubjectKey(),
+  "",
+  "ambiguous live md links on an EP route must not fall back to stale initial-state season identity",
+);
+assert.deepEqual(
+  [...identitySandbox.getOfficialBangumiBaseBindingKeys()],
+  [],
+  "ambiguous EP media identity must fail closed instead of producing a poisoned base key",
+);
+canonicalMediaLinkVisible = true;
+extraMediaNodes = [];
 
 function createBindingSandbox({ official, directSubjectId = null, directEvidenceNames = [] }) {
   const STORAGE = {
@@ -240,6 +263,28 @@ function createBindingSandbox({ official, directSubjectId = null, directEvidence
     sandbox.readBinding(),
     null,
     "a previously poisoned second-season direct key is ignored when cached subject evidence proves it is season one",
+  );
+  assert.match(sandbox.state.bindingGuardMessage, /切换季度/);
+  assert.deepEqual(sandbox.migrateCalls, []);
+}
+
+{
+  // Reverse direction: S1 page must not reuse a poisoned key whose evidence is S2.
+  const sandbox = createBindingSandbox({
+    official: true,
+    directSubjectId: 109386,
+    directEvidenceNames: ["Fate/stay night [Unlimited Blade Works] 第二季"],
+  });
+  sandbox.getTitleBindingInfo = () => ({
+    sourceTitle: "Fate/stay night [Unlimited Blade Works] 第一季",
+    token: "fatestaynightunlimitedbladeworks第一季",
+    lowConfidence: false,
+  });
+  sandbox.doesCurrentTitleMatchSubjectEvidence = () => false;
+  assert.equal(
+    sandbox.readBinding(),
+    null,
+    "a first-season official page must ignore direct evidence that only matches season two",
   );
   assert.match(sandbox.state.bindingGuardMessage, /切换季度/);
   assert.deepEqual(sandbox.migrateCalls, []);

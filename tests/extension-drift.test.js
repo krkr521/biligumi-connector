@@ -47,6 +47,7 @@ const IDENTICAL_FUNCTIONS = [
   "formatCollectionTargetRange",
   "isCurrentCollectionPartAutoMarkEligible",
   "getCollectionSegmentProgressKey",
+  "isNaturalAutoWatchTimeAdvance",
   "renderCollectionMappingHint",
   "detectCurrentEpisodeNo",
   "refreshCurrentEpisodeRecognitionState",
@@ -88,6 +89,7 @@ for (const name of [
   "getSubjectMainEpisodeInfoForMapping",
   "recordCurrentCollectionSegmentProgressIfNeeded",
   "clearCurrentCollectionSegmentProgress",
+  "clearCollectionSegmentProgressForRule",
 ]) {
   const userscriptBlock = extractFunction(userscriptSource, name, { async: true });
   const extensionBlock = extractFunction(extensionSource, name, { async: true });

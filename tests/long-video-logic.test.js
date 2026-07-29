@@ -76,7 +76,8 @@ assert.match(userscriptBindingKeys, /if \(longVideoPartKey\) return \[longVideoP
 
 function readAutoWatchStateBlock(filePath) {
   const source = fs.readFileSync(filePath, "utf8");
-  const start = source.indexOf("  function updateAutoWatchJumpState(");
+  const startNatural = source.indexOf("  function isNaturalAutoWatchTimeAdvance(");
+  const start = startNatural !== -1 ? startNatural : source.indexOf("  function updateAutoWatchJumpState(");
   const end = source.indexOf("  function getCurrentNormalEpisode()", start);
   assert.notEqual(start, -1, `Missing auto-watch state logic start in ${filePath}`);
   assert.notEqual(end, -1, `Missing auto-watch state logic end in ${filePath}`);
@@ -657,9 +658,13 @@ assert.equal(logic.getCurrentPartNoFromUrl(), null);
 const autoWatchSandbox = {
   AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS: SRC_CONSTANTS.AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS,
   getAutoWatchThreshold: () => 80,
+  Date,
+  document: { visibilityState: "visible" },
   state: {
     autoWatchLastVideoKey: "1:1:owner",
     autoWatchLastVideoTime: 4900,
+    autoWatchLastObservedAt: Date.now() - 1000,
+    autoWatchSawHiddenSinceLastObservation: false,
     autoWatchSeekStartTime: 4800,
     autoWatchBlockedKey: "",
   },

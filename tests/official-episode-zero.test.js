@@ -28,6 +28,7 @@ for (const name of ["detectCurrentEpisodeNo", "getEpisodeDisplayNo", "formatEpis
 function loadCurrentEpisodeDetector({ official, officialOrdinal }) {
   const sandbox = {
     getCurrentCollectionPartContext: () => null,
+    getCurrentCollectionLayoutContext: () => null,
     getCollectionMappingRule: () => null,
     getCollectionMappedEpisodeNo: () => null,
     getOfficialBangumiProgressEpisodeNo: () => officialOrdinal,

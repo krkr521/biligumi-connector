@@ -45,6 +45,7 @@ const GATING_FUNCTIONS = [
   ["makeApiError"],
   ["parseRetryAfterSeconds"],
   ["handleAutoWatchSeekEnd"],
+  ["isNaturalAutoWatchTimeAdvance"],
   ["updateAutoWatchJumpState"],
   ["resetAutoWatchObservationState"],
   ["isSupportedWatchPage"],
@@ -102,6 +103,7 @@ const GATING_SOURCE = [
   extractFunction(userscriptSource, "extractApiError"),
   extractFunction(userscriptSource, "tryParseJson"),
   extractFunction(userscriptSource, "handleAutoWatchSeekEnd"),
+  extractFunction(userscriptSource, "isNaturalAutoWatchTimeAdvance"),
   extractFunction(userscriptSource, "updateAutoWatchJumpState"),
   extractFunction(userscriptSource, "resetAutoWatchObservationState"),
   extractFunction(userscriptSource, "isSupportedWatchPage"),
@@ -112,6 +114,8 @@ function createSandbox() {
   const sandbox = {
     ...GATING_CONSTANTS,
     URL,
+    Date,
+    document: { visibilityState: "visible" },
     state: {
       token: "token",
       subjectId: 7,
@@ -119,6 +123,8 @@ function createSandbox() {
       autoEpisodeSyncLastKey: "",
       autoWatchLastVideoKey: "",
       autoWatchLastVideoTime: 0,
+      autoWatchLastObservedAt: 0,
+      autoWatchSawHiddenSinceLastObservation: false,
       autoWatchSeekStartTime: null,
       autoWatchBlockedKey: "",
       autoWatchAuthBlocked: false,
@@ -173,6 +179,7 @@ function createSandbox() {
   runInSandbox(`${GATING_SOURCE}\n;globalThis.api = {
     checkAutoWatchProgress,
     handleAutoWatchSeekEnd,
+    updateAutoWatchJumpState,
     resetAutoWatchObservationState,
     makeApiError,
     parseRetryAfterSeconds,
@@ -548,6 +555,55 @@ function rejectWith(status, extra = {}) {
     primeSeek(smallJump, 1200, 1300);
     smallJump.api.handleAutoWatchSeekEnd(smallJump.video);
     assert.equal(smallJump.state.autoWatchBlockedKey, "", "small seeks must not block");
+  }
+
+  // -------------------------------------------------------------------------
+  // Timeupdate jump discrimination (updateAutoWatchJumpState).
+  // Explicit seeks stay blocked via seeked; natural gaps must not.
+  // -------------------------------------------------------------------------
+
+  {
+    const sandbox = createSandbox();
+    const now = Date.now();
+    sandbox.state.autoWatchLastVideoKey = "7:11:scope";
+    sandbox.state.autoWatchLastVideoTime = 100;
+    sandbox.state.autoWatchLastObservedAt = now - 360_000; // 6 minutes of wall clock
+    sandbox.video.currentTime = 100 + 360; // ~1x natural playback
+    sandbox.api.updateAutoWatchJumpState(sandbox.video, "7:11:scope", 10);
+    assert.equal(sandbox.state.autoWatchBlockedKey, "", "timer-throttled natural advance must not block");
+  }
+
+  {
+    const sandbox = createSandbox();
+    const now = Date.now();
+    sandbox.state.autoWatchLastVideoKey = "7:11:scope";
+    sandbox.state.autoWatchLastVideoTime = 100;
+    sandbox.state.autoWatchLastObservedAt = now - 1000; // 1s wall clock
+    sandbox.state.autoWatchSawHiddenSinceLastObservation = true;
+    sandbox.video.currentTime = 100 + 400; // large video gap after background
+    sandbox.api.updateAutoWatchJumpState(sandbox.video, "7:11:scope", 15);
+    assert.equal(sandbox.state.autoWatchBlockedKey, "", "background/tab-restore gaps must not block");
+  }
+
+  {
+    const sandbox = createSandbox();
+    const now = Date.now();
+    sandbox.state.autoWatchLastVideoKey = "7:11:scope";
+    sandbox.state.autoWatchLastVideoTime = 100;
+    sandbox.state.autoWatchLastObservedAt = now - 200; // tiny wall clock
+    sandbox.video.currentTime = 100 + 400; // 400s silent jump
+    sandbox.api.updateAutoWatchJumpState(sandbox.video, "7:11:scope", 15);
+    assert.equal(
+      sandbox.state.autoWatchBlockedKey,
+      "7:11:scope",
+      "a silent large jump with short wall time must block even below the auto-watch threshold",
+    );
+  }
+
+  {
+    const sandbox = createSandbox();
+    sandbox.api.updateAutoWatchJumpState({ currentTime: 7200 }, "7:11:scope", 50);
+    assert.equal(sandbox.state.autoWatchBlockedKey, "7:11:scope", "first observation at/above threshold stays blocked");
   }
 
   console.log("auto-watch gating tests passed");

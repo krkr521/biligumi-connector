@@ -170,6 +170,50 @@ assert.equal(
   "episode switches must not leak the current mini-episode number into the binding title",
 );
 assert.equal(sandbox.api.getOfficialBangumiMediaIdFromDom(), "28224078");
+
+const relatedMediaNode = {
+  textContent: "Related Season",
+  getAttribute(name) {
+    return name === "href" ? "/bangumi/media/md99999999" : null;
+  },
+};
+const multiMediaDocument = {
+  querySelector(selector) {
+    if (selector.includes("mediainfo_mediaTitle")) return mediaNode;
+    if (selector === "a[href*='/bangumi/media/md']") return relatedMediaNode;
+    return document.querySelector(selector);
+  },
+  querySelectorAll(selector) {
+    if (selector === "a[href*='/bangumi/media/md']") return [relatedMediaNode, mediaNode];
+    return document.querySelectorAll(selector);
+  },
+};
+const originalDocument = sandbox.document;
+sandbox.document = multiMediaDocument;
+assert.equal(
+  sandbox.api.getOfficialBangumiMediaIdFromDom(),
+  "28224078",
+  "the main media title link wins over earlier related-media links",
+);
+const ambiguousDocument = {
+  querySelector(selector) {
+    if (selector.includes("mediainfo_mediaTitle")) return null;
+    if (selector === "a[href*='/bangumi/media/md']") return relatedMediaNode;
+    return document.querySelector(selector);
+  },
+  querySelectorAll(selector) {
+    if (selector === "a[href*='/bangumi/media/md']") return [relatedMediaNode, mediaNode];
+    return document.querySelectorAll(selector);
+  },
+};
+sandbox.document = ambiguousDocument;
+assert.equal(
+  sandbox.api.getOfficialBangumiMediaIdFromDom(),
+  "",
+  "multiple different md links without a title link must not use document order",
+);
+sandbox.document = originalDocument;
+
 assert.equal(
   sandbox.api.getOfficialBangumiSectionBindingKey(),
   "bili:md28224078|section:元祖迷你",

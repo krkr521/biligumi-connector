@@ -229,8 +229,9 @@ assert.equal(recognitionSandbox.state.currentEpisodeNo, null, "a paused video st
 const sandbox = {
   ...collectionConstants,
   Date,
-  state: { collectionMappings: {} },
+  state: { collectionMappings: {}, longVideoEpisodeGuess: null },
   getCurrentCollectionLayoutContext: () => null,
+  getLongVideoEpisodeModeDecision: () => null,
   stripTrailingDurationText: (text) => String(text || "")
     .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
     .replace(/\s+/g, " ")
@@ -255,10 +256,13 @@ runInSandbox([
   functionSource("removeCollectionMappingRule"),
   functionSource("formatCollectionTargetEpisodeLabel"),
   functionSource("formatCollectionTargetRange"),
+  functionSource("formatCollectionRangeBindingPrompt"),
+  functionSource("formatCollectionSourceRange"),
   functionSource("isCurrentCollectionPartAutoMarkEligible"),
   functionSource("buildCollectionRangeBindingProposal", true),
   functionSource("getCollectionSegmentProgressKey"),
   functionSource("recordCurrentCollectionSegmentProgressIfNeeded", true),
+  functionSource("clearCollectionSegmentProgressForRule", true),
 ].join("\n") + `
 ;globalThis.api = {
   normalizeCollectionMappings,
@@ -269,10 +273,15 @@ runInSandbox([
   putCollectionMappingRule,
   formatCollectionTargetEpisodeLabel,
   formatCollectionTargetRange,
+  formatCollectionRangeBindingPrompt,
   isCurrentCollectionPartAutoMarkEligible,
   buildCollectionRangeBindingProposal,
   recordCurrentCollectionSegmentProgressIfNeeded,
+  clearCollectionSegmentProgressForRule,
+  getCollectionSegmentProgressKey,
 };`, sandbox);
+sandbox.resolveLongVideoBindingSubject = () => ({ name: "Test Subject" });
+sandbox.displaySubjectName = (subject) => subject.name;
 
 function plain(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
@@ -282,6 +291,9 @@ assert.deepEqual(plain(sandbox.api.parseCollectionPartTitle("1.1")), {
   seasonKey: "default", seasonNo: null, episodeNo: 1, fragmentIndex: 1, fragmentCount: 2, label: "1.1",
 });
 assert.equal(sandbox.api.parseCollectionPartTitle("1.2").fragmentIndex, 2);
+assert.deepEqual(plain(sandbox.api.parseCollectionPartTitle("1.3")), {
+  seasonKey: "default", seasonNo: null, episodeNo: 1, fragmentIndex: 3, fragmentCount: 3, label: "1.3",
+});
 assert.deepEqual(plain(sandbox.api.parseCollectionPartTitle("第二季0")), {
   seasonKey: "season:2", seasonNo: 2, episodeNo: 0, fragmentIndex: 1, fragmentCount: 1, label: "第二季0",
 });
@@ -494,15 +506,111 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   currentContext = { ...currentContext, fragmentIndex: 2 };
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true);
 
+  // Hierarchical 1.1.1 / 1.1.2 / 1.1.3: three segments accumulate before complete.
+  const threeSegRule = {
+    id: "season:1:1-12", seasonKey: "season:1", sourceStart: 1, sourceEnd: 12,
+    targetStart: 1, subjectId: 2001, segmentCount: 3, autoProgress: true,
+  };
+  sandbox.getCollectionMappingRule = () => threeSegRule;
+  sandbox.getCollectionMappingRules = () => [threeSegRule];
+  currentContext = {
+    bvid, seasonKey: "season:1", episodeNo: 1, segmentCount: 3, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "1.1.1 alone must not complete a three-segment episode");
+  currentContext = { ...currentContext, fragmentIndex: 2 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "1.1.1+1.1.2 still incomplete without 1.1.3");
+  const threeSegKey = sandbox.api.getCollectionSegmentProgressKey(currentContext, threeSegRule);
+  assert.deepEqual(plain(progress[threeSegKey].completed), [1, 2]);
+  currentContext = { ...currentContext, fragmentIndex: 3 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "1.1.1+1.1.2+1.1.3 completes only after the third segment");
+  assert.deepEqual(plain(progress[threeSegKey].completed), [1, 2, 3]);
+
+  // Mixed per-episode segment counts: ep1 needs 3 parts, ep2 needs 2, independently.
+  const mixedRule = {
+    id: "default:1-8", seasonKey: "default", sourceStart: 1, sourceEnd: 8,
+    targetStart: 1, subjectId: 3001, segmentCount: 3, autoProgress: true,
+  };
+  sandbox.getCollectionMappingRule = () => mixedRule;
+  sandbox.getCollectionMappingRules = () => [mixedRule];
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 1, segmentCount: 3, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  currentContext = { ...currentContext, fragmentIndex: 2 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  currentContext = { ...currentContext, fragmentIndex: 3 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "episode 1 with three uploaded parts completes after 1+2+3");
+  const ep1Key = sandbox.api.getCollectionSegmentProgressKey(
+    { bvid, seasonKey: "default", episodeNo: 1 },
+    mixedRule,
+  );
+  assert.deepEqual(plain(progress[ep1Key].completed), [1, 2, 3]);
+
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 2, segmentCount: 2, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "episode 2 progress is independent of episode 1");
+  currentContext = { ...currentContext, fragmentIndex: 2 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "episode 2 with only two uploaded parts completes after 1+2 without waiting for a third");
+  const ep2Key = sandbox.api.getCollectionSegmentProgressKey(
+    { bvid, seasonKey: "default", episodeNo: 2 },
+    mixedRule,
+  );
+  assert.deepEqual(plain(progress[ep2Key].completed), [1, 2]);
+  assert.deepEqual(plain(progress[ep1Key].completed), [1, 2, 3], "episode 1 progress stays isolated");
+
+  // Missing middle segment (.1 and .3 without .2): never auto-complete.
+  const gapRule = {
+    id: "default:1-6", seasonKey: "default", sourceStart: 1, sourceEnd: 6,
+    targetStart: 1, subjectId: 4001, segmentCount: 3, autoProgress: true,
+  };
+  sandbox.getCollectionMappingRule = () => gapRule;
+  sandbox.getCollectionMappingRules = () => [gapRule];
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 4, segmentCount: 2, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  // Live list only has fragments 1 and 3 → size 2, but completion still requires contiguous 1..N.
+  // Recording fragment 3 with segmentCount 2 can never satisfy [1,2].
+  currentContext = { ...currentContext, fragmentIndex: 3 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "watching .1 and .3 without .2 must stay incomplete (fail closed)");
+  const gapKey = sandbox.api.getCollectionSegmentProgressKey(
+    { bvid, seasonKey: "default", episodeNo: 4 },
+    gapRule,
+  );
+  assert.deepEqual(plain(progress[gapKey].completed), [1, 3]);
+  assert.equal(plain(progress[gapKey].completed).includes(2), false);
+
+  // With declared three-slot completion, gaps are also fail-closed.
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 5, segmentCount: 3, fragmentIndex: 1,
+  };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  currentContext = { ...currentContext, fragmentIndex: 3 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "1+3 without 2 never reaches three-segment completion");
+  currentContext = { ...currentContext, fragmentIndex: 2 };
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "only filling the missing middle finally completes");
+
   // Incomplete splits: only fragment 1 exists → segmentCount 1 → single watch completes.
   progress["solo"] = undefined;
   sandbox.getCollectionMappingRule = () => splitRule;
+  sandbox.getCollectionMappingRules = () => [splitRule];
   sandbox.getCollectionSegmentProgressKey = () => "solo-key";
   currentContext = {
     bvid, seasonKey: "default", episodeNo: 2, segmentCount: 1, fragmentIndex: 1,
   };
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
     "actual single-part episodes must auto-mark without waiting for a missing .2");
+  sandbox.getCollectionSegmentProgressKey = sandbox.api.getCollectionSegmentProgressKey;
 
   // Collection-shaped uploads require an explicit range mapping before auto-mark.
   sandbox.getCollectionMappingRule = () => null;
@@ -708,6 +816,181 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   assert.equal(incompleteContext.episodeNo, 2);
   assert.equal(incompleteContext.segmentCount, 1, "missing .2 must not invent a second required segment");
 
+  function readSplitContext(titles, partNo) {
+    const splitNodes = titles.map((title, index) => ({
+      className: index === partNo - 1 ? "page-item active" : "page-item",
+      textContent: title,
+      getAttribute: (name) => name === "title" ? title : "",
+      querySelectorAll: () => [],
+    }));
+    const splitSandbox = {
+      ...collectionConstants,
+      document: {
+        querySelector: () => null,
+        querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? splitNodes : [],
+      },
+      getBvIdFromUrl: () => bvid,
+      getCurrentPartNoFromUrl: () => partNo,
+      stripTrailingDurationText: sandbox.stripTrailingDurationText,
+    };
+    runInSandbox([
+      functionSource("parseChineseNumber"),
+      functionSource("parseCollectionFragment"),
+      functionSource("parseCollectionPartTitle"),
+      functionSource("parseBareCollectionEpisodeTitle"),
+      functionSource("parseLongVideoPartTitle"),
+      functionSource("getVideoPartListNodes"),
+      functionSource("isActiveVideoPartNode"),
+      functionSource("getVideoPartNodeTitle"),
+      functionSource("getCurrentVideoPartContext"),
+      functionSource("getCollectionPartRows"),
+      functionSource("getQualifiedCollectionPartRows"),
+      functionSource("getCurrentCollectionLayoutContext"),
+      functionSource("getCurrentCollectionPartContext"),
+    ].join("\n") + `
+;globalThis.readCollectionContext = getCurrentCollectionPartContext;
+globalThis.readLayout = getCurrentCollectionLayoutContext;`, splitSandbox);
+    return {
+      context: plain(splitSandbox.readCollectionContext()),
+      layout: plain(splitSandbox.readLayout()),
+    };
+  }
+
+  // Hierarchical 1.x.1/1.x.2/1.x.3: each episode exposes three contiguous segments.
+  const hierarchicalThreeTitles = [];
+  for (let episode = 1; episode <= 4; episode += 1) {
+    hierarchicalThreeTitles.push(`1.${episode}.1`, `1.${episode}.2`, `1.${episode}.3`);
+  }
+  const hierarchicalEp1Part1 = readSplitContext(hierarchicalThreeTitles, 1);
+  assert.equal(hierarchicalEp1Part1.context.seasonKey, "season:1");
+  assert.equal(hierarchicalEp1Part1.context.episodeNo, 1);
+  assert.equal(hierarchicalEp1Part1.context.fragmentIndex, 1);
+  assert.equal(hierarchicalEp1Part1.context.segmentCount, 3, "1.1.1/1.1.2/1.1.3 yield three live segments");
+  const hierarchicalEp1Part3 = readSplitContext(hierarchicalThreeTitles, 3);
+  assert.equal(hierarchicalEp1Part3.context.episodeNo, 1);
+  assert.equal(hierarchicalEp1Part3.context.fragmentIndex, 3);
+  assert.equal(hierarchicalEp1Part3.context.segmentCount, 3);
+  const hierarchicalEp2Part2 = readSplitContext(hierarchicalThreeTitles, 5);
+  assert.equal(hierarchicalEp2Part2.context.episodeNo, 2);
+  assert.equal(hierarchicalEp2Part2.context.fragmentIndex, 2);
+  assert.equal(hierarchicalEp2Part2.context.segmentCount, 3);
+
+  // Mixed live segment counts across episodes (decimal splits).
+  const mixedSegmentTitles = [
+    "1.1", "1.2", "1.3",
+    "2.1", "2.2",
+    "3.1", "3.2", "3.3",
+    "4.1", "4.2",
+  ];
+  const mixedEp1 = readSplitContext(mixedSegmentTitles, 1);
+  assert.equal(mixedEp1.context.episodeNo, 1);
+  assert.equal(mixedEp1.context.segmentCount, 3, "episode 1 has three uploaded parts");
+  assert.equal(mixedEp1.context.fragmentIndex, 1);
+  const mixedEp1Last = readSplitContext(mixedSegmentTitles, 3);
+  assert.equal(mixedEp1Last.context.episodeNo, 1);
+  assert.equal(mixedEp1Last.context.fragmentIndex, 3);
+  assert.equal(mixedEp1Last.context.segmentCount, 3);
+  const mixedEp2 = readSplitContext(mixedSegmentTitles, 4);
+  assert.equal(mixedEp2.context.episodeNo, 2);
+  assert.equal(mixedEp2.context.segmentCount, 2, "episode 2 has only two uploaded parts");
+  assert.equal(mixedEp2.context.fragmentIndex, 1);
+  const mixedEp2Last = readSplitContext(mixedSegmentTitles, 5);
+  assert.equal(mixedEp2Last.context.fragmentIndex, 2);
+  assert.equal(mixedEp2Last.context.segmentCount, 2);
+  const mixedEp3 = readSplitContext(mixedSegmentTitles, 6);
+  assert.equal(mixedEp3.context.episodeNo, 3);
+  assert.equal(mixedEp3.context.segmentCount, 3, "episode 3 again has three parts independent of episode 2");
+
+  // Hierarchical mixed segment counts: ep1 three parts, ep2 two parts.
+  const hierarchicalMixedTitles = [
+    "1.1.1", "1.1.2", "1.1.3",
+    "1.2.1", "1.2.2",
+    "1.3.1", "1.3.2", "1.3.3",
+    "1.4.1", "1.4.2",
+  ];
+  const hierarchicalMixedEp1 = readSplitContext(hierarchicalMixedTitles, 1);
+  assert.equal(hierarchicalMixedEp1.context.episodeNo, 1);
+  assert.equal(hierarchicalMixedEp1.context.segmentCount, 3,
+    "hierarchical episode 1 keeps three live segments when later episodes have two");
+  const hierarchicalMixedEp2 = readSplitContext(hierarchicalMixedTitles, 4);
+  assert.equal(hierarchicalMixedEp2.context.episodeNo, 2);
+  assert.equal(hierarchicalMixedEp2.context.segmentCount, 2,
+    "hierarchical episode 2 completes with its own two segments");
+
+  // Live progress through mixed DOM contexts uses each episode's actual segmentCount.
+  const mixedDomProgress = {};
+  sandbox.updateStoredCollectionSegmentProgress = async (update) => update(mixedDomProgress);
+  sandbox.getCollectionMappingRule = () => mixedRule;
+  sandbox.getCollectionMappingRules = () => [mixedRule];
+  sandbox.getCurrentCollectionPartContext = () => mixedEp1.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  sandbox.getCurrentCollectionPartContext = () => ({ ...mixedEp1Last.context, fragmentIndex: 2 });
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  sandbox.getCurrentCollectionPartContext = () => mixedEp1Last.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "DOM-derived three-segment episode 1 completes after all three parts");
+  sandbox.getCurrentCollectionPartContext = () => mixedEp2.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  sandbox.getCurrentCollectionPartContext = () => mixedEp2Last.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), true,
+    "DOM-derived two-segment episode 2 completes without a third part");
+
+  // Missing middle hierarchical fragments fail closed (group not qualified).
+  const hierarchicalGapTitles = [
+    "1.1.1", "1.1.3",
+    "1.2.1", "1.2.2", "1.2.3",
+    "1.3.1", "1.3.2", "1.3.3",
+    "1.4.1", "1.4.2", "1.4.3",
+  ];
+  const hierarchicalGap = readSplitContext(hierarchicalGapTitles, 1);
+  assert.equal(hierarchicalGap.context, null,
+    "hierarchical list missing 1.1.2 must not qualify as a collection episode");
+  assert.ok(
+    hierarchicalGap.layout == null || hierarchicalGap.layout.currentKind === "unmapped",
+    "missing middle hierarchical segment is fail-closed (no episode context)",
+  );
+
+  // Missing middle decimal fragments: context may still form, but auto-mark never completes.
+  const decimalGapTitles = [
+    "1.1", "1.3",
+    "2.1", "2.2",
+    "3.1", "3.2",
+    "4.1", "4.2",
+  ];
+  const decimalGapFirst = readSplitContext(decimalGapTitles, 1);
+  assert.equal(decimalGapFirst.context.episodeNo, 1);
+  assert.equal(decimalGapFirst.context.fragmentIndex, 1);
+  assert.equal(decimalGapFirst.context.segmentCount, 2,
+    "live fragment set size is 2 when only .1 and .3 exist");
+  const decimalGapThird = readSplitContext(decimalGapTitles, 2);
+  assert.equal(decimalGapThird.context.episodeNo, 1);
+  assert.equal(decimalGapThird.context.fragmentIndex, 3);
+  assert.equal(decimalGapThird.context.segmentCount, 2);
+  const gapProgress = {};
+  sandbox.updateStoredCollectionSegmentProgress = async (update) => update(gapProgress);
+  sandbox.getCollectionMappingRule = () => gapRule;
+  sandbox.getCollectionMappingRules = () => [gapRule];
+  sandbox.getCurrentCollectionPartContext = () => decimalGapFirst.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false);
+  sandbox.getCurrentCollectionPartContext = () => decimalGapThird.context;
+  assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
+    "DOM .1+.3 without .2 never reaches contiguous segment completion");
+  const decimalGapKey = sandbox.api.getCollectionSegmentProgressKey(decimalGapFirst.context, gapRule);
+  assert.deepEqual(plain(gapProgress[decimalGapKey].completed), [1, 3]);
+  assert.equal(
+    plain(gapProgress[decimalGapKey].completed).includes(2),
+    false,
+    "missing middle fragment index 2 is never recorded from the live list",
+  );
+
+  // Restore shared sandbox hooks used by later hybrid / eligibility tests.
+  currentContext = null;
+  sandbox.getCurrentCollectionPartContext = () => currentContext;
+  sandbox.getCurrentCollectionLayoutContext = () => null;
+  sandbox.updateStoredCollectionSegmentProgress = async (update) => update(progress);
+  sandbox.getCollectionMappingRule = () => null;
+  sandbox.getCollectionMappingRules = () => [];
+
   const hybridTitles = [];
   for (let episode = 1; episode <= 24; episode += 1) {
     hybridTitles.push(`1.${episode}.1`, `1.${episode}.2`);
@@ -775,7 +1058,21 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
   sandbox.getCurrentCollectionLayoutContext = () => ({ currentKind: "unmapped" });
   assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), false,
     "an unrecognized tail item in a confirmed collection must never auto-mark progress");
+  sandbox.getCurrentCollectionLayoutContext = () => ({ currentKind: "long-range" });
+  sandbox.getLongVideoEpisodeModeDecision = () => null;
+  sandbox.state.longVideoEpisodeGuess = null;
+  assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), false,
+    "hybrid long-range parts must not auto-mark without long-video mode");
+  sandbox.getLongVideoEpisodeModeDecision = () => true;
+  sandbox.state.longVideoEpisodeGuess = { active: true, episode: { id: 1 }, autoMarkSafe: false };
+  assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), false,
+    "hybrid long-range parts with unsafe long-video guesses must not auto-mark");
+  sandbox.state.longVideoEpisodeGuess = { active: true, episode: { id: 1 }, autoMarkSafe: true };
+  assert.equal(sandbox.api.isCurrentCollectionPartAutoMarkEligible(), true,
+    "hybrid long-range parts may auto-mark only with safe long-video inference");
   sandbox.getCurrentCollectionLayoutContext = () => null;
+  sandbox.getLongVideoEpisodeModeDecision = () => null;
+  sandbox.state.longVideoEpisodeGuess = null;
 
   assert.equal(readBareNumericContext(["1.2.3", "2.4.6", "3.6.7", "4.8.1"]), null,
     "isolated dotted version-like labels must not qualify without a complete hierarchical sequence");
@@ -783,6 +1080,7 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
   const failClosedSandbox = {
     getCurrentCollectionPartContext: () => ({ bvid, episodeNo: 1 }),
     getCollectionMappingRule: () => null,
+    getCurrentCollectionLayoutContext: () => null,
     detectEpisodeNo: () => { throw new Error("legacy title fallback must not run"); },
   };
   runInSandbox(
@@ -790,6 +1088,47 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
     failClosedSandbox,
   );
   assert.equal(failClosedSandbox.readEpisode("1.2"), null, "no-rule collection does not reinterpret 1.2 as episode 1");
+
+  const residualSandbox = {
+    getCurrentCollectionPartContext: () => null,
+    getCurrentCollectionLayoutContext: () => ({ currentKind: "long-range" }),
+    getOfficialBangumiProgressEpisodeNo: () => {
+      throw new Error("long-range residual detection must not fall through to official progress");
+    },
+    detectEpisodeNo: () => 9,
+  };
+  runInSandbox(
+    `${functionSource("detectCurrentEpisodeNo")};globalThis.readEpisode = detectCurrentEpisodeNo;`,
+    residualSandbox,
+  );
+  assert.equal(residualSandbox.readEpisode("第一季09-16"), null,
+    "long-range parts must clear residual single-episode recognition");
+
+  const prompt = sandbox.api.formatCollectionRangeBindingPrompt({
+    rule: {
+      bvid, id: "default:1-2", seasonKey: "default", sourceStart: 1, sourceEnd: 2,
+      targetStart: 1, subjectId: 1001, segmentCount: 2, autoProgress: true,
+    },
+    replacesRule: null,
+  }, 1001);
+  assert.match(prompt, /当前集检测到 2 段/, "split confirm copy refers to the current episode only");
+  assert.doesNotMatch(prompt, /每集 2 段/);
+
+  let storedProgress = {
+    [`${bvid}|default:1-11|1001|1`]: { completed: [1], updatedAt: Date.now() },
+    [`${bvid}|default:1-11|1001|2`]: { completed: [1, 2], updatedAt: Date.now() },
+    [`${bvid}|default:12-23|1002|1`]: { completed: [1], updatedAt: Date.now() },
+    ["BVOTHER|default:1-11|1001|1"]: { completed: [1], updatedAt: Date.now() },
+  };
+  sandbox.updateStoredCollectionSegmentProgress = async (mutator) => {
+    const changed = mutator(storedProgress) !== false;
+    return changed;
+  };
+  await sandbox.api.clearCollectionSegmentProgressForRule(bvid, "default:1-11");
+  assert.equal(storedProgress[`${bvid}|default:1-11|1001|1`], undefined);
+  assert.equal(storedProgress[`${bvid}|default:1-11|1001|2`], undefined);
+  assert.ok(storedProgress[`${bvid}|default:12-23|1002|1`], "other rules on the same BV stay");
+  assert.ok(storedProgress["BVOTHER|default:1-11|1001|1"], "same rule id on another BV stays");
 
   const episodeInfoSandbox = {
     state: { subjectId: null },
@@ -813,6 +1152,78 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
   );
   const explicitZeroInfo = await episodeInfoSandbox.readEpisodeInfo(373247, true);
   assert.deepEqual(plain(explicitZeroInfo), { episodeCount: 13, hasEpisodeZero: true });
+
+  let apiCalls = 0;
+  const countEpisodes = [
+    { id: 1, type: 0, sort: 1 },
+    { id: 2, type: 0, sort: 2 },
+    { id: 3, type: 1, sort: 3 },
+  ];
+  const countSandbox = {
+    state: {
+      subjectId: 42,
+      episodes: countEpisodes,
+    },
+    getNormalEpisodes: () => countEpisodes.filter((ep) => Number(ep.type) === 0),
+    resolveLongVideoBindingSubject: () => ({ eps: 99, total_episodes: 99 }),
+    bgmRequest: async () => {
+      apiCalls += 1;
+      throw new Error("local type=0 list should be preferred");
+    },
+  };
+  runInSandbox(
+    `${functionSource("getSubjectMainEpisodeCountForMapping", true)};globalThis.readCount = getSubjectMainEpisodeCountForMapping;`,
+    countSandbox,
+  );
+  assert.equal(await countSandbox.readCount(42), 2, "prefer already-loaded type=0 main episodes");
+  assert.equal(apiCalls, 0);
+
+  countSandbox.state.subjectId = 99;
+  countSandbox.getNormalEpisodes = () => [];
+  countSandbox.bgmRequest = async (path) => {
+    apiCalls += 1;
+    assert.match(path, /subject_id=99&type=0/);
+    return { total: 12, data: [{ id: 1 }] };
+  };
+  apiCalls = 0;
+  assert.equal(await countSandbox.readCount(99), 12, "fall back to type=0 episodes API total");
+  assert.equal(apiCalls, 1);
+
+  countSandbox.bgmRequest = async () => {
+    apiCalls += 1;
+    return { total: 0, data: [] };
+  };
+  apiCalls = 0;
+  await assert.rejects(
+    () => countSandbox.readCount(99),
+    /正片话数/,
+    "mapping must fail closed instead of using search-result eps",
+  );
+  assert.equal(apiCalls, 1);
+
+  countSandbox.bgmRequest = async () => {
+    apiCalls += 1;
+    return { total: 0, data: [{ id: 1 }] };
+  };
+  apiCalls = 0;
+  await assert.rejects(
+    () => countSandbox.readCount(99),
+    /正片话数/,
+    "limit=1 response data must not be mistaken for the authoritative episode total",
+  );
+  assert.equal(apiCalls, 1);
+
+  // Stale search-result eps must never create a mapping when the type=0 API fails.
+  countSandbox.bgmRequest = async () => {
+    apiCalls += 1;
+    throw new Error("network down");
+  };
+  apiCalls = 0;
+  await assert.rejects(
+    () => countSandbox.readCount(99),
+    /network down|正片话数/,
+    "API failure fails closed without falling back to candidate.eps",
+  );
 
   console.log("collection range mapping tests passed");
 })().catch((error) => {

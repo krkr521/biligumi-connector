@@ -241,6 +241,8 @@
     autoEpisodeSyncLastKey: "",
     autoWatchLastVideoKey: "",
     autoWatchLastVideoTime: 0,
+    autoWatchLastObservedAt: 0,
+    autoWatchSawHiddenSinceLastObservation: false,
     autoWatchSeekStartTime: null,
     autoWatchBlockedKey: "",
     autoWatchAuthBlocked: false,
@@ -2790,7 +2792,12 @@
     const currentSeason = getTitleSeasonNumber(titleInfo.sourceTitle);
     const evidenceSeasons = names.map(getTitleSeasonNumber).filter((value) => value > 0);
     const hasCurrentSeason = evidenceSeasons.includes(currentSeason);
-    if (currentSeason > 1 && !hasCurrentSeason) {
+    // Bidirectional season guard:
+    // - S2+ pages reject evidence that does not claim the current season (incl. unseasoned S1 names).
+    // - When both sides have known seasons, any mismatch is rejected (S1 page vs S2 evidence).
+    const knownSeasonsDisagree = evidenceSeasons.length > 0 && currentSeason > 0 && !hasCurrentSeason;
+    const laterSeasonWithoutMatchingEvidence = currentSeason > 1 && !hasCurrentSeason;
+    if (knownSeasonsDisagree || laterSeasonWithoutMatchingEvidence) {
       state.bindingGuardMessage = "检测到官方番剧已切换季度，旧绑定与当前季度不一致；请为当前季度重新选择 Bangumi 条目。";
       state.message = state.bindingGuardMessage;
       return false;
@@ -5351,11 +5358,14 @@
     const subjectId = Number(state.subjectId);
     let applied = false;
     if (collectionRule) {
+      const progressBvid = collectionContext.bvid;
+      const progressRuleId = collectionRule.id;
       await updateStoredCollectionMappings((mappings) => {
         if (!isRouteContextCurrent(routeContext)) return false;
-        applied = removeCollectionMappingRule(mappings, collectionContext.bvid, collectionRule.id);
+        applied = removeCollectionMappingRule(mappings, progressBvid, progressRuleId);
         return applied;
       });
+      if (applied) await clearCollectionSegmentProgressForRule(progressBvid, progressRuleId);
     } else {
       const bindingKeys = longVideoBindingSource
         ? [longVideoBindingSource.key]
@@ -6250,6 +6260,11 @@
       if (video) handleAutoWatchSeekEnd(video);
       checkAutoWatchProgress().catch(showError);
     }, true);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") {
+        state.autoWatchSawHiddenSinceLastObservation = true;
+      }
+    });
     window.setInterval(() => {
       checkAutoWatchProgress().catch(showError);
     }, 5000);
@@ -7332,16 +7347,41 @@
     }
   }
 
+  function isNaturalAutoWatchTimeAdvance(lastTime, currentTime, lastObservedAt, now) {
+    const videoDelta = currentTime - lastTime;
+    if (!(videoDelta >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS)) return true;
+    if (state.autoWatchSawHiddenSinceLastObservation) return true;
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") return true;
+    const observedAt = Number(lastObservedAt);
+    if (!Number.isFinite(observedAt) || observedAt <= 0) return true;
+    const wallDeltaSec = Math.max(0, (Number(now) - observedAt) / 1000);
+    // Allow up to 4x playback plus a small slack so background timer coalescing
+    // and modest speed-ups stay natural; silent seeks have tiny wall deltas.
+    return videoDelta <= wallDeltaSec * 4 + 30;
+  }
+
   function updateAutoWatchJumpState(video, syncKey, watchedPercent) {
     const currentTime = Number(video.currentTime);
     if (!Number.isFinite(currentTime)) return;
+    const now = Date.now();
+    if (typeof document !== "undefined" && document.visibilityState === "hidden") {
+      state.autoWatchSawHiddenSinceLastObservation = true;
+    }
     if (state.autoWatchLastVideoKey && state.autoWatchLastVideoKey !== syncKey) {
       if (state.autoWatchBlockedKey !== syncKey) state.autoWatchBlockedKey = "";
       state.autoWatchSeekStartTime = null;
+      state.autoWatchLastObservedAt = 0;
+      state.autoWatchSawHiddenSinceLastObservation = false;
     }
     const lastTime = state.autoWatchLastVideoKey === syncKey ? Number(state.autoWatchLastVideoTime) : 0;
+    const lastObservedAt = state.autoWatchLastVideoKey === syncKey ? Number(state.autoWatchLastObservedAt) : 0;
     const firstObservationAtOrPastThreshold = !lastTime && watchedPercent >= getAutoWatchThreshold();
-    const jumpedForward = lastTime > 0 && currentTime - lastTime >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS;
+    // Explicit seeks are blocked in handleAutoWatchSeekEnd even below threshold.
+    // Here only treat large currentTime gaps as jumps when wall-clock time cannot
+    // explain them (background/throttle/tab restore must remain natural).
+    const jumpedForward = lastTime > 0
+      && currentTime - lastTime >= AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS
+      && !isNaturalAutoWatchTimeAdvance(lastTime, currentTime, lastObservedAt, now);
     if (firstObservationAtOrPastThreshold || jumpedForward) {
       state.autoWatchBlockedKey = syncKey;
     } else if (
@@ -7354,11 +7394,15 @@
     }
     state.autoWatchLastVideoKey = syncKey;
     state.autoWatchLastVideoTime = currentTime;
+    state.autoWatchLastObservedAt = now;
+    state.autoWatchSawHiddenSinceLastObservation = false;
   }
 
   function resetAutoWatchObservationState() {
     state.autoWatchLastVideoKey = "";
     state.autoWatchLastVideoTime = 0;
+    state.autoWatchLastObservedAt = 0;
+    state.autoWatchSawHiddenSinceLastObservation = false;
     state.autoWatchSeekStartTime = null;
     state.autoWatchBlockedKey = "";
   }
@@ -8290,6 +8334,16 @@
     if (pathMedia) return `bili:md${stripBiliPrefix(pathMedia, "md")}`;
     const liveMediaId = getOfficialBangumiMediaIdFromDom();
     if (liveMediaId) return `bili:md${liveMediaId}`;
+    if (isOfficialBangumiPage()) {
+      const domMediaIds = Array.from(document.querySelectorAll("a[href*='/bangumi/media/md']"))
+        .map((node) => String(node.getAttribute("href") || "").match(/\/bangumi\/media\/md(\d+)/i)?.[1] || "")
+        .filter(Boolean)
+        .filter((value, index, list) => list.indexOf(value) === index);
+      // On EP routes __INITIAL_STATE__ can belong to the previously selected
+      // season. Multiple live media identities without a canonical title link
+      // are ambiguous, so do not fall back to that potentially stale state.
+      if (domMediaIds.length > 1) return "";
+    }
     const season = seasonId;
     const media = mediaId;
     if (season) return `bili:ss${stripBiliPrefix(season, "ss")}`;
@@ -8299,9 +8353,18 @@
 
   function getOfficialBangumiMediaIdFromDom() {
     if (!isOfficialBangumiPage()) return "";
-    const href = document.querySelector("a[href*='/bangumi/media/md']")?.getAttribute("href") || "";
-    const match = href.match(/\/bangumi\/media\/md(\d+)/i);
-    return match ? match[1] : "";
+    const titleLink = document.querySelector("a[class*='mediainfo_mediaTitle'][href*='/bangumi/media/md']");
+    const titleHref = String(titleLink && titleLink.getAttribute("href") || "");
+    const titleMatch = titleHref.match(/\/bangumi\/media\/md(\d+)/i);
+    if (titleMatch) return titleMatch[1];
+    const ids = [];
+    for (const node of Array.from(document.querySelectorAll("a[href*='/bangumi/media/md']"))) {
+      const match = String(node.getAttribute("href") || "").match(/\/bangumi\/media\/md(\d+)/i);
+      if (match) ids.push(match[1]);
+    }
+    const unique = ids.filter((value, index, list) => list.indexOf(value) === index);
+    // Multiple different media links: do not guess from document order.
+    return unique.length === 1 ? unique[0] : "";
   }
 
   function getOfficialBangumiSectionBindingKey() {
@@ -9462,6 +9525,12 @@
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
       return null;
     }
+    const layout = getCurrentCollectionLayoutContext();
+    if (layout && (layout.currentKind === "unmapped" || layout.currentKind === "long-range")) {
+      // Mixed collections: long-range episodes come only from long-video inference.
+      // Never leave a stale single-episode number from a previous mapped part.
+      return null;
+    }
     // Official Bangumi pages expose the current item as a 1-based position
     // such as "(2/13)". Prefer that ordinal over a visible label such as
     // "第1集": a season with a real episode 0 uses label 1 for item 2.
@@ -9517,7 +9586,19 @@
     if (getLongVideoEpisodeModeDecision() === true || (state.longVideoEpisodeGuess && state.longVideoEpisodeGuess.active)) return;
     const nextEpisodeNo = detectCurrentEpisodeNo(rawTitle);
     const safeNextEpisodeNo = Number(nextEpisodeNo);
-    if (!Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo <= 0) return;
+    if (!Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo <= 0) {
+      const layout = getCurrentCollectionLayoutContext();
+      if (
+        state.currentEpisodeNo != null
+        && layout
+        && (layout.currentKind === "unmapped" || layout.currentKind === "long-range")
+      ) {
+        state.rawTitle = rawTitle;
+        state.currentEpisodeNo = null;
+        render();
+      }
+      return;
+    }
     if (Number(state.currentEpisodeNo) === safeNextEpisodeNo) return;
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
@@ -9675,14 +9756,15 @@
       };
     }
 
-    const decimalMatch = text.match(/^0*(\d{1,3})\s*[.．]\s*([12])(?:\s+.+)?$/);
+    const decimalMatch = text.match(new RegExp(`^0*(\\d{1,3})\\s*[.．]\\s*([1-${MAX_COLLECTION_SEGMENTS}])(?:\\s+.+)?$`));
     if (decimalMatch) {
+      const fragmentIndex = Number(decimalMatch[2]);
       return {
         seasonKey: "default",
         seasonNo: null,
         episodeNo: Number(decimalMatch[1]),
-        fragmentIndex: Number(decimalMatch[2]),
-        fragmentCount: 2,
+        fragmentIndex,
+        fragmentCount: Math.max(2, fragmentIndex),
         label: text,
       };
     }
@@ -9818,16 +9900,20 @@
         fragmentsByEpisode.get(episodeNo).add(row.parsed.fragmentIndex);
       });
       const episodes = Array.from(fragmentsByEpisode.keys()).sort((left, right) => left - right);
-      const fragmentCount = ordered.reduce((maximum, row) => Math.max(maximum, row.parsed.fragmentIndex), 0);
       const consecutiveEpisodes = episodes.every((episodeNo, index) => index === 0 || episodeNo === episodes[index - 1] + 1);
-      const completeFragments = fragmentCount >= 2 && episodes.every((episodeNo) => {
+      // Per-episode completeness: each episode may have its own segment count (e.g. ep1
+      // has three parts, ep2 has two), but gaps such as .1+.3 without .2 fail closed.
+      const completeFragments = episodes.every((episodeNo) => {
         const fragments = fragmentsByEpisode.get(episodeNo);
-        if (!fragments || fragments.size !== fragmentCount) return false;
-        for (let fragment = 1; fragment <= fragmentCount; fragment += 1) {
+        if (!fragments || !fragments.size) return false;
+        const maxFragment = Math.max(...fragments);
+        if (maxFragment < 1 || fragments.size !== maxFragment) return false;
+        for (let fragment = 1; fragment <= maxFragment; fragment += 1) {
           if (!fragments.has(fragment)) return false;
         }
         return true;
       });
+      const hasSplitEpisode = episodes.some((episodeNo) => (fragmentsByEpisode.get(episodeNo) || new Set()).size >= 2);
       const orderedSequence = ordered.every((row, index) => {
         if (index === 0) return row.parsed.fragmentIndex === 1;
         const previous = ordered[index - 1];
@@ -9835,7 +9921,13 @@
           ? row.parsed.fragmentIndex === previous.parsed.fragmentIndex + 1
           : row.parsed.episodeNo === previous.parsed.episodeNo + 1 && row.parsed.fragmentIndex === 1;
       });
-      if (episodes.length < MIN_COLLECTION_PARSED_PARTS || !consecutiveEpisodes || !completeFragments || !orderedSequence) return;
+      if (
+        episodes.length < MIN_COLLECTION_PARSED_PARTS
+        || !consecutiveEpisodes
+        || !completeFragments
+        || !hasSplitEpisode
+        || !orderedSequence
+      ) return;
       ordered.forEach((row) => qualifiedHierarchicalPartNos.add(row.partNo));
     });
     return rows.filter((row) => row.parsed && (
@@ -10047,14 +10139,20 @@
 
   async function getSubjectMainEpisodeCountForMapping(subjectId) {
     const safeSubjectId = Number(subjectId);
-    if (Number(state.subjectId) === safeSubjectId && getNormalEpisodes().length) return getNormalEpisodes().length;
-    const candidate = resolveLongVideoBindingSubject(safeSubjectId);
-    const known = Number(candidate && (candidate.eps || candidate.total_episodes));
-    if (Number.isFinite(known) && known > 0) return Math.round(known);
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0) {
+      throw new Error("无法读取该 Bangumi 条目的正片话数");
+    }
+    // Prefer already-loaded type=0 main episodes for the current subject.
+    if (Number(state.subjectId) === safeSubjectId) {
+      const localCount = getNormalEpisodes().length;
+      if (localCount > 0) return localCount;
+    }
+    // Never trust search-result eps/total_episodes; they are often stale or include specials.
     const response = await bgmRequest(`/v0/episodes?subject_id=${safeSubjectId}&type=0&limit=1&offset=0`);
     const total = Number(response && response.total);
     if (Number.isFinite(total) && total > 0) return Math.round(total);
-    return Array.isArray(response && response.data) ? response.data.length : 0;
+    // This request intentionally uses limit=1, so data.length is not a total.
+    throw new Error("无法读取该 Bangumi 条目的正片话数");
   }
 
   async function getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero = false) {
@@ -10075,8 +10173,12 @@
     const response = await bgmRequestPagedData(`/v0/episodes?subject_id=${safeSubjectId}&type=0`, { pageSize: 200 });
     const episodes = Array.isArray(response && response.data) ? response.data : [];
     const total = Number(response && response.total);
+    const episodeCount = Number.isFinite(total) && total > 0 ? Math.round(total) : episodes.length;
+    if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
+      throw new Error("无法读取该 Bangumi 条目的正片话数");
+    }
     return {
-      episodeCount: Number.isFinite(total) && total > 0 ? Math.round(total) : episodes.length,
+      episodeCount,
       hasEpisodeZero: episodes.some((episode) => Number(episode && episode.sort) === 0),
     };
   }
@@ -10085,7 +10187,7 @@
     const rule = proposal.rule;
     const subject = resolveLongVideoBindingSubject(subjectId);
     const subjectName = subject ? displaySubjectName(subject) : `Bangumi subject ${subjectId}`;
-    const splitNote = rule.segmentCount > 1 ? `；每集 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
+    const splitNote = rule.segmentCount > 1 ? `；当前集检测到 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
     const targetRange = formatCollectionTargetRange(rule);
     const zeroNote = Number(rule.sourceStart) === 0
       ? (rule.targetEpisodeZero
@@ -10129,6 +10231,14 @@
   function isCurrentCollectionPartAutoMarkEligible() {
     const layout = getCurrentCollectionLayoutContext();
     if (layout && layout.currentKind === "unmapped") return false;
+    if (layout && layout.currentKind === "long-range") {
+      // Hybrid long-range parts must not auto-mark as a single episode unless
+      // long-video mode is on and the current guess is safe.
+      if (getLongVideoEpisodeModeDecision() !== true) return false;
+      const guess = state.longVideoEpisodeGuess;
+      if (!guess || !guess.active || !guess.episode || !guess.autoMarkSafe) return false;
+      return true;
+    }
     const context = getCurrentCollectionPartContext();
     if (!context) return true;
     const resolution = getCollectionMappingResolution(context);
@@ -10137,6 +10247,23 @@
     if (!rule) return false;
     if (!rule.autoProgress || getCollectionMappedEpisodeNo(context, rule) == null) return false;
     return true;
+  }
+
+  async function clearCollectionSegmentProgressForRule(bvid, ruleId) {
+    const safeBvid = String(bvid || "").toUpperCase();
+    const safeRuleId = String(ruleId || "");
+    if (!safeBvid || !safeRuleId) return;
+    await updateStoredCollectionSegmentProgress((progress) => {
+      let changed = false;
+      for (const key of Object.keys(progress)) {
+        const parts = String(key).split("|");
+        if (parts[0] === safeBvid && parts[1] === safeRuleId) {
+          delete progress[key];
+          changed = true;
+        }
+      }
+      return changed;
+    });
   }
 
   function getCollectionSegmentProgressKey(context, rule) {
