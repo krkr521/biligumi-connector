@@ -2480,22 +2480,6 @@
       color: #99a2ad;
       font-size: 10px;
     }
-    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset {
-      display: block;
-      margin: 8px 0 0;
-      padding: 0;
-      border: 0;
-      background: transparent;
-      color: #00a1d6;
-      font-size: 12px;
-      cursor: pointer;
-    }
-    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset:hover {
-      text-decoration: underline;
-    }
-    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset[hidden] {
-      display: none;
-    }
     .${DANMAKU_FAVORITE_BUTTON_CLASS} {
       flex: 0 0 auto;
       box-sizing: border-box;
@@ -6816,13 +6800,10 @@
       </div>
       <input class="biligumi-oped-hover-slider" type="range" data-role="oped-hover-slider" min="${OPED_SKIP_SLIDER_MIN}" max="${OPED_SKIP_SLIDER_MAX}" step="${OPED_SKIP_SLIDER_STEP}">
       <div class="biligumi-oped-hover-scale"><span>${OPED_SKIP_SLIDER_MIN}s</span><span>${OPED_SKIP_SLIDER_MAX}s</span></div>
-      <button type="button" class="biligumi-oped-hover-reset" data-role="oped-hover-reset" hidden>恢复跟随全局</button>
     `;
     const slider = panel.querySelector("[data-role='oped-hover-slider']");
-    const resetButton = panel.querySelector("[data-role='oped-hover-reset']");
     slider.addEventListener("input", handleOpedHoverSliderInput);
     slider.addEventListener("pointerdown", handleOpedHoverSliderPointerDown);
-    resetButton.addEventListener("click", handleOpedHoverResetClick);
     // Keep panel interactions from reaching the player (click toggles playback).
     ["mousedown", "pointerdown", "click", "dblclick"].forEach((type) => {
       panel.addEventListener(type, (event) => event.stopPropagation());
@@ -6835,7 +6816,6 @@
     if (!panel) return;
     const slider = panel.querySelector("[data-role='oped-hover-slider']");
     const valueNode = panel.querySelector("[data-role='oped-hover-value']");
-    const resetButton = panel.querySelector("[data-role='oped-hover-reset']");
     const seconds = normalizeOpedSkipSeconds(config && config.seconds);
     // Assigning an out-of-range value clamps the thumb to the nearest end;
     // the first drag then snaps the stored value onto the slider.
@@ -6844,7 +6824,6 @@
     }
     const hasOverride = hasOpedSkipSecondsOverride();
     if (valueNode) valueNode.textContent = `${seconds} 秒${hasOverride ? "" : " · 全局"}`;
-    if (resetButton) resetButton.hidden = !hasOverride;
   }
 
   function handleOpedSkipButtonMouseEnter(event) {
@@ -6896,17 +6875,6 @@
     if (!button) return;
     button.title = `向后跳过 ${seconds} 秒`;
     syncOpedSkipHoverPanel(button, getOpedSkipConfig());
-  }
-
-  function handleOpedHoverResetClick(event) {
-    event.preventDefault();
-    clearOpedSkipSecondsOverride();
-    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
-    const button = event.currentTarget.closest(`.${OPED_SKIP_BUTTON_CLASS}`);
-    if (!button) return;
-    const config = getOpedSkipConfig();
-    button.title = `向后跳过 ${config.seconds} 秒`;
-    syncOpedSkipHoverPanel(button, config);
   }
 
   function isOpedSkipHoverEvent(event) {
