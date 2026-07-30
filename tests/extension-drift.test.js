@@ -68,6 +68,14 @@ const IDENTICAL_FUNCTIONS = [
   "getBindingKeysForCurrentPage",
   "getCurrentBinding",
   "renderLongVideoBindingPrompt",
+  "requestInlineConfirm",
+  "settleInlineConfirm",
+  "renderInlineConfirm",
+  "renderSettingsInlineConfirm",
+  "mountSettingsInlineConfirm",
+  "removeSettingsInlineConfirm",
+  "focusInlineConfirmButton",
+  "scheduleRouteRefresh",
   "resolveLongVideoBindingSubject",
   "buildLongVideoBindingPromptState",
   "showLongVideoBindingPrompt",
@@ -75,6 +83,11 @@ const IDENTICAL_FUNCTIONS = [
   "cancelLongVideoBindingPrompt",
   "stopLongVideoBindingWaitLoop",
   "getLongVideoIdentifyDismissKey",
+  "isModalBackdropTarget",
+  "handleModalPointerDown",
+  "handleModalPointerUp",
+  "shouldHandleModalAction",
+  "handlePanelKeydown",
 ];
 for (const name of IDENTICAL_FUNCTIONS) {
   const userscriptBlock = extractFunction(userscriptSource, name);

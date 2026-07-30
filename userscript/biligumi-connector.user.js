@@ -226,6 +226,7 @@
     longVideoDetectionCache: null,
     longVideoDetectionKeyMemo: null,
     longVideoBindingPrompt: null,
+    inlineConfirm: null,
     longVideoIdentifyDismissedKey: "",
     nonMainResults: [],
     nonMainKeyword: "",
@@ -1137,6 +1138,68 @@
       border-top: 0;
       padding-top: 0;
     }
+    #${PANEL_ID} .biligumi-row.biligumi-inline-confirm {
+      margin-top: 10px;
+      padding: 10px 12px;
+      border: 1px solid #e8a3b2;
+      border-radius: 8px;
+      background: #fff7f9;
+    }
+    #${PANEL_ID} .biligumi-row.biligumi-inline-confirm:first-child {
+      margin-top: 0;
+      padding-top: 10px;
+      border-top: 1px solid #e8a3b2;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm-text {
+      color: var(--bgm-ink);
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-line;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 9px;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 10px;
+      border: 1px solid var(--bgm-border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--bgm-ink);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button:hover {
+      border-color: var(--bgm-pink);
+      background: #fff7f9;
+      color: var(--bgm-pink);
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button.primary {
+      border-color: var(--bgm-pink);
+      background: var(--bgm-pink);
+      color: #fff;
+      font-weight: 600;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button.primary:hover {
+      border-color: #c25f75;
+      background: #c25f75;
+      color: #fff;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button.danger {
+      border-color: #d96363;
+      background: #d96363;
+      color: #fff;
+      font-weight: 600;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm .biligumi-inline-confirm-actions .biligumi-button.danger:hover {
+      border-color: #c94e4e;
+      background: #c94e4e;
+      color: #fff;
+    }
     #${PANEL_ID} .biligumi-row.biligumi-score-row.simple {
       padding-bottom: 2px;
     }
@@ -1806,6 +1869,69 @@
       border-left-color: #e59a9a;
       color: #d03030;
       font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-overlay {
+      position: absolute;
+      inset: 0;
+      z-index: 1;
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background: rgba(15, 23, 42, .38);
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-card {
+      width: min(420px, calc(100vw - 60px));
+      padding: 14px 16px;
+      border: 1px solid #efc4cc;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 12px 28px rgba(52, 64, 84, .24);
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-text {
+      color: #344252;
+      font-size: 13px;
+      line-height: 1.6;
+      white-space: pre-line;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 9px;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 10px;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button:hover {
+      border-color: #d9758c;
+      background: #fff7f9;
+      color: #d9758c;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button.primary {
+      border-color: #d9758c;
+      background: #d9758c;
+      color: #fff;
+      font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button.primary:hover {
+      border-color: #c25f75;
+      background: #c25f75;
+      color: #fff;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button.danger {
+      border-color: #d96363;
+      background: #d96363;
+      color: #fff;
+      font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-settings-confirm-actions .biligumi-button.danger:hover {
+      border-color: #c94e4e;
+      background: #c94e4e;
+      color: #fff;
     }
     #${SETTINGS_ID} .biligumi-settings-field {
       min-width: 0;
@@ -2653,6 +2779,7 @@
     state.collectionEditorContext = null;
     state.collectionDeleteConfirmSubjectId = null;
     removeModal();
+    settleInlineConfirm(false);
     state.busy = true;
     state.message = "正在等待 B站页面更新...";
     state.error = "";
@@ -2706,6 +2833,7 @@
     state.longVideoDetectionCache = null;
     state.longVideoDetectionKeyMemo = null;
     clearLongVideoBindingPrompt();
+    settleInlineConfirm(false);
     state.longVideoIdentifyDismissedKey = "";
     refreshOpedSkipButton();
     refreshDanmakuFavoriteButtons();
@@ -3105,7 +3233,7 @@
       removeSubjectInfoPanel();
       removeCharacterStrip();
       const nonMainKeyword = getNonMainPreviewKeyword();
-      const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt;
+      const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
       panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
@@ -3137,7 +3265,7 @@
     `;
 
     if (state.panelCollapsed) {
-      panel.innerHTML = headerHtml;
+      panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3851,6 +3979,7 @@
           </div>
           ${renderInlineAutoPreview()}
           ${renderLongVideoBindingPrompt()}
+          ${renderInlineConfirm()}
           ${renderSearchResults()}
           ${state.subjectId ? `<div class="biligumi-row"><button class="biligumi-button" data-action="unbind">解绑当前页面</button></div>` : ""}
         </div>
@@ -3860,6 +3989,7 @@
     const scoreMode = normalizeScoreDetailMode(state.scoreDetailMode);
     return `
       <div class="biligumi-card-body ${scoreMode === "simple" ? "biligumi-score-simple" : ""}">
+        ${renderInlineConfirm()}
         ${renderCollectionSection()}
         <div class="biligumi-row biligumi-score-row ${scoreMode}">
           ${renderScoreBox()}
@@ -3915,12 +4045,13 @@
         </div>
       `
       : "";
-    const body = state.standaloneSearchExpanded || nonMainKeyword || state.longVideoBindingPrompt
+    const body = state.standaloneSearchExpanded || nonMainKeyword || state.longVideoBindingPrompt || (state.inlineConfirm && state.inlineConfirm.context === "panel")
       ? `
         <div class="biligumi-search-pane">
           ${searchForm}
           ${nonMainKeyword ? renderInlineAutoPreview(nonMainKeyword) : ""}
           ${renderLongVideoBindingPrompt()}
+          ${renderInlineConfirm()}
         </div>
         <div class="biligumi-foot">
           <span>${state.busy ? "处理中..." : "可直接搜索 Bangumi"} · v${SCRIPT_VERSION}</span>
@@ -4381,6 +4512,20 @@
     `;
   }
 
+  function renderInlineConfirm() {
+    const pending = state.inlineConfirm;
+    if (!pending || pending.context !== "panel") return "";
+    return `
+      <div class="biligumi-row biligumi-inline-confirm">
+        <div class="biligumi-inline-confirm-text">${escapeHtml(pending.message)}</div>
+        <div class="biligumi-inline-confirm-actions">
+          <button type="button" class="biligumi-button" data-action="inline-confirm-cancel">${escapeHtml(pending.cancelLabel)}</button>
+          <button type="button" class="biligumi-button ${pending.danger ? "danger" : "primary"}" data-action="inline-confirm-accept">${escapeHtml(pending.confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+  }
+
   function renderScoreBox() {
     const rating = state.subject && state.subject.rating ? state.subject.rating : {};
     const mode = normalizeScoreDetailMode(state.scoreDetailMode);
@@ -4701,10 +4846,10 @@
     }
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
-    if (action === "settings-reset") resetSettingsToDefaults();
-    if (action === "clear-settings-token") clearSavedAccessToken();
+    if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
+    if (action === "clear-settings-token") clearSavedAccessToken().catch(showError);
     if (action === "open-whitelist-space") openWhitelistSpace(target);
-    if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target);
+    if (action === "delete-whitelist-item") deleteWhitelistSettingItem(target).catch(showError);
     if (action === "reset-oped-skip-hotkey") resetOpedSkipHotkeyInput();
     if (action === "clear-oped-skip-hotkey") clearOpedSkipHotkeyInput();
     if (action === "edit-rate") setEditorRate(Number(target.dataset.rate));
@@ -4716,6 +4861,8 @@
     if (action === "open-bangumi-search") openBangumiSearchFromInput();
     if (action === "clear-search") clearSearchResults();
     if (action === "bind") requestBindSubject(Number(target.dataset.subjectId)).catch(showError);
+    if (action === "inline-confirm-accept") settleInlineConfirm(true);
+    if (action === "inline-confirm-cancel") settleInlineConfirm(false);
     if (action === "confirm-long-video-bind") resolveLongVideoBindingPrompt(true).catch(showError);
     if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
     if (action === "retry-long-video-bind-wait") retryLongVideoBindingWait();
@@ -4742,7 +4889,17 @@
   }
 
   function handlePanelKeydown(event) {
-    if (!event.isTrusted || event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if (!event.isTrusted) return;
+    if (event.key === "Escape") {
+      const settings = document.getElementById(SETTINGS_ID);
+      if (state.inlineConfirm && state.inlineConfirm.context === "panel" && !(settings && settings.contains(event.target))) {
+        event.preventDefault();
+        event.stopPropagation();
+        settleInlineConfirm(false);
+      }
+      return;
+    }
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
 
     const panel = document.getElementById(PANEL_ID);
     if (!panel || !panel.contains(event.target)) return;
@@ -5197,6 +5354,54 @@
     if (options.render && hadPrompt) render();
   }
 
+  function requestInlineConfirm(options = {}) {
+    settleInlineConfirm(false);
+    const context = options.context === "settings" ? "settings" : "panel";
+    if (context === "settings" && !document.getElementById(SETTINGS_ID)) {
+      return Promise.resolve(false);
+    }
+    return new Promise((resolve) => {
+      state.inlineConfirm = {
+        message: String(options.message || ""),
+        confirmLabel: options.confirmLabel ? String(options.confirmLabel) : "确定",
+        cancelLabel: options.cancelLabel ? String(options.cancelLabel) : "取消",
+        danger: Boolean(options.danger),
+        context,
+        resolve,
+      };
+      if (state.inlineConfirm.context === "settings") {
+        mountSettingsInlineConfirm();
+      } else {
+        render();
+        focusInlineConfirmButton();
+      }
+    });
+  }
+
+  function settleInlineConfirm(accepted) {
+    const pending = state.inlineConfirm;
+    if (!pending) return;
+    state.inlineConfirm = null;
+    if (pending.context === "settings") {
+      removeSettingsInlineConfirm();
+    } else {
+      render();
+    }
+    pending.resolve(Boolean(accepted));
+  }
+
+  function focusInlineConfirmButton() {
+    const pending = state.inlineConfirm;
+    if (!pending) return;
+    const root = document.getElementById(pending.context === "settings" ? SETTINGS_ID : PANEL_ID);
+    const buttons = root
+      ? root.querySelectorAll(".biligumi-inline-confirm-actions .biligumi-button, .biligumi-settings-confirm-actions .biligumi-button")
+      : [];
+    if (!buttons || !buttons.length) return;
+    const target = buttons[pending.danger ? 0 : buttons.length - 1];
+    if (target && target.focus) target.focus();
+  }
+
   function beginLongVideoBindingWait(subjectId, routeContext, seed = {}) {
     const safeSubjectId = Number(subjectId);
     if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrentPageContext(routeContext)) return;
@@ -5334,13 +5539,15 @@
       ? null
       : await buildLongVideoRangeGroupBindingProposal(subjectId);
     if (!isCurrentPageContext(context)) return;
-    if (collectionProposal && !window.confirm(formatCollectionRangeBindingPrompt(collectionProposal, subjectId))) {
+    if (collectionProposal && !(await requestInlineConfirm({ message: formatCollectionRangeBindingPrompt(collectionProposal, subjectId) }))) {
+      if (!isCurrentPageContext(context)) return;
       state.busy = false;
       state.message = "已取消绑定；没有修改合集映射。";
       state.error = "";
       render();
       return;
     }
+    if (!isCurrentPageContext(context)) return;
     let applied = false;
     let rangeGroupWriteOutcome = "";
     if (collectionProposal) {
@@ -5365,8 +5572,9 @@
       const useLongVideoRangeGroup = Boolean(
         longVideoRangeProposal
         && (longVideoRangeProposal.alreadyBound
-          || window.confirm(formatLongVideoRangeGroupBindingPrompt(longVideoRangeProposal, subjectId)))
+          || await requestInlineConfirm({ message: formatLongVideoRangeGroupBindingPrompt(longVideoRangeProposal, subjectId) }))
       );
+      if (!isCurrentPageContext(context)) return;
       await updateStoredBindings((bindings) => {
         if (!isCurrentPageContext(context)) return false;
         if (useLongVideoRangeGroup) {
@@ -5417,16 +5625,19 @@
     const collectionContext = getCurrentCollectionPartContext();
     const collectionRule = collectionContext && getCollectionMappingRule(collectionContext);
     const longVideoBindingSource = collectionRule ? null : getCurrentLongVideoBindingSource(state.subjectId);
-    const ok = window.confirm(collectionRule
-      ? `只删除合集范围“${formatCollectionSourceRange(collectionRule)}”的绑定，不会影响其他范围或删除 Bangumi 记录。确定解绑吗？`
-      : longVideoBindingSource && longVideoBindingSource.type === "group"
-      ? `当前条目继承自第${longVideoBindingSource.group.seasonNo}季 ${longVideoBindingSource.group.groupStart}-${longVideoBindingSource.group.groupEnd}集的范围组。解绑会停止该组其他分P继续继承，但不会删除已有的分P覆盖或 Bangumi 记录。确定吗？`
-      : longVideoBindingSource && longVideoBindingSource.type === "part" && longVideoBindingSource.fallbackSubjectId
-      ? "当前分P存在单独覆盖；删除后会恢复同一范围组的继承绑定。确定吗？"
-      : "只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？");
-    if (!ok) return;
     const context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     const subjectId = Number(state.subjectId);
+    const ok = await requestInlineConfirm({
+      danger: true,
+      message: collectionRule
+        ? `只删除合集范围“${formatCollectionSourceRange(collectionRule)}”的绑定，不会影响其他范围或删除 Bangumi 记录。确定解绑吗？`
+        : longVideoBindingSource && longVideoBindingSource.type === "group"
+        ? `当前条目继承自第${longVideoBindingSource.group.seasonNo}季 ${longVideoBindingSource.group.groupStart}-${longVideoBindingSource.group.groupEnd}集的范围组。解绑会停止该组其他分P继续继承，但不会删除已有的分P覆盖或 Bangumi 记录。确定吗？`
+        : longVideoBindingSource && longVideoBindingSource.type === "part" && longVideoBindingSource.fallbackSubjectId
+        ? "当前分P存在单独覆盖；删除后会恢复同一范围组的继承绑定。确定吗？"
+        : "只解除当前 B站页面和 Bangumi 条目的绑定，不会删除 Bangumi 记录。确定解绑吗？",
+    });
+    if (!ok || !isCurrentPageContext(context)) return;
     let applied = false;
     if (collectionRule) {
       const progressBvid = collectionContext.bvid;
@@ -7506,6 +7717,7 @@
   }
 
   function closeSettings() {
+    settleInlineConfirm(false);
     state.settingsOpen = false;
     removeModal();
     render();
@@ -7643,8 +7855,8 @@
     return token.length === BANGUMI_ACCESS_TOKEN_LENGTH && !/\s/.test(token);
   }
 
-  function resetSettingsToDefaults() {
-    if (!window.confirm("将界面相关设置恢复为默认值？\nAccess Token 与白名单不会被清除。")) return;
+  async function resetSettingsToDefaults() {
+    if (!(await requestInlineConfirm({ context: "settings", danger: true, confirmLabel: "恢复默认", message: "将界面相关设置恢复为默认值？\nAccess Token 与白名单不会被清除。" }))) return;
 
     state.characterStripEnabled = DEFAULT_CHARACTER_STRIP_ENABLED;
     state.subjectInfoPanelEnabled = DEFAULT_SUBJECT_INFO_PANEL_ENABLED;
@@ -7680,6 +7892,38 @@
     mountModal("settings-cancel", renderSettingsDialog());
   }
 
+  function renderSettingsInlineConfirm() {
+    const pending = state.inlineConfirm;
+    if (!pending || pending.context !== "settings") return "";
+    return `
+      <div class="biligumi-settings-confirm-card" data-action="noop" role="alertdialog" aria-modal="true" aria-label="确认操作">
+        <div class="biligumi-settings-confirm-text">${escapeHtml(pending.message)}</div>
+        <div class="biligumi-settings-confirm-actions">
+          <button type="button" class="biligumi-button" data-action="inline-confirm-cancel">${escapeHtml(pending.cancelLabel)}</button>
+          <button type="button" class="biligumi-button ${pending.danger ? "danger" : "primary"}" data-action="inline-confirm-accept">${escapeHtml(pending.confirmLabel)}</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function mountSettingsInlineConfirm() {
+    const settings = document.getElementById(SETTINGS_ID);
+    if (!settings) return;
+    removeSettingsInlineConfirm();
+    const overlay = document.createElement("div");
+    overlay.className = "biligumi-settings-confirm-overlay";
+    overlay.dataset.action = "inline-confirm-cancel";
+    overlay.innerHTML = renderSettingsInlineConfirm();
+    settings.appendChild(overlay);
+    focusInlineConfirmButton();
+  }
+
+  function removeSettingsInlineConfirm() {
+    const settings = document.getElementById(SETTINGS_ID);
+    const overlay = settings && settings.querySelector(".biligumi-settings-confirm-overlay");
+    if (overlay) overlay.remove();
+  }
+
   function refreshSettingsTokenHelp(settings, options = {}) {
     const help = settings && settings.querySelector("[data-role='settings-token-help']");
     const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
@@ -7704,9 +7948,9 @@
     if (clearButton) clearButton.disabled = !state.token;
   }
 
-  function clearSavedAccessToken() {
+  async function clearSavedAccessToken() {
     if (!state.token) return;
-    if (!window.confirm("确定清除已保存的 Access Token 吗？\n清除后需要重新填写 Token 才能访问需要登录的 Bangumi 功能。")) return;
+    if (!(await requestInlineConfirm({ context: "settings", danger: true, message: "确定清除已保存的 Access Token 吗？\n清除后需要重新填写 Token 才能访问需要登录的 Bangumi 功能。" }))) return;
     state.token = "";
     state.username = "";
     state.collection = null;
@@ -7734,13 +7978,13 @@
     window.open(url, "_blank", "noopener,noreferrer");
   }
 
-  function deleteWhitelistSettingItem(target) {
+  async function deleteWhitelistSettingItem(target) {
     const settings = document.getElementById(SETTINGS_ID);
     const row = target && target.closest ? target.closest("[data-role='settings-whitelist-row']") : null;
     if (!settings || !row) return;
     const value = String(row.dataset.value || "").trim();
     const label = value || "这条白名单";
-    if (!window.confirm(`确定删除白名单「${label}」吗？`)) return;
+    if (!(await requestInlineConfirm({ context: "settings", danger: true, message: `确定删除白名单「${label}」吗？` }))) return;
     row.remove();
     syncSettingsWhitelistInput(settings);
     const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
@@ -7866,7 +8110,10 @@
     // stops propagation), so those keep their behavior.
     wrapper.addEventListener("keydown", (event) => {
       if (event.key !== "Escape") return;
-      if (state.collectionEditorOpen) {
+      if (state.inlineConfirm && state.inlineConfirm.context === "settings") {
+        event.stopPropagation();
+        settleInlineConfirm(false);
+      } else if (state.collectionEditorOpen) {
         event.stopPropagation();
         closeCollectionEditor();
       } else if (state.settingsOpen) {
@@ -7988,20 +8235,26 @@
     }
   }
 
+  function isModalBackdropTarget(wrapper, target) {
+    return target === wrapper
+      || Boolean(target && target.classList && target.classList.contains("biligumi-settings-confirm-overlay"));
+  }
+
   function handleModalPointerDown(event) {
     const wrapper = event.currentTarget;
-    wrapper.dataset.backdropPointerStarted = event.target === wrapper ? "1" : "0";
+    wrapper.dataset.backdropPointerStarted = isModalBackdropTarget(wrapper, event.target) ? "1" : "0";
     wrapper.dataset.backdropPointerEnded = "0";
   }
 
   function handleModalPointerUp(event) {
     const wrapper = event.currentTarget;
-    wrapper.dataset.backdropPointerEnded = event.target === wrapper ? "1" : "0";
+    wrapper.dataset.backdropPointerEnded = isModalBackdropTarget(wrapper, event.target) ? "1" : "0";
   }
 
   function shouldHandleModalAction(event, settings, target, action) {
-    if (target !== settings || (action !== "settings-cancel" && action !== "collection-cancel")) return true;
-    const closeFromBackdropClick = event.target === settings
+    if (action !== "settings-cancel" && action !== "collection-cancel" && action !== "inline-confirm-cancel") return true;
+    if (!isModalBackdropTarget(settings, target)) return true;
+    const closeFromBackdropClick = isModalBackdropTarget(settings, event.target)
       && settings.dataset.backdropPointerStarted === "1"
       && settings.dataset.backdropPointerEnded === "1";
     settings.dataset.backdropPointerStarted = "0";

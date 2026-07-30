@@ -73,7 +73,7 @@ assert.ok(
   "userscript settings save must release the auth gate on token change",
 );
 assert.ok(
-  extractFunction(userscriptSource, "clearSavedAccessToken").includes("state.autoWatchAuthBlocked = false;"),
+  extractFunction(userscriptSource, "clearSavedAccessToken", { async: true }).includes("state.autoWatchAuthBlocked = false;"),
   "userscript token clear must release the auth gate",
 );
 assert.ok(
