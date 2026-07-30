@@ -165,6 +165,7 @@
   const OPED_SKIP_SLIDER_MIN = 20;
   const OPED_SKIP_SLIDER_MAX = 100;
   const OPED_SKIP_SLIDER_STEP = 5;
+  const OPED_SKIP_HOVER_HIDE_DELAY_MS = 300;
   const DEFAULT_OPED_SKIP_HOTKEY = "Ctrl+Alt+ArrowRight";
   const DEFAULT_CHARACTER_STRIP_ENABLED = true;
   const DEFAULT_SUBJECT_INFO_PANEL_ENABLED = false;
@@ -235,6 +236,7 @@
     opedSkipSeconds: normalizeOpedSkipSeconds(readValue(STORAGE.opedSkipSeconds, DEFAULT_OPED_SKIP_SECONDS)),
     opedSkipHotkey: normalizeHotkey(readValue(STORAGE.opedSkipHotkey, DEFAULT_OPED_SKIP_HOTKEY)),
     opedHoverDragging: false,
+    opedHoverHideTimer: 0,
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
@@ -2422,7 +2424,7 @@
     .${OPED_SKIP_BUTTON_CLASS} .${OPED_SKIP_HOVER_PANEL_CLASS} {
       position: absolute;
       left: 50%;
-      bottom: calc(100% + 10px);
+      bottom: calc(100% + 28px);
       transform: translateX(-50%);
       display: none;
       box-sizing: border-box;
@@ -2439,15 +2441,6 @@
       white-space: normal;
       cursor: default;
       z-index: 100;
-    }
-    .${OPED_SKIP_BUTTON_CLASS} .${OPED_SKIP_HOVER_PANEL_CLASS}::after {
-      content: "";
-      position: absolute;
-      left: 50%;
-      top: 100%;
-      transform: translateX(-50%);
-      border: 6px solid transparent;
-      border-top-color: rgba(21, 25, 31, .94);
     }
     .${OPED_SKIP_BUTTON_CLASS}.is-oped-hover-open .${OPED_SKIP_HOVER_PANEL_CLASS} {
       display: block;
@@ -6917,13 +6910,30 @@
 
   function handleOpedSkipButtonMouseEnter(event) {
     const button = event.currentTarget;
+    cancelOpedSkipHoverHide();
     syncOpedSkipHoverPanel(button, getOpedSkipConfig());
     button.classList.add("is-oped-hover-open");
   }
 
   function handleOpedSkipButtonMouseLeave(event) {
     if (state.opedHoverDragging) return;
-    event.currentTarget.classList.remove("is-oped-hover-open");
+    scheduleOpedSkipHoverHide(event.currentTarget);
+  }
+
+  function cancelOpedSkipHoverHide() {
+    if (!state.opedHoverHideTimer) return;
+    window.clearTimeout(state.opedHoverHideTimer);
+    state.opedHoverHideTimer = 0;
+  }
+
+  function scheduleOpedSkipHoverHide(button) {
+    cancelOpedSkipHoverHide();
+    state.opedHoverHideTimer = window.setTimeout(() => {
+      state.opedHoverHideTimer = 0;
+      if (state.opedHoverDragging) return;
+      if (button && button.matches(":hover")) return;
+      if (button) button.classList.remove("is-oped-hover-open");
+    }, OPED_SKIP_HOVER_HIDE_DELAY_MS);
   }
 
   function handleOpedHoverSliderPointerDown() {
