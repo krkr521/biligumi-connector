@@ -2413,9 +2413,15 @@
       transition: background .16s, opacity .16s, color .16s;
       vertical-align: middle;
     }
-    .${OPED_SKIP_BUTTON_CLASS}:hover {
+    .${OPED_SKIP_BUTTON_CLASS}:hover,
+    .${OPED_SKIP_BUTTON_CLASS}:focus-within {
       background: rgba(255, 255, 255, .16);
       opacity: 1;
+    }
+    .${OPED_SKIP_BUTTON_CLASS} .biligumi-oped-skip-btn-label:focus-visible {
+      border-radius: 2px;
+      outline: 2px solid #00a1d6;
+      outline-offset: 2px;
     }
     .${OPED_SKIP_BUTTON_CLASS}[aria-disabled="true"] {
       cursor: not-allowed;
@@ -6787,6 +6793,8 @@
     });
     document.addEventListener("keydown", handleOpedSkipHotkey, true);
     document.addEventListener("pointerup", handleOpedHoverGlobalPointerUp, true);
+    document.addEventListener("pointercancel", handleOpedHoverGlobalPointerUp, true);
+    window.addEventListener("blur", handleOpedHoverGlobalPointerUp);
     window.setInterval(refreshOpedSkipButton, 2000);
     refreshOpedSkipButton();
   }
@@ -6808,19 +6816,21 @@
     const config = getOpedSkipConfig();
     if (!button) {
       button = document.createElement("span");
-      button.setAttribute("role", "button");
-      button.tabIndex = 0;
       button.className = OPED_SKIP_BUTTON_CLASS;
       const label = document.createElement("span");
       label.className = "biligumi-oped-skip-btn-label";
+      label.setAttribute("role", "button");
+      label.tabIndex = 0;
       label.textContent = "跳OP/ED";
       button.appendChild(label);
       button.appendChild(buildOpedSkipHoverPanel());
       button.addEventListener("mousedown", handleOpedSkipButtonMouseDown, true);
       button.addEventListener("click", handleOpedSkipButtonClick, true);
-      button.addEventListener("keydown", handleOpedSkipButtonKeydown, true);
+      label.addEventListener("keydown", handleOpedSkipButtonKeydown, true);
       button.addEventListener("mouseenter", handleOpedSkipButtonMouseEnter);
       button.addEventListener("mouseleave", handleOpedSkipButtonMouseLeave);
+      button.addEventListener("focusin", handleOpedSkipButtonMouseEnter);
+      button.addEventListener("focusout", handleOpedSkipButtonFocusOut);
     }
     if (placement.after && placement.after.parentElement === host && button.previousElementSibling !== placement.after) {
       placement.after.insertAdjacentElement("afterend", button);
@@ -6830,6 +6840,8 @@
     button.title = `向后跳过 ${config.seconds} 秒`;
     const disabled = !getActiveVideoElement();
     button.setAttribute("aria-disabled", disabled ? "true" : "false");
+    const label = button.querySelector(".biligumi-oped-skip-btn-label");
+    if (label) label.setAttribute("aria-disabled", disabled ? "true" : "false");
     alignOpedSkipButtonToTime(button, placement.after);
     syncOpedSkipHoverPanel(button, config);
   }
@@ -6859,11 +6871,12 @@
         <span>跳过时长</span>
         <span class="biligumi-oped-hover-value" data-role="oped-hover-value"></span>
       </div>
-      <input class="biligumi-oped-hover-slider" type="range" data-role="oped-hover-slider" min="${OPED_SKIP_SLIDER_MIN}" max="${OPED_SKIP_SLIDER_MAX}" step="${OPED_SKIP_SLIDER_STEP}">
+      <input class="biligumi-oped-hover-slider" type="range" data-role="oped-hover-slider" aria-label="当前番剧 OP/ED 跳过时长" min="${OPED_SKIP_SLIDER_MIN}" max="${OPED_SKIP_SLIDER_MAX}" step="${OPED_SKIP_SLIDER_STEP}">
       <div class="biligumi-oped-hover-scale"><span>${OPED_SKIP_SLIDER_MIN}s</span><span>${OPED_SKIP_SLIDER_MAX}s</span></div>
     `;
     const slider = panel.querySelector("[data-role='oped-hover-slider']");
     slider.addEventListener("input", handleOpedHoverSliderInput);
+    slider.addEventListener("change", handleOpedHoverSliderChange);
     slider.addEventListener("pointerdown", handleOpedHoverSliderPointerDown);
     // Keep panel interactions from reaching the player (click toggles playback).
     ["mousedown", "pointerdown", "click", "dblclick"].forEach((type) => {
@@ -6884,7 +6897,7 @@
       slider.value = String(seconds);
     }
     const hasOverride = hasOpedSkipSecondsOverride();
-    if (valueNode) valueNode.textContent = `${seconds} 秒${hasOverride ? "" : " · 全局"}`;
+    if (valueNode) valueNode.textContent = formatOpedHoverSecondsLabel(seconds, hasOverride);
   }
 
   function handleOpedSkipButtonMouseEnter(event) {
@@ -6897,6 +6910,12 @@
   function handleOpedSkipButtonMouseLeave(event) {
     if (state.opedHoverDragging) return;
     scheduleOpedSkipHoverHide(event.currentTarget);
+  }
+
+  function handleOpedSkipButtonFocusOut(event) {
+    const nextFocused = event.relatedTarget;
+    if (nextFocused && event.currentTarget.contains(nextFocused)) return;
+    handleOpedSkipButtonMouseLeave(event);
   }
 
   function cancelOpedSkipHoverHide() {
@@ -6919,10 +6938,15 @@
     state.opedHoverDragging = true;
   }
 
-  function handleOpedHoverGlobalPointerUp() {
+  function handleOpedHoverGlobalPointerUp(event) {
     if (!state.opedHoverDragging) return;
     state.opedHoverDragging = false;
     document.querySelectorAll(`.${OPED_SKIP_BUTTON_CLASS}.is-oped-hover-open`).forEach((button) => {
+      if (event && event.type !== "pointerup") {
+        const slider = button.querySelector("[data-role='oped-hover-slider']");
+        if (slider) slider.value = String(getOpedSkipConfig().seconds);
+        syncOpedSkipHoverPanel(button, getOpedSkipConfig());
+      }
       if (!button.matches(":hover")) button.classList.remove("is-oped-hover-open");
     });
   }
@@ -6930,7 +6954,18 @@
   function handleOpedHoverSliderInput(event) {
     const slider = event.currentTarget;
     const seconds = normalizeOpedHoverSliderSeconds(slider.value);
-    setOpedSkipSecondsOverride(seconds);
+    const button = slider.closest(`.${OPED_SKIP_BUTTON_CLASS}`);
+    if (!button) return;
+    button.title = `向后跳过 ${seconds} 秒`;
+    const valueNode = button.querySelector("[data-role='oped-hover-value']");
+    if (valueNode) {
+      valueNode.textContent = formatOpedHoverSecondsLabel(seconds, seconds !== getGlobalOpedSkipSeconds());
+    }
+  }
+
+  function handleOpedHoverSliderChange(event) {
+    const slider = event.currentTarget;
+    const seconds = applyOpedHoverSliderSeconds(slider.value);
     writeJsonValue(STORAGE.opedSkips, state.opedSkips);
     const button = slider.closest(`.${OPED_SKIP_BUTTON_CLASS}`);
     if (!button) return;
@@ -9290,6 +9325,23 @@
       ...(state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips : {}),
       [key]: next,
     };
+  }
+
+  function applyOpedHoverSliderSeconds(value, subjectId = state.subjectId) {
+    const seconds = normalizeOpedHoverSliderSeconds(value);
+    if (seconds === getGlobalOpedSkipSeconds()) {
+      clearOpedSkipSecondsOverride(subjectId);
+    } else {
+      setOpedSkipSecondsOverride(seconds, subjectId);
+    }
+    return seconds;
+  }
+
+  function formatOpedHoverSecondsLabel(value, hasOverride) {
+    const seconds = normalizeOpedSkipSeconds(value);
+    const isOutsideSliderRange = seconds < OPED_SKIP_SLIDER_MIN || seconds > OPED_SKIP_SLIDER_MAX;
+    const suffix = isOutsideSliderRange ? " · 自定义" : (hasOverride ? "" : " · 全局");
+    return `${seconds} 秒${suffix}`;
   }
 
   function normalizeOpedSkipSeconds(value) {

@@ -27,6 +27,8 @@ const CONFIG_FUNCTIONS = [
   "setOpedSkipEnabled",
   "setOpedSkipSecondsOverride",
   "clearOpedSkipSecondsOverride",
+  "applyOpedHoverSliderSeconds",
+  "formatOpedHoverSecondsLabel",
   "normalizeOpedSkipSeconds",
   "normalizeOpedHoverSliderSeconds",
 ];
@@ -48,11 +50,13 @@ const HOVER_UI_FUNCTIONS = [
   "syncOpedSkipHoverPanel",
   "handleOpedSkipButtonMouseEnter",
   "handleOpedSkipButtonMouseLeave",
+  "handleOpedSkipButtonFocusOut",
   "cancelOpedSkipHoverHide",
   "scheduleOpedSkipHoverHide",
   "handleOpedHoverSliderPointerDown",
   "handleOpedHoverGlobalPointerUp",
   "handleOpedHoverSliderInput",
+  "handleOpedHoverSliderChange",
   "isOpedSkipHoverEvent",
   "findOpedSkipButtonPlacement",
   "handleOpedSkipButtonClick",
@@ -118,13 +122,14 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.deepEqual(snapshot(api.getOpedSkipConfig()), { enabled: false, seconds: 40 }, label);
   assert.equal(api.hasOpedSkipSecondsOverride(), false, label);
 
-  // Slider drag stores a per-subject override and keeps the enabled flag.
-  api.setOpedSkipSecondsOverride(65);
+  // Slider commit stores a per-subject override and keeps the enabled flag.
+  assert.equal(api.applyOpedHoverSliderSeconds(65), 65, label);
   assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false, seconds: 65 }, label);
   assert.equal(api.getOpedSkipConfig().seconds, 65, label);
 
-  // Reset returns the subject to the global default without touching enabled.
-  api.clearOpedSkipSecondsOverride();
+  // Returning the slider to the global value clears the override without
+  // touching the per-subject enabled flag.
+  assert.equal(api.applyOpedHoverSliderSeconds(40), 40, label);
   assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false }, label);
   assert.equal(api.getOpedSkipConfig().seconds, 40, label);
   assert.equal(api.hasOpedSkipSecondsOverride(), false, label);
@@ -145,10 +150,44 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.equal(api.normalizeOpedHoverSliderSeconds(3), 20, label);
   assert.equal(api.normalizeOpedHoverSliderSeconds("not-a-number"), 20, label);
 
+  // Values beyond the quick slider range are clearly marked as custom instead
+  // of silently presenting a clamped thumb as the exact stored value.
+  assert.equal(api.formatOpedHoverSecondsLabel(180, false), "180 秒 · 自定义", label);
+  assert.equal(api.formatOpedHoverSecondsLabel(180, true), "180 秒 · 自定义", label);
+  assert.equal(api.formatOpedHoverSecondsLabel(85, false), "85 秒 · 全局", label);
+  assert.equal(api.formatOpedHoverSecondsLabel(90, true), "90 秒", label);
+
   // Global seconds normalization still accepts the wider 1-600 range.
   state.opedSkipSeconds = 150;
   assert.equal(api.getGlobalOpedSkipSeconds(), 150, label);
   assert.equal(api.getOpedSkipConfig().seconds, 75, `${label}: override wins over wide global`);
+}
+
+// Hover interaction: input previews only; change commits once. Pointer
+// cancellation and window blur share the drag cleanup path.
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  const bindBlock = extractFunction(source, "bindOpedSkipButtonEvents");
+  assert.match(bindBlock, /addEventListener\("pointercancel", handleOpedHoverGlobalPointerUp, true\)/, label);
+  assert.match(bindBlock, /addEventListener\("blur", handleOpedHoverGlobalPointerUp\)/, label);
+
+  const buildBlock = extractFunction(source, "buildOpedSkipHoverPanel");
+  assert.match(buildBlock, /addEventListener\("change", handleOpedHoverSliderChange\)/, label);
+  assert.match(buildBlock, /aria-label="当前番剧 OP\/ED 跳过时长"/, label);
+
+  const refreshBlock = extractFunction(source, "refreshOpedSkipButton");
+  assert.ok(!/button\.setAttribute\("role", "button"\)/.test(refreshBlock), `${label}: wrapper must not own button semantics`);
+  assert.match(refreshBlock, /label\.setAttribute\("role", "button"\)/, label);
+  assert.match(refreshBlock, /label\.addEventListener\("keydown", handleOpedSkipButtonKeydown, true\)/, label);
+  assert.match(refreshBlock, /button\.addEventListener\("focusin", handleOpedSkipButtonMouseEnter\)/, label);
+  assert.match(refreshBlock, /button\.addEventListener\("focusout", handleOpedSkipButtonFocusOut\)/, label);
+
+  const inputBlock = extractFunction(source, "handleOpedHoverSliderInput");
+  assert.ok(!/writeJsonValue/.test(inputBlock), `${label}: input must not persist`);
+  assert.ok(!/setOpedSkipSecondsOverride/.test(inputBlock), `${label}: input must not mutate the saved config`);
+
+  const changeBlock = extractFunction(source, "handleOpedHoverSliderChange");
+  assert.match(changeBlock, /applyOpedHoverSliderSeconds\(slider\.value\)/, label);
+  assert.match(changeBlock, /writeJsonValue\(STORAGE\.opedSkips, state\.opedSkips\)/, label);
 }
 
 // Settings dialog: the seconds input binds the global value and stays enabled
