@@ -7746,20 +7746,12 @@
   }
 
   function findOpedSkipButtonPlacement() {
+    // Only anchor to the rendered time label. Falling back to the bare
+    // bottom-left container made the button flash at the video corner on
+    // page load, before the control bar finished rendering.
     const timeNode = findOpedSkipTimeNode();
     if (timeNode && timeNode.parentElement && isVisible(timeNode.parentElement)) {
       return { host: timeNode.parentElement, after: timeNode };
-    }
-
-    const hostSelectors = [
-      ".bpx-player-control-bottom-left",
-      ".bpx-player-control-wrap .bpx-player-control-bottom-left",
-      ".bpx-player-control-wrap [class*='control-bottom-left']",
-      ".bpx-player-control-bottom [class*='left']",
-    ];
-    for (const selector of hostSelectors) {
-      const node = document.querySelector(selector);
-      if (node && isVisible(node)) return { host: node, after: null };
     }
     return null;
   }
