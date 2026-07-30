@@ -74,6 +74,7 @@ const IDENTICAL_FUNCTIONS = [
   "renderSettingsInlineConfirm",
   "mountSettingsInlineConfirm",
   "removeSettingsInlineConfirm",
+  "trapSettingsInlineConfirmFocus",
   "focusInlineConfirmButton",
   "scheduleRouteRefresh",
   "resolveLongVideoBindingSubject",

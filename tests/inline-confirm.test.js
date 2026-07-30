@@ -45,6 +45,10 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
     `${label} panel keydown must settle the pending panel confirm on Escape (even with focus on body)`,
   );
   assert.ok(
+    source.includes("if (trapSettingsInlineConfirmFocus(event, wrapper))"),
+    `${label} settings dialog must trap Tab focus inside the inline confirm`,
+  );
+  assert.ok(
     extractFunction(source, "scheduleRouteRefresh").includes("settleInlineConfirm(false);"),
     `${label} scheduleRouteRefresh must settle pending confirms immediately`,
   );
@@ -93,6 +97,7 @@ const CONFIRM_SOURCE = [
   extractFunction(userscriptSource, "renderSettingsInlineConfirm"),
   extractFunction(userscriptSource, "mountSettingsInlineConfirm"),
   extractFunction(userscriptSource, "removeSettingsInlineConfirm"),
+  extractFunction(userscriptSource, "trapSettingsInlineConfirmFocus"),
 ].join("\n");
 
 // ---------------------------------------------------------------------------
@@ -245,6 +250,12 @@ function createSandbox({ withSettings = false } = {}) {
   // 6) Settings context mounts an overlay card instead of re-rendering the panel.
   {
     const { sandbox, dom } = createSandbox({ withSettings: true });
+    const returnFocus = {
+      isConnected: true,
+      focusCount: 0,
+      focus() { this.focusCount += 1; },
+    };
+    sandbox.document.activeElement = returnFocus;
     const promise = sandbox.api.requestInlineConfirm({
       context: "settings",
       danger: true,
@@ -274,6 +285,7 @@ function createSandbox({ withSettings = false } = {}) {
     assert.equal(await promise, true);
     assert.equal(dom.overlay, null, "settle removes the settings overlay");
     assert.equal(sandbox.renders, 0, "settings settle never touches panel render");
+    assert.equal(returnFocus.focusCount, 1, "settle restores focus to the settings control that opened the confirm");
   }
 
   // 7) A queued settings confirm auto-cancels if the dialog was closed before
@@ -456,6 +468,55 @@ function createSandbox({ withSettings = false } = {}) {
 
     const idleSandbox = makeFocusSandbox(null);
     assert.doesNotThrow(() => idleSandbox.api.focusInlineConfirmButton(), "no pending is a no-op");
+  }
+
+  // 12) Tab and Shift+Tab cycle between the two settings-confirm buttons.
+  {
+    const cancel = { focus() { sandbox.document.activeElement = cancel; } };
+    const accept = { focus() { sandbox.document.activeElement = accept; } };
+    const overlay = {
+      querySelectorAll(selector) {
+        assert.equal(selector, ".biligumi-settings-confirm-actions .biligumi-button:not([disabled])");
+        return [cancel, accept];
+      },
+    };
+    const wrapper = {
+      querySelector(selector) {
+        return selector === ".biligumi-settings-confirm-overlay" ? overlay : null;
+      },
+    };
+    const sandbox = {
+      state: { inlineConfirm: { context: "settings" } },
+      document: { activeElement: accept },
+    };
+    runInSandbox(
+      `${extractFunction(userscriptSource, "trapSettingsInlineConfirmFocus")}\n;globalThis.api = { trapSettingsInlineConfirmFocus };`,
+      sandbox,
+    );
+    const makeTab = (shiftKey = false) => ({
+      key: "Tab",
+      shiftKey,
+      defaultPrevented: false,
+      preventDefault() { this.defaultPrevented = true; },
+    });
+
+    const forward = makeTab(false);
+    assert.equal(sandbox.api.trapSettingsInlineConfirmFocus(forward, wrapper), true);
+    assert.equal(sandbox.document.activeElement, cancel, "Tab from the last button wraps to the first");
+    assert.equal(forward.defaultPrevented, true);
+
+    const backward = makeTab(true);
+    assert.equal(sandbox.api.trapSettingsInlineConfirmFocus(backward, wrapper), true);
+    assert.equal(sandbox.document.activeElement, accept, "Shift+Tab from the first button wraps to the last");
+    assert.equal(backward.defaultPrevented, true);
+
+    sandbox.document.activeElement = cancel;
+    const ordinaryForward = makeTab(false);
+    assert.equal(sandbox.api.trapSettingsInlineConfirmFocus(ordinaryForward, wrapper), false);
+    assert.equal(ordinaryForward.defaultPrevented, false, "ordinary movement inside the confirm remains native");
+
+    sandbox.state.inlineConfirm = null;
+    assert.equal(sandbox.api.trapSettingsInlineConfirmFocus(makeTab(), wrapper), false, "idle settings do not trap focus");
   }
 
   console.log("inline confirm tests passed");

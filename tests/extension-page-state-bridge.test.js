@@ -329,6 +329,10 @@ test("route refresh waits for the page-state bridge before consuming the new rou
       });
     },
     removeModal() {},
+    inlineConfirmSettles: 0,
+    settleInlineConfirm() {
+      sandbox.inlineConfirmSettles += 1;
+    },
     render() {},
     routeRefreshCalls: [],
     refreshAfterRouteChange(...args) {
@@ -343,6 +347,7 @@ globalThis.schedule = scheduleRouteRefresh;`,
   );
 
   sandbox.schedule("old title", "old-key");
+  assert.equal(sandbox.inlineConfirmSettles, 1, "route refresh cancels any confirmation tied to the old route");
   assert.equal(timers.length, 4);
   timers[0].callback();
   await Promise.resolve();

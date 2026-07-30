@@ -5324,6 +5324,7 @@
         cancelLabel: options.cancelLabel ? String(options.cancelLabel) : "取消",
         danger: Boolean(options.danger),
         context,
+        returnFocus: context === "settings" ? document.activeElement : null,
         resolve,
       };
       if (state.inlineConfirm.context === "settings") {
@@ -5341,6 +5342,9 @@
     state.inlineConfirm = null;
     if (pending.context === "settings") {
       removeSettingsInlineConfirm();
+      if (pending.returnFocus && pending.returnFocus.isConnected && pending.returnFocus.focus) {
+        pending.returnFocus.focus();
+      }
     } else {
       render();
     }
@@ -7888,6 +7892,24 @@
     if (overlay) overlay.remove();
   }
 
+  function trapSettingsInlineConfirmFocus(event, wrapper) {
+    if (!event || event.key !== "Tab" || !state.inlineConfirm || state.inlineConfirm.context !== "settings") return false;
+    const overlay = wrapper && wrapper.querySelector
+      ? wrapper.querySelector(".biligumi-settings-confirm-overlay")
+      : null;
+    const buttons = overlay && overlay.querySelectorAll
+      ? Array.from(overlay.querySelectorAll(".biligumi-settings-confirm-actions .biligumi-button:not([disabled])"))
+      : [];
+    if (!buttons.length) return false;
+    const first = buttons[0];
+    const last = buttons[buttons.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey ? active !== first : active !== last) return false;
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+    return true;
+  }
+
   function refreshSettingsTokenHelp(settings, options = {}) {
     const help = settings && settings.querySelector("[data-role='settings-token-help']");
     const tokenInput = settings && settings.querySelector("[data-role='settings-token']");
@@ -8080,6 +8102,10 @@
     // capture-phase handlers (e.g. OP/ED hotkey input clears on Escape and
     // stops propagation), so those keep their behavior.
     wrapper.addEventListener("keydown", (event) => {
+      if (trapSettingsInlineConfirmFocus(event, wrapper)) {
+        event.stopPropagation();
+        return;
+      }
       if (event.key !== "Escape") return;
       if (state.inlineConfirm && state.inlineConfirm.context === "settings") {
         event.stopPropagation();
