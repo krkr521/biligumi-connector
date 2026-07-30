@@ -110,6 +110,7 @@ const document = {
 const sandbox = {
   document,
   window: { __INITIAL_STATE__: {} },
+  getPageInitialState: () => sandbox.window.__INITIAL_STATE__ || {},
   location: {
     pathname: "/bangumi/play/ss29308",
     href: "https://www.bilibili.com/bangumi/play/ss29308",

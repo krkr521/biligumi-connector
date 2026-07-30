@@ -55,6 +55,7 @@ const identitySandbox = {
       season_title: "Fate/stay night [Unlimited Blade Works] 第一季",
     },
   },
+  getPageInitialState: () => identitySandbox.window.__INITIAL_STATE__ || {},
   location: {
     pathname: "/bangumi/play/ep29143",
     href: "https://www.bilibili.com/bangumi/play/ep29143",

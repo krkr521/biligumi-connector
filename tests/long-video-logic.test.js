@@ -135,6 +135,7 @@ const sandbox = {
   },
   location: new URL("https://www.bilibili.com/video/BV1TEST"),
   window: { __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } } },
+  getPageInitialState: () => sandbox.window.__INITIAL_STATE__ || {},
   document: { querySelectorAll: () => [] },
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
   getPrimaryDomOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
