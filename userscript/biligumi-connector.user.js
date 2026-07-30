@@ -6891,13 +6891,19 @@
     const slider = panel.querySelector("[data-role='oped-hover-slider']");
     const valueNode = panel.querySelector("[data-role='oped-hover-value']");
     const seconds = normalizeOpedSkipSeconds(config && config.seconds);
+    const isPreviewing = Boolean(slider && (state.opedHoverDragging || document.activeElement === slider));
+    const displayedSeconds = isPreviewing
+      ? normalizeOpedHoverSliderSeconds(slider.value)
+      : seconds;
     // Assigning an out-of-range value clamps the thumb to the nearest end;
     // the first drag then snaps the stored value onto the slider.
-    if (slider && !state.opedHoverDragging && document.activeElement !== slider) {
+    if (slider && !isPreviewing) {
       slider.value = String(seconds);
     }
-    const hasOverride = hasOpedSkipSecondsOverride();
-    if (valueNode) valueNode.textContent = formatOpedHoverSecondsLabel(seconds, hasOverride);
+    const hasOverride = isPreviewing
+      ? displayedSeconds !== getGlobalOpedSkipSeconds()
+      : hasOpedSkipSecondsOverride();
+    if (valueNode) valueNode.textContent = formatOpedHoverSecondsLabel(displayedSeconds, hasOverride);
   }
 
   function handleOpedSkipButtonMouseEnter(event) {

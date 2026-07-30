@@ -190,6 +190,47 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.match(changeBlock, /writeJsonValue\(STORAGE\.opedSkips, state\.opedSkips\)/, label);
 }
 
+// Periodic button refreshes must not replace the live preview with the last
+// saved value while a pointer drag (or focused keyboard edit) is in progress.
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  const slider = { value: "65" };
+  const valueNode = { textContent: "" };
+  const panel = {
+    querySelector(selector) {
+      return selector.includes("slider") ? slider : valueNode;
+    },
+  };
+  const button = { querySelector: () => panel };
+  const sandbox = {
+    state: { opedHoverDragging: true },
+    document: { activeElement: null },
+    OPED_SKIP_HOVER_PANEL_CLASS: "biligumi-oped-hover-panel",
+    normalizeOpedSkipSeconds: Number,
+    normalizeOpedHoverSliderSeconds: Number,
+    getGlobalOpedSkipSeconds: () => 85,
+    hasOpedSkipSecondsOverride: () => false,
+    formatOpedHoverSecondsLabel: (seconds, hasOverride) => `${seconds}:${hasOverride}`,
+  };
+  runInSandbox(`${extractFunction(source, "syncOpedSkipHoverPanel")}
+;globalThis.sync = syncOpedSkipHoverPanel;`, sandbox);
+
+  sandbox.sync(button, { seconds: 85 });
+  assert.equal(slider.value, "65", `${label}: drag preview slider`);
+  assert.equal(valueNode.textContent, "65:true", `${label}: drag preview label`);
+
+  sandbox.state.opedHoverDragging = false;
+  sandbox.document.activeElement = slider;
+  slider.value = "70";
+  sandbox.sync(button, { seconds: 85 });
+  assert.equal(slider.value, "70", `${label}: focused preview slider`);
+  assert.equal(valueNode.textContent, "70:true", `${label}: focused preview label`);
+
+  sandbox.document.activeElement = null;
+  sandbox.sync(button, { seconds: 85 });
+  assert.equal(slider.value, "85", `${label}: idle slider follows saved config`);
+  assert.equal(valueNode.textContent, "85:false", `${label}: idle label follows saved config`);
+}
+
 // Settings dialog: the seconds input binds the global value and stays enabled
 // even without a bound subject.
 for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
