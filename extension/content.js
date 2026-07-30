@@ -65,6 +65,7 @@
     officialBangumiLayout: "biligumi.officialBangumiLayout",
     autoWatchThresholds: "biligumi.autoWatchThresholds",
     opedSkips: "biligumi.opedSkips",
+    opedSkipSeconds: "biligumi.opedSkipSeconds",
     opedSkipHotkey: "biligumi.opedSkipHotkey",
     subjectInfoPanel: "biligumi.subjectInfoPanel",
     characterStrip: "biligumi.characterStrip",
@@ -173,6 +174,9 @@
   const COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES = 200;
   const DEFAULT_AUTO_WATCH_THRESHOLD = 50;
   const DEFAULT_OPED_SKIP_SECONDS = 85;
+  const OPED_SKIP_SLIDER_MIN = 20;
+  const OPED_SKIP_SLIDER_MAX = 100;
+  const OPED_SKIP_SLIDER_STEP = 5;
   const DEFAULT_OPED_SKIP_HOTKEY = "Alt+Shift+ArrowRight";
   const DEFAULT_CHARACTER_STRIP_ENABLED = true;
   const DEFAULT_SUBJECT_INFO_PANEL_ENABLED = false;
@@ -180,6 +184,7 @@
   // Bangumi chii_oauth_access_tokens.access_token is varchar(40).
   const BANGUMI_ACCESS_TOKEN_LENGTH = 40;
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
+  const OPED_SKIP_HOVER_PANEL_CLASS = "biligumi-oped-hover-panel";
   const DANMAKU_FAVORITE_BUTTON_CLASS = "biligumi-danmaku-fav-btn";
   const DANMAKU_HOVER_BAR_CLASS = "biligumi-danmaku-hover-bar";
   const DANMAKU_OFFICIAL_ACTION_CLASS = "biligumi-danmaku-official-action";
@@ -239,7 +244,9 @@
     officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
     autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
     opedSkips: readJsonValue(STORAGE.opedSkips, {}),
+    opedSkipSeconds: normalizeOpedSkipSeconds(readValue(STORAGE.opedSkipSeconds, DEFAULT_OPED_SKIP_SECONDS)),
     opedSkipHotkey: normalizeHotkey(readValue(STORAGE.opedSkipHotkey, DEFAULT_OPED_SKIP_HOTKEY)),
+    opedHoverDragging: false,
     subjectInfoPanelEnabled: readValue(STORAGE.subjectInfoPanel, "0") === "1",
     characterStripEnabled: readValue(STORAGE.characterStrip, "1") !== "0",
     danmakuFavorites: normalizeDanmakuFavorites(readJsonValue(STORAGE.danmakuFavorites, [])),
@@ -2390,6 +2397,7 @@
       background: #fff;
     }
     .${OPED_SKIP_BUTTON_CLASS} {
+      position: relative;
       display: inline-flex;
       align-items: center;
       justify-content: center;
@@ -2419,6 +2427,81 @@
     .${OPED_SKIP_BUTTON_CLASS}[aria-disabled="true"] {
       cursor: not-allowed;
       opacity: .45;
+    }
+    .${OPED_SKIP_BUTTON_CLASS} .${OPED_SKIP_HOVER_PANEL_CLASS} {
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 10px);
+      transform: translateX(-50%);
+      display: none;
+      box-sizing: border-box;
+      width: 224px;
+      padding: 10px 14px 12px;
+      border-radius: 8px;
+      background: rgba(21, 25, 31, .94);
+      box-shadow: 0 6px 18px rgba(0, 0, 0, .38);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.4;
+      text-align: left;
+      white-space: normal;
+      cursor: default;
+      z-index: 100;
+    }
+    .${OPED_SKIP_BUTTON_CLASS} .${OPED_SKIP_HOVER_PANEL_CLASS}::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 100%;
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: rgba(21, 25, 31, .94);
+    }
+    .${OPED_SKIP_BUTTON_CLASS}.is-oped-hover-open .${OPED_SKIP_HOVER_PANEL_CLASS} {
+      display: block;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-head {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-value {
+      color: #00a1d6;
+      font-weight: 700;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-slider {
+      display: block;
+      width: 100%;
+      margin: 2px 0 0;
+      padding: 0;
+      accent-color: #00a1d6;
+      cursor: pointer;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-scale {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 2px;
+      color: #99a2ad;
+      font-size: 10px;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset {
+      display: block;
+      margin: 8px 0 0;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #00a1d6;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset:hover {
+      text-decoration: underline;
+    }
+    .${OPED_SKIP_HOVER_PANEL_CLASS} .biligumi-oped-hover-reset[hidden] {
+      display: none;
     }
     .${DANMAKU_FAVORITE_BUTTON_CLASS} {
       flex: 0 0 auto;
@@ -4341,13 +4424,14 @@
                 <span>在播放器下边栏显示一键跳过 OP/ED 按钮。</span>
               </label>
               <div class="biligumi-threshold-line biligumi-oped-seconds-line">
-                <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${opedSkipConfig.seconds}" ${state.subjectId ? "" : "disabled"}>
+                <input id="biligumi-oped-skip-seconds" type="number" min="1" max="600" step="1" data-role="settings-oped-skip-seconds" value="${getGlobalOpedSkipSeconds()}">
                 <span class="biligumi-threshold-value">秒</span>
               </div>
               <div class="biligumi-field biligumi-oped-hotkey-line">
                 <input id="biligumi-oped-skip-hotkey" data-role="settings-oped-skip-hotkey" value="在扩展快捷键页查看 / 修改" readonly>
               </div>
-              <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。此设置按 Bangumi 条目保存，同一番剧的不同 B站源会共用。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存专属跳过时长。"}</div>
+              <div class="biligumi-settings-help">跳过秒数为全局默认；鼠标悬停播放器“跳OP/ED”按钮，可用滑条（20–100 秒）为当前番剧设置专属时长，拖动后该番优先按滑条为准。</div>
+              <div class="biligumi-settings-help">${state.subjectId ? `当前绑定：${escapeHtml(opedSkipSubjectLabel)}。按钮显示与专属时长按 Bangumi 条目保存，同一番剧的不同 B站源会共用；当前${hasOpedSkipSecondsOverride() ? `专属时长 ${getOpedSkipConfig().seconds} 秒` : "跟随全局默认"}。` : "当前页面还没有绑定 Bangumi 条目；绑定番剧后可保存按钮显示与专属跳过时长。"}</div>
               <div class="biligumi-settings-help">插件版这里显示的是浏览器级全局快捷键；请在 chrome://extensions/shortcuts 或 edge://extensions/shortcuts 修改。</div>
             </div>
           </div>
@@ -6664,6 +6748,7 @@
     ["loadedmetadata", "durationchange", "playing"].forEach((eventName) => {
       document.addEventListener(eventName, scheduleRefresh, true);
     });
+    document.addEventListener("pointerup", handleOpedHoverGlobalPointerUp, true);
     window.setInterval(refreshOpedSkipButton, 2000);
     refreshOpedSkipButton();
   }
@@ -6688,20 +6773,27 @@
       button.setAttribute("role", "button");
       button.tabIndex = 0;
       button.className = OPED_SKIP_BUTTON_CLASS;
+      const label = document.createElement("span");
+      label.className = "biligumi-oped-skip-btn-label";
+      label.textContent = "跳OP/ED";
+      button.appendChild(label);
+      button.appendChild(buildOpedSkipHoverPanel());
       button.addEventListener("mousedown", handleOpedSkipButtonMouseDown, true);
       button.addEventListener("click", handleOpedSkipButtonClick, true);
       button.addEventListener("keydown", handleOpedSkipButtonKeydown, true);
+      button.addEventListener("mouseenter", handleOpedSkipButtonMouseEnter);
+      button.addEventListener("mouseleave", handleOpedSkipButtonMouseLeave);
     }
     if (placement.after && placement.after.parentElement === host && button.previousElementSibling !== placement.after) {
       placement.after.insertAdjacentElement("afterend", button);
     } else if (!button.parentElement) {
       host.appendChild(button);
     }
-    button.textContent = "跳OP/ED";
     button.title = `向后跳过 ${config.seconds} 秒`;
     const disabled = !getActiveVideoElement();
     button.setAttribute("aria-disabled", disabled ? "true" : "false");
     alignOpedSkipButtonToTime(button, placement.after);
+    syncOpedSkipHoverPanel(button, config);
   }
 
   function alignOpedSkipButtonToTime(button, timeNode) {
@@ -6719,6 +6811,96 @@
     if (!timeRect.height || !buttonRect.height) return;
     const offset = (timeRect.top + timeRect.height / 2) - (buttonRect.top + buttonRect.height / 2);
     button.style.transform = `translateY(${offset.toFixed(2)}px)`;
+  }
+
+  function buildOpedSkipHoverPanel() {
+    const panel = document.createElement("div");
+    panel.className = OPED_SKIP_HOVER_PANEL_CLASS;
+    panel.innerHTML = `
+      <div class="biligumi-oped-hover-head">
+        <span>跳过时长</span>
+        <span class="biligumi-oped-hover-value" data-role="oped-hover-value"></span>
+      </div>
+      <input class="biligumi-oped-hover-slider" type="range" data-role="oped-hover-slider" min="${OPED_SKIP_SLIDER_MIN}" max="${OPED_SKIP_SLIDER_MAX}" step="${OPED_SKIP_SLIDER_STEP}">
+      <div class="biligumi-oped-hover-scale"><span>${OPED_SKIP_SLIDER_MIN}s</span><span>${OPED_SKIP_SLIDER_MAX}s</span></div>
+      <button type="button" class="biligumi-oped-hover-reset" data-role="oped-hover-reset" hidden>恢复跟随全局</button>
+    `;
+    const slider = panel.querySelector("[data-role='oped-hover-slider']");
+    const resetButton = panel.querySelector("[data-role='oped-hover-reset']");
+    slider.addEventListener("input", handleOpedHoverSliderInput);
+    slider.addEventListener("pointerdown", handleOpedHoverSliderPointerDown);
+    resetButton.addEventListener("click", handleOpedHoverResetClick);
+    // Keep panel interactions from reaching the player (click toggles playback).
+    ["mousedown", "pointerdown", "click", "dblclick"].forEach((type) => {
+      panel.addEventListener(type, (event) => event.stopPropagation());
+    });
+    return panel;
+  }
+
+  function syncOpedSkipHoverPanel(button, config) {
+    const panel = button && button.querySelector(`.${OPED_SKIP_HOVER_PANEL_CLASS}`);
+    if (!panel) return;
+    const slider = panel.querySelector("[data-role='oped-hover-slider']");
+    const valueNode = panel.querySelector("[data-role='oped-hover-value']");
+    const resetButton = panel.querySelector("[data-role='oped-hover-reset']");
+    const seconds = normalizeOpedSkipSeconds(config && config.seconds);
+    // Assigning an out-of-range value clamps the thumb to the nearest end;
+    // the first drag then snaps the stored value onto the slider.
+    if (slider && !state.opedHoverDragging && document.activeElement !== slider) {
+      slider.value = String(seconds);
+    }
+    const hasOverride = hasOpedSkipSecondsOverride();
+    if (valueNode) valueNode.textContent = `${seconds} 秒${hasOverride ? "" : " · 全局"}`;
+    if (resetButton) resetButton.hidden = !hasOverride;
+  }
+
+  function handleOpedSkipButtonMouseEnter(event) {
+    const button = event.currentTarget;
+    syncOpedSkipHoverPanel(button, getOpedSkipConfig());
+    button.classList.add("is-oped-hover-open");
+  }
+
+  function handleOpedSkipButtonMouseLeave(event) {
+    if (state.opedHoverDragging) return;
+    event.currentTarget.classList.remove("is-oped-hover-open");
+  }
+
+  function handleOpedHoverSliderPointerDown() {
+    state.opedHoverDragging = true;
+  }
+
+  function handleOpedHoverGlobalPointerUp() {
+    if (!state.opedHoverDragging) return;
+    state.opedHoverDragging = false;
+    document.querySelectorAll(`.${OPED_SKIP_BUTTON_CLASS}.is-oped-hover-open`).forEach((button) => {
+      if (!button.matches(":hover")) button.classList.remove("is-oped-hover-open");
+    });
+  }
+
+  function handleOpedHoverSliderInput(event) {
+    const slider = event.currentTarget;
+    const seconds = normalizeOpedHoverSliderSeconds(slider.value);
+    setOpedSkipSecondsOverride(seconds);
+    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
+    const button = slider.closest(`.${OPED_SKIP_BUTTON_CLASS}`);
+    if (!button) return;
+    button.title = `向后跳过 ${seconds} 秒`;
+    syncOpedSkipHoverPanel(button, getOpedSkipConfig());
+  }
+
+  function handleOpedHoverResetClick(event) {
+    event.preventDefault();
+    clearOpedSkipSecondsOverride();
+    writeJsonValue(STORAGE.opedSkips, state.opedSkips);
+    const button = event.currentTarget.closest(`.${OPED_SKIP_BUTTON_CLASS}`);
+    if (!button) return;
+    const config = getOpedSkipConfig();
+    button.title = `向后跳过 ${config.seconds} 秒`;
+    syncOpedSkipHoverPanel(button, config);
+  }
+
+  function isOpedSkipHoverEvent(event) {
+    return Boolean(event.target && event.target.closest && event.target.closest(`.${OPED_SKIP_HOVER_PANEL_CLASS}`));
   }
 
   function bindDanmakuEnhancementEvents() {
@@ -7463,6 +7645,8 @@
   }
 
   function handleOpedSkipButtonClick(event) {
+    // Hover-panel clicks stop propagation at the panel; never treat them as skips.
+    if (isOpedSkipHoverEvent(event)) return;
     event.preventDefault();
     event.stopPropagation();
     if (event.stopImmediatePropagation) event.stopImmediatePropagation();
@@ -7472,6 +7656,7 @@
   }
 
   function handleOpedSkipButtonMouseDown(event) {
+    if (isOpedSkipHoverEvent(event)) return;
     event.preventDefault();
   }
 
@@ -7481,6 +7666,7 @@
 
   function handleOpedSkipButtonKeydown(event) {
     if (event.key !== "Enter" && event.key !== " ") return;
+    if (isOpedSkipHoverEvent(event)) return;
     handleOpedSkipButtonClick(event);
   }
 
@@ -7764,7 +7950,8 @@
     state.whitelist = parsedWhitelist.items;
     state.whitelistLabels = pruneWhitelistLabels({ ...state.whitelistLabels, ...parsedWhitelist.labels }, state.whitelist);
     setAutoWatchThreshold(nextAutoWatchThreshold);
-    if (state.subjectId) setOpedSkipConfig(nextOpedSkipEnabled, nextOpedSkipSeconds);
+    state.opedSkipSeconds = nextOpedSkipSeconds;
+    if (state.subjectId) setOpedSkipEnabled(nextOpedSkipEnabled);
 
     await Promise.all([
       writeValueAsync(STORAGE.token, state.token),
@@ -7777,6 +7964,7 @@
       writeJsonValueAsync(STORAGE.longVideoEpisodeOffsets, state.longVideoEpisodeOffsets),
       writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
       writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
+      writeValueAsync(STORAGE.opedSkipSeconds, String(state.opedSkipSeconds)),
     ]);
 
     if (longVideoSettingsChanged) {
@@ -7833,7 +8021,11 @@
     state.longVideoDetectionCache = null;
     resetAutoWatchObservationState();
     setAutoWatchThreshold(DEFAULT_AUTO_WATCH_THRESHOLD);
-    if (state.subjectId) setOpedSkipConfig(true, DEFAULT_OPED_SKIP_SECONDS);
+    state.opedSkipSeconds = DEFAULT_OPED_SKIP_SECONDS;
+    if (state.subjectId) {
+      clearOpedSkipSecondsOverride();
+      setOpedSkipEnabled(true);
+    }
 
     await Promise.all([
       writeValueAsync(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0"),
@@ -7842,6 +8034,7 @@
       writeValueAsync(STORAGE.longVideoEpisodeGuess, "0"),
       writeJsonValueAsync(STORAGE.autoWatchThresholds, state.autoWatchThresholds),
       writeJsonValueAsync(STORAGE.opedSkips, state.opedSkips),
+      writeValueAsync(STORAGE.opedSkipSeconds, String(state.opedSkipSeconds)),
     ]);
 
     state.message = "已恢复默认设置。";
@@ -9027,19 +9220,57 @@
     const raw = key && state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
     return {
       enabled: raw && Object.prototype.hasOwnProperty.call(raw, "enabled") ? Boolean(raw.enabled) : true,
-      seconds: normalizeOpedSkipSeconds(raw && raw.seconds),
+      seconds: raw && Object.prototype.hasOwnProperty.call(raw, "seconds")
+        ? normalizeOpedSkipSeconds(raw.seconds)
+        : getGlobalOpedSkipSeconds(),
     };
   }
 
-  function setOpedSkipConfig(enabled, seconds, subjectId = state.subjectId) {
+  function getGlobalOpedSkipSeconds() {
+    return normalizeOpedSkipSeconds(state.opedSkipSeconds);
+  }
+
+  function hasOpedSkipSecondsOverride(subjectId = state.subjectId) {
+    const key = String(Number(subjectId) || "");
+    const raw = key && state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
+    return Boolean(raw && Object.prototype.hasOwnProperty.call(raw, "seconds"));
+  }
+
+  function setOpedSkipEnabled(enabled, subjectId = state.subjectId) {
     const key = String(Number(subjectId) || "");
     if (!key) return;
+    const existing = state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
     state.opedSkips = {
       ...(state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips : {}),
       [key]: {
+        ...(existing && typeof existing === "object" ? existing : {}),
         enabled: Boolean(enabled),
-        seconds: normalizeOpedSkipSeconds(seconds),
       },
+    };
+  }
+
+  function setOpedSkipSecondsOverride(seconds, subjectId = state.subjectId) {
+    const key = String(Number(subjectId) || "");
+    if (!key) return;
+    const existing = state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
+    const next = existing && typeof existing === "object" ? { ...existing } : { enabled: true };
+    next.seconds = normalizeOpedSkipSeconds(seconds);
+    state.opedSkips = {
+      ...(state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips : {}),
+      [key]: next,
+    };
+  }
+
+  function clearOpedSkipSecondsOverride(subjectId = state.subjectId) {
+    const key = String(Number(subjectId) || "");
+    if (!key) return;
+    const existing = state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips[key] : null;
+    if (!existing || typeof existing !== "object" || !Object.prototype.hasOwnProperty.call(existing, "seconds")) return;
+    const next = { ...existing };
+    delete next.seconds;
+    state.opedSkips = {
+      ...(state.opedSkips && typeof state.opedSkips === "object" ? state.opedSkips : {}),
+      [key]: next,
     };
   }
 
@@ -9047,6 +9278,13 @@
     const raw = Number(value);
     if (!Number.isFinite(raw)) return DEFAULT_OPED_SKIP_SECONDS;
     return Math.max(1, Math.min(600, Math.round(raw)));
+  }
+
+  function normalizeOpedHoverSliderSeconds(value) {
+    const raw = Number(value);
+    if (!Number.isFinite(raw)) return OPED_SKIP_SLIDER_MIN;
+    const clamped = Math.max(OPED_SKIP_SLIDER_MIN, Math.min(OPED_SKIP_SLIDER_MAX, raw));
+    return Math.round(clamped / OPED_SKIP_SLIDER_STEP) * OPED_SKIP_SLIDER_STEP;
   }
 
   function captureOpedSkipHotkeyInput(event) {
