@@ -74,6 +74,16 @@
     return;
   }
 
+  function getPageInitialState() {
+    return window.__INITIAL_STATE__ || {};
+  }
+
+  function refreshPageInitialState() {
+    return Promise.resolve(getPageInitialState());
+  }
+
+  function invalidatePageInitialState() {}
+
   const SUBJECT_TYPES = {
     1: "想看",
     2: "看过",
@@ -91,8 +101,9 @@
 
   const EPISODE_PATTERNS = [
     /第\s*([0-9]+(?:\.[0-9]+)?)(?:\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?)?\s*[话話集]/i,
-    /S\d+\s*E\s*([0-9]+(?:\.[0-9]+)?)/i,
-    /EP\.?\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /第\s*([零〇一二两兩三四五六七八九十百]{1,4})(?:\s*[-~～至到]\s*(?:第\s*)?[零〇一二两兩三四五六七八九十百]{1,4})?\s*[话話集]/i,
+    /(?<![A-Za-z0-9])S\d+\s*E\s*([0-9]+(?:\.[0-9]+)?)/i,
+    /(?<![A-Za-z])(?:EPISODE|EP\.?)\s*([0-9]+(?:\.[0-9]+)?)/i,
     /#\s*([0-9]+(?:\.[0-9]+)?)\b/i,
     /[（(]\s*0*([0-9]{1,3}(?:\.[0-9]+)?)\s*[）)]/,
     /[\[【]\s*([0-9]+(?:\.[0-9]+)?)\s*[\]】]/,
@@ -101,6 +112,10 @@
     /(?:^|[\s#])0*([0-9]{1,3})(?:\s*[\[【][^\]】]+[\]】])?\s*$/i,
     /(?:^|[\s#\[])([0-9]+(?:\.[0-9]+)?)\s*(?:话|集|]|$)/i,
   ];
+  const EPISODE_NUMBER_SOURCE = "(?:\\d+(?:\\.\\d+)?|[零〇一二两兩三四五六七八九十百]{1,4})";
+  const EPISODE_MARKER_SOURCE = `第\\s*${EPISODE_NUMBER_SOURCE}(?:(?:(?:\\s*[话話集])?\\s*[-~～〜－–—―至到]\\s*|\\s+)(?:第\\s*)?${EPISODE_NUMBER_SOURCE})?\\s*[话話集]`;
+  const EPISODE_RANGE_MARKER_SOURCE = `(?:第\\s*)?${EPISODE_NUMBER_SOURCE}\\s*(?:[话話集]\\s*)?[-~～〜－–—―至到]\\s*(?:第\\s*)?${EPISODE_NUMBER_SOURCE}\\s*[话話集]`;
+  const LABELED_EPISODE_RANGE_SOURCE = `(?<![A-Za-z])(?:(?:S(?:EASON)?\\s*\\d+\\s*)?(?:EPISODE|E(?:P)?\\.?)|#)\\s*${EPISODE_NUMBER_SOURCE}\\s*[-~～〜－–—―至到]\\s*(?:EPISODE|E(?:P)?\\.?|#)?\\s*${EPISODE_NUMBER_SOURCE}(?=$|[^\\d一二两兩三四五六七八九十百])`;
 
   const COMMON_RESOLUTIONS = new Set([144, 240, 360, 480, 540, 720, 1080, 1440, 2160, 4320]);
   const TITLE_PROPERTY_TAGS = [
@@ -108,8 +123,8 @@
     "简中", "繁中", "简体", "繁体", "中字", "中日", "中文字幕", "中文", "字幕", "字幕组", "汉化组", "漢化組", "压制",
     "超清", "高清", "标清", "新番", "完结", "全集",
   ];
-  const NON_MAIN_EPISODE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》&＆])(?:(?:正式|主|第\s*\d+\s*(?:[弹彈]|话|話|集)|先导|先導|定档|定檔|特报|特報|预告|預告)\s*)?(?:PV|CM|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|特典|告知|情报|情報|回顾|回顧|映像|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/;
-  const NON_MAIN_KEYWORD_PATTERN = /(?:^|[^A-Za-z])(?:(?:PV|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED)\s*\d*(?:\.\d+)?|(?:第\s*\d+\s*(?:话|話|集)\s*)?(?:番宣|预告|預告|预告片|預告片|特报|特報|告知|情报|情報|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾)|无字幕OP|无字幕ED)/;
+  const NON_MAIN_EPISODE_PATTERN = /(?:^|[^A-Za-z])(?:(?:正式|主|第\s*\d+\s*(?:[弹彈]|话|話|集)|先导|先導|定档|定檔|特报|特報|预告|預告)\s*)?(?:PV|CM|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED|OVA|OAD|SP|MAD|MMD|LIVE|MV|PV\d+|OP\d+|ED\d+|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|特典|制作花絮|製作花絮|幕后花絮|幕後花絮|花絮|幕后|幕後|总集篇|總集篇|制作特辑|製作特輯|访谈|訪談|采访|採訪|告知|情报|情報|回顾|回顧|映像|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾|无字幕OP|无字幕ED)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/i;
+  const NON_MAIN_KEYWORD_PATTERN = /(?:^|[^A-Za-z])(?:(?:PV|Blu\s*-?\s*ray\s*(?:[&＆/+]\s*DVD)?|DVD|(?:NC\s*[-_ ]?\s*)?OP|(?:NC\s*[-_ ]?\s*)?ED)\s*\d*(?:\.\d+)?|(?:第\s*\d+\s*(?:话|話|集)\s*)?(?:番宣|预告|預告|预告片|預告片|特报|特報|制作花絮|製作花絮|幕后花絮|幕後花絮|花絮|幕后|幕後|总集篇|總集篇|制作特辑|製作特輯|访谈|訪談|采访|採訪|告知|情报|情報|插入曲|插入歌|主题曲|主題曲|片头曲|片頭曲|片尾曲|片头|片尾)|无字幕OP|无字幕ED)/i;
   const AUTO_PREVIEW_TITLE_PATTERN = /(?:^|[\s【】\[\]\(（\)）「」『』《》._&＆+＋-])(?:(?:正式|主|先导|先導|定档|定檔|特报|特報|超|第\s*\d+\s*(?:[弹彈]|话|話|集))\s*)?(?:PV\d*|PV|番宣|预告|預告|预告片|預告片|正式预告|正式預告|主预告|主預告|先导预告|先導預告|先导|先導|特报|特報|告知|情报|情報)(?:$|[\s\d【】\[\]\(（\)）「」『』《》._&＆+＋-])/i;
   const WHITELIST_NEWS_NON_MAIN_PATTERN = /(?:TV\s*)?(?:动画化|動畫化|アニメ化|anime化)\s*(?:决定|決定|确定|確定|企划|企劃|制作决定|制作決定|发表|發表|公布)|(?:剧场|劇場)?上映\s*(?:决定|決定|确定|確定)/i;
 
@@ -2774,6 +2789,8 @@
 
   function scheduleRouteRefresh(previousRawTitle, previousPageKey = state.pageKey) {
     const seq = ++routeRefreshSeq;
+    invalidatePageInitialState();
+    const pageInitialStateReady = refreshPageInitialState();
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
@@ -2787,7 +2804,8 @@
     render();
     [350, 900, 1800, 3000].forEach((delay, index, list) => {
       window.setTimeout(() => {
-        refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, index === list.length - 1);
+        const refresh = () => refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, index === list.length - 1);
+        Promise.resolve(pageInitialStateReady).then(refresh, refresh);
       }, delay);
     });
   }
@@ -8635,7 +8653,7 @@
   }
 
   function getStableBiliSubjectKey() {
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const mediaInfo = initial.mediaInfo || initial.media_info || {};
     const seasonId = initial.season_id || mediaInfo.season_id || mediaInfo.seasonId || mediaInfo.season_id_str;
     const mediaId = initial.media_id || mediaInfo.media_id || mediaInfo.mediaId || mediaInfo.media_id_str;
@@ -8802,11 +8820,11 @@
 
   function getTitleSeasonNumber(value) {
     const text = String(value || "").toLowerCase();
-    const numeric = text.match(/第(\d{1,2})(?:季|期)/)
-      || text.match(/(?<![a-z0-9])(?:season|s)(\d{1,2})(?:$|[^0-9])/)
-      || text.match(/(\d{1,2})(?:st|nd|rd|th)season/);
+    const numeric = text.match(/第\s*(\d{1,2})\s*(?:季|期|部)/)
+      || text.match(/(?<![a-z0-9])(?:season|s|part|cour)\s*0*(\d{1,2})(?:$|[^0-9])/)
+      || text.match(/(\d{1,2})(?:st|nd|rd|th)\s*(?:season|part|cour)/);
     if (numeric) return Number(numeric[1]) || 0;
-    const chinese = text.match(/第([一二两兩三四五六七八九十]{1,3})(?:季|期)/);
+    const chinese = text.match(/第\s*([一二两兩三四五六七八九十]{1,3})\s*(?:季|期|部)/);
     return chinese ? parseChineseTitleNumber(chinese[1]) : 0;
   }
 
@@ -9240,17 +9258,37 @@
   }
 
   function getPageOwnerInfo() {
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const videoData = initial.videoData || {};
-    const owner = getInitialOwnerInfo(initial, videoData);
     const domOwner = getPrimaryDomOwnerInfo();
-    const mid = owner.mid || owner.uid || videoData.mid || domOwner.mid || "";
-    const name = cleanOwnerName(owner.name || domOwner.name || findDomOwnerNameByMid(mid));
+    const domMid = String(domOwner.mid || domOwner.uid || "").trim();
+    if (domMid) {
+      return {
+        mid: domMid,
+        uid: String(domOwner.uid || domMid),
+        name: cleanOwnerName(domOwner.name),
+        username: String(domOwner.username || ""),
+      };
+    }
+    const currentBvidMatch = location.pathname.match(/\/video\/(BV[\w]+)/i);
+    const currentBvid = currentBvidMatch ? currentBvidMatch[1].toUpperCase() : "";
+    const initialBvid = String(videoData.bvid || initial.bvid || "").toUpperCase();
+    const initialMatchesPage = !currentBvid || (initialBvid && initialBvid === currentBvid);
+    const owner = initialMatchesPage ? getInitialOwnerInfo(initial, videoData) : {};
+    const mid = String(owner.mid || owner.uid || (initialMatchesPage ? videoData.mid : "") || "").trim();
+    if (mid) {
+      return {
+        mid,
+        uid: String(owner.uid || mid),
+        name: cleanOwnerName(owner.name || findDomOwnerNameByMid(mid)),
+        username: String(owner.username || ""),
+      };
+    }
     return {
-      mid,
-      uid: owner.uid || domOwner.uid || "",
-      name,
-      username: owner.username || "",
+      mid: "",
+      uid: "",
+      name: cleanOwnerName(owner.name || domOwner.name),
+      username: String(owner.username || ""),
     };
   }
 
@@ -9427,7 +9465,7 @@
   function getSeriesTitle() {
     const liveOfficialTitle = getOfficialBangumiMediaTitleFromDom();
     if (liveOfficialTitle) return liveOfficialTitle;
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const mediaInfo = initial.mediaInfo || initial.media_info || {};
     const epInfo = initial.epInfo || initial.ep_info || {};
     const candidates = [
@@ -9547,7 +9585,12 @@
   }
 
   function cleanTitle(title) {
-    const raw = stripEpisodeMarkersAtEdges(normalizeTitleText(title));
+    const normalized = normalizeTitleText(title);
+    const normalizedAnimeWorkTitle = extractAnimeWorkTitle(normalized);
+    if (normalizedAnimeWorkTitle) return cleanupAnimeTitle(normalizedAnimeWorkTitle);
+    const titleBeforeQuotedEpisode = extractTitleBeforeEpisodeMarker(normalized);
+    if (titleBeforeQuotedEpisode) return cleanupAnimeTitle(titleBeforeQuotedEpisode);
+    const raw = stripEpisodeMarkersAtEdges(normalized);
     if (!raw) return "";
 
     const animeWorkTitle = extractAnimeWorkTitle(raw);
@@ -9635,8 +9678,19 @@
 
   function extractTitleBeforeEpisodeMarker(title) {
     const text = String(title || "");
-    const match = text.match(/^(?:\s*[【\[][^\]】]+[\]】])?\s*(.+?)\s+第\s*\d+(?:\.\d+)?(?:\s*[-~～至到]\s*\d+(?:\.\d+)?)?\s*[话話集](?:\s|$|[【\[])/i);
-    return match && match[1] ? match[1].trim() : "";
+    const quotedSubtitle = "(?:《[^》]+》|「[^」]+」|『[^』]+』|“[^”]+”|\"[^\"]+\")";
+    const leadingMeta = "(?:\\s*[【\\[][^\\]】]+[\\]】])?\\s*";
+    const trailingMeta = "(?:\\s*[【\\[][^\\]】]+[\\]】])*\\s*";
+    const patterns = [
+      new RegExp(`^${leadingMeta}(.+?)\\s+${EPISODE_MARKER_SOURCE}\\s*${quotedSubtitle}${trailingMeta}$`, "i"),
+      new RegExp(`^${leadingMeta}(.+?)${quotedSubtitle}\\s*${EPISODE_MARKER_SOURCE}${trailingMeta}$`, "i"),
+      new RegExp(`^${leadingMeta}(.+?)\\s+${EPISODE_MARKER_SOURCE}\\s*$`, "i"),
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) return match[1].trim();
+    }
+    return "";
   }
 
   function extractTitleAfterJapaneseQuoteBeforeEpisode(title) {
@@ -9679,17 +9733,20 @@
 
   function cleanupAnimeTitle(title) {
     return stripEpisodeMarkersAtEdges(title)
-      .replace(/^第\s*\d+(?:\.\d+)?\s*[话集][：:\s]*/, "")
-      .replace(/\s*第\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话集].*$/i, "")
+      .replace(new RegExp(`\\s*${EPISODE_MARKER_SOURCE}\\s*`, "gi"), " ")
       .replace(/\s*全\s*\d+(?:\.\d+)?\s*[话話集].*$/i, "")
-      .replace(/\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*话.*$/i, "")
-      .replace(/\s*S0*(\d+)\s*E\s*\d+(?:\.\d+)?\s*$/i, (_, season) => ` S${Number(season)}`)
-      .replace(/\s*(?:EP\.?|#)\s*\d+(?:\.\d+)?\s*$/i, "")
+      .replace(/\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话話集]\s*$/i, "")
+      .replace(new RegExp(`\\s*S(?:EASON)?\\s*0*(\\d+)\\s*(?:EPISODE|E(?:P)?\\.?)\\s*${EPISODE_NUMBER_SOURCE}\\s*[-~～〜－–—―至到]\\s*(?:(?:EPISODE|E(?:P)?\\.?)\\s*)?${EPISODE_NUMBER_SOURCE}\\s*$`, "i"), (_, season) => ` S${Number(season)}`)
+      .replace(new RegExp(`\\s*(?:EPISODE|EP\\.?|#)\\s*${EPISODE_NUMBER_SOURCE}\\s*[-~～〜－–—―至到]\\s*(?:EPISODE|EP\\.?|#)?\\s*${EPISODE_NUMBER_SOURCE}\\s*$`, "i"), "")
+      .replace(/\s*S(?:EASON)?\s*0*(\d+)\s*(?:EPISODE|E(?:P)?\.?)\s*\d+(?:\.\d+)?\s*$/i, (_, season) => ` S${Number(season)}`)
+      .replace(/\s*(?:EPISODE|EP\.?|#)\s*\d+(?:\.\d+)?\s*$/i, "")
       .replace(/\s*[\[【]\s*\d+(?:\.\d+)?\s*[\]】]\s*$/i, "")
       .replace(/^[【\[]([^】\]]+)[】\]]\s*/i, (match, content) => (isTitleMetaTag(content) ? " " : match))
       .replace(/【[^】]*(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|中文字幕|中文|字幕组?|汉化组|漢化組|压制|超清|高清|标清|新番|完结|全集)[^】]*】/gi, " ")
       .replace(/\[[^\]]*(?:4K|1080P|720P|480P|HDR|SDR|BDRIP|WEBRIP|BD|WEB|简中|繁中|简体|繁体|中字|中日|中文字幕|中文|字幕组?|汉化组|漢化組|压制|超清|高清|标清|新番|完结|全集)[^\]]*\]/gi, " ")
-      .replace(/\s+0*([0-9]{1,3})\s*$/i, (match, value) => (isCommonResolutionNumber(value) ? match : " "))
+      .replace(/\s+0*([0-9]{1,3})\s*$/i, (match, value, _offset, whole) => (
+        isCommonResolutionNumber(value) || getTitleSeasonNumber(whole) === Number(value) ? match : " "
+      ))
       .replace(/\s+(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*(?:\s*[&＆/+]\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*)+(?:\s*[【\[].*?[】\]])?\s*$/, "")
       .replace(/[《》『』【】\[\]]/g, " ")
       .replace(/\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*(?:\s*[&＆/+]\s*(?:NC\s*[-_ ]?\s*)?(?:OP|ED)\s*\d*)+\s*$/, "")
@@ -9701,31 +9758,44 @@
   }
 
   function stripEpisodeMarkersAtEdges(title) {
-    const episodeMarker = "第\\s*\\d+(?:\\.\\d+)?(?:(?:\\s*[-~～〜－–—―至到]\\s*|\\s+)\\d+(?:\\.\\d+)?)?\\s*[话話集]";
     return String(title || "")
-      .replace(new RegExp(`^(?:\\s*[【\\[]\\s*)?${episodeMarker}(?:\\s*[】\\]])?[：:\\s]*`, "i"), " ")
-      .replace(new RegExp(`\\s*(?:[【\\[]\\s*)?${episodeMarker}(?:\\s*[】\\]])?\\s*$`, "i"), " ")
+      .replace(new RegExp(`^(?:\\s*[【\\[]\\s*)?${EPISODE_MARKER_SOURCE}(?:\\s*[】\\]])?[：:\\s]*`, "i"), " ")
+      .replace(new RegExp(`\\s*(?:[【\\[]\\s*)?${EPISODE_MARKER_SOURCE}(?:\\s*[】\\]])?\\s*$`, "i"), " ")
       .trim();
   }
 
   function isTitleMetaTag(value) {
     const text = String(value || "").trim();
     if (!text) return false;
-    return isTitlePropertyTag(text) || isSeasonMarker(text) || isReleaseInfoTag(text);
+    return isTitlePropertyTag(text) || isSeasonMarker(text) || isEpisodeMarkerToken(text) || isReleaseInfoTag(text);
   }
 
   function isTitlePropertyTag(value) {
-    const upper = String(value || "").trim().toUpperCase();
+    const raw = String(value || "").trim();
+    const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+    const upper = normalized.toUpperCase();
     if (!upper) return false;
-    return TITLE_PROPERTY_TAGS.some((tag) => upper.includes(tag.toUpperCase()));
+    let remainder = upper.replace(/[\s/&＆+＋|｜,，;；:_-]+/g, "");
+    TITLE_PROPERTY_TAGS
+      .map((tag) => tag.toUpperCase())
+      .sort((left, right) => right.length - left.length)
+      .forEach((tag) => {
+        remainder = remainder.split(tag).join("");
+      });
+    return remainder.length === 0;
   }
 
   function isSeasonMarker(value) {
     const text = String(value || "").trim();
     return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(text)
-      || /^第\s*[一二两兩三四五六七八九十\d]{1,3}\s*季$/i.test(text)
-      || /^\d{1,3}(?:st|nd|rd|th)\s*season$/i.test(text)
-      || /^season\s*\d{1,3}$/i.test(text);
+      || /^第\s*[一二两兩三四五六七八九十\d]{1,3}\s*(?:季|期|部)$/i.test(text)
+      || /^\d{1,3}(?:st|nd|rd|th)\s*(?:season|part|cour)$/i.test(text)
+      || /^(?:season|s|part|cour)\s*0*\d{1,3}$/i.test(text);
+  }
+
+  function isEpisodeMarkerToken(value) {
+    const text = String(value || "").trim();
+    return new RegExp(`^${EPISODE_MARKER_SOURCE}$`, "i").test(text);
   }
 
   function isCommonResolutionNumber(value) {
@@ -9801,18 +9871,26 @@
     return seasonNo === 1 ? baseTitle : `${baseTitle} 第${seasonNo}季`;
   }
 
-  function detectEpisodeNo(text) {
+  function detectEpisodeNo(text, options = {}) {
     const title = String(text || "");
     if (isNonMainEpisodeTitle(title)) return null;
     if (hasEpisodeRangeMarker(title)) return null;
-    for (const pattern of EPISODE_PATTERNS) {
+    const allowBare = options && options.allowBare === true;
+    const seasonOnlyContext = /(?:^|[^a-z0-9])(?:season|s|part|cour)\s*0*\d{1,3}\s*$/i.test(title)
+      || /\d{1,3}(?:st|nd|rd|th)\s*(?:season|part|cour)\s*$/i.test(title)
+      || /第\s*[一二两兩三四五六七八九十\d]{1,3}\s*(?:季|期|部)\s*$/i.test(title);
+    for (const [index, pattern] of EPISODE_PATTERNS.entries()) {
       const match = title.match(pattern);
       if (!match) continue;
+      const hasExplicitEpisodeUnit = /[话話集]\s*$/i.test(String(match[0] || ""));
+      if (index >= 5 && (!allowBare || seasonOnlyContext) && !hasExplicitEpisodeUnit) continue;
       if (isEpisodeRangeMatch(match)) continue;
       if (isTotalEpisodeCountMatch(title, match)) continue;
-      const value = Number(match[1]);
-      if (!Number.isFinite(value) || value <= 0) continue;
-      if (isCommonResolutionNumber(value)) continue;
+      const token = String(match[1] || "");
+      const value = /^\d/.test(token) ? Number(token) : parseChineseNumber(token);
+      if (!Number.isFinite(value) || value <= 0 || value > 9999) continue;
+      if (index >= 3 && value >= 1900 && value <= 2099) continue;
+      if (index >= 5 && !hasExplicitEpisodeUnit && isCommonResolutionNumber(value)) continue;
       return value;
     }
     return null;
@@ -9821,7 +9899,11 @@
   function isTotalEpisodeCountMatch(title, match) {
     const index = typeof match.index === "number" ? match.index : -1;
     if (index < 0) return false;
-    return /全\s*$/.test(String(title || "").slice(0, index));
+    const source = String(title || "");
+    const before = source.slice(0, index);
+    const after = source.slice(index + String(match[0] || "").length);
+    return /(?:全|共|总共|總共|一共|更新至|更新到|已更新至|已更新到|連載至|连载至|連載到|连载到)\s*$/.test(before)
+      || /^\s*(?:[【\[(（]\s*)?(?:全|完|完结|完結|全集|已完结|已完結)(?:\s*[】\])）])?(?:\s|$|[【\[(（])/i.test(after);
   }
 
   function isEpisodeRangeMatch(match) {
@@ -9830,8 +9912,9 @@
 
   function hasEpisodeRangeMarker(text) {
     const title = String(text || "");
-    return /第\s*[0-9]+(?:\.[0-9]+)?\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?\s*[话話集]/i.test(title)
-      || /第\s*[0-9]+(?:\.[0-9]+)?\s+[0-9]+(?:\.[0-9]+)?\s*[话話集]/i.test(title)
+    return new RegExp(EPISODE_RANGE_MARKER_SOURCE, "i").test(title)
+      || new RegExp(LABELED_EPISODE_RANGE_SOURCE, "i").test(title)
+      || new RegExp(`第\\s*${EPISODE_NUMBER_SOURCE}\\s+(?:第\\s*)?${EPISODE_NUMBER_SOURCE}\\s*[话話集]`, "i").test(title)
       || /(?:^|[\s#\[])[0-9]+(?:\.[0-9]+)?\s*[-~～至到]\s*[0-9]+(?:\.[0-9]+)?\s*(?:话|話|集|]|$)/i.test(title);
   }
 
@@ -9855,9 +9938,9 @@
     if (officialProgressNo) return officialProgressNo;
     const titleEpisodeNo = detectEpisodeNo(rawTitle);
     if (titleEpisodeNo) return titleEpisodeNo;
-    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
+    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText(), { allowBare: true }) || getCurrentVideoPartEpisodeNo();
     if (isNonMainEpisodeTitle(rawTitle)) return null;
-    return detectEpisodeNo(getActiveEpisodeText()) || getCurrentVideoPartEpisodeNo();
+    return detectEpisodeNo(getActiveEpisodeText(), { allowBare: true }) || getCurrentVideoPartEpisodeNo();
   }
 
   function scheduleEpisodeContextRefresh() {
@@ -10120,15 +10203,22 @@
   function parseChineseNumber(value) {
     const text = String(value || "").trim();
     if (/^\d+$/.test(text)) return Number(text);
-    const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
-    if (text === "十") return 10;
-    const tenIndex = text.indexOf("十");
-    if (tenIndex >= 0) {
-      const tens = tenIndex === 0 ? 1 : digits[text[tenIndex - 1]];
-      const ones = tenIndex === text.length - 1 ? 0 : digits[text[tenIndex + 1]];
-      return Number.isFinite(tens) && Number.isFinite(ones) ? tens * 10 + ones : NaN;
+    const digits = { 零: 0, 〇: 0, 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+    if (!text || !/^[零〇一二两兩三四五六七八九十百]+$/.test(text)) return NaN;
+    let total = 0;
+    let current = 0;
+    for (const char of text) {
+      if (Object.prototype.hasOwnProperty.call(digits, char)) {
+        current = digits[char];
+      } else if (char === "十") {
+        total += (current || 1) * 10;
+        current = 0;
+      } else if (char === "百") {
+        total += (current || 1) * 100;
+        current = 0;
+      }
     }
-    return text.length === 1 && Object.prototype.hasOwnProperty.call(digits, text) ? digits[text] : NaN;
+    return total + current;
   }
 
   function parseCollectionFragment(value) {
@@ -10178,6 +10268,8 @@
   function getQualifiedCollectionPartRows(rows) {
     const qualifiedBarePartNos = new Set();
     const qualifiedHierarchicalPartNos = new Set();
+    const decimalPartNos = new Set();
+    const qualifiedDecimalPartNos = new Set();
     let run = [];
     const finishRun = () => {
       if (run.length >= MIN_COLLECTION_PARSED_PARTS) {
@@ -10247,12 +10339,38 @@
       ) return;
       ordered.forEach((row) => qualifiedHierarchicalPartNos.add(row.partNo));
     });
+    const decimalRows = rows.filter((row) => (
+      row.parsed
+      && !row.bareNumeric
+      && !row.parsed.hierarchical
+      && /^0*\d{1,3}\s*[.．]\s*[1-8](?:\s|$)/.test(String(row.title || ""))
+    ));
+    const decimalFragmentsByEpisode = new Map();
+    decimalRows.forEach((row) => {
+      decimalPartNos.add(row.partNo);
+      const episodeNo = Number(row.parsed.episodeNo);
+      if (!decimalFragmentsByEpisode.has(episodeNo)) decimalFragmentsByEpisode.set(episodeNo, new Set());
+      decimalFragmentsByEpisode.get(episodeNo).add(Number(row.parsed.fragmentIndex));
+    });
+    const hasDecimalSplitEvidence = Array.from(decimalFragmentsByEpisode.values())
+      .some((fragments) => fragments.size >= 2 && fragments.has(1));
+    if (hasDecimalSplitEvidence) {
+      decimalRows.forEach((row) => {
+        const fragments = decimalFragmentsByEpisode.get(Number(row.parsed.episodeNo)) || new Set();
+        // A lone ".1" can be an unsplit episode inside an otherwise split collection.
+        // Higher fragments need evidence from their own episode; this keeps an isolated
+        // Bangumi-style 2.5 special episode from becoming "episode 2, fragment 5".
+        if (Number(row.parsed.fragmentIndex) === 1 || (fragments.has(1) && fragments.size >= 2)) {
+          qualifiedDecimalPartNos.add(row.partNo);
+        }
+      });
+    }
     return rows.filter((row) => row.parsed && (
       row.bareNumeric
         ? qualifiedBarePartNos.has(row.partNo)
         : row.parsed.hierarchical
           ? qualifiedHierarchicalPartNos.has(row.partNo)
-          : true
+          : !decimalPartNos.has(row.partNo) || qualifiedDecimalPartNos.has(row.partNo)
     ));
   }
 
@@ -10638,32 +10756,44 @@
   function parseLongVideoPartTitle(value) {
     const text = String(value || "").replace(/\s+/g, " ").trim();
     if (!text) return null;
-    const chineseRangeMatch = text.match(/(?:^|[^\d一二两兩三四五六七八九十百~～–—至到-])(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[-~～–—至到]\s*(?:第\s*)?0*(\d{1,3}))?/i);
-    if (chineseRangeMatch) {
-      const seasonNo = parseChineseNumber(chineseRangeMatch[1]);
-      const episodeStart = Number(chineseRangeMatch[2]);
-      const episodeEnd = Number(chineseRangeMatch[3] || chineseRangeMatch[2]);
-      if (seasonNo > 0 && episodeStart > 0 && episodeEnd >= episodeStart) {
-        return { seasonNo, episodeStart, episodeEnd, rangeLabel: `第${seasonNo}季 ${episodeStart}-${episodeEnd}` };
-      }
-    }
-    const rangeMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3})(?:\s*[-~～–—至到]\s*(?:E(?:P)?\.?\s*)?0*(\d{1,3}))?/i);
+    const chineseSeasonMatch = text.match(/(?:^|[^\d一二两兩三四五六七八九十百~～–—至到-])(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季(.*)$/i);
+    const englishSeasonMatch = chineseSeasonMatch
+      ? null
+      : text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})(?=$|[^0-9])(.*)$/i);
+    const seasonToken = chineseSeasonMatch ? chineseSeasonMatch[1] : (englishSeasonMatch && englishSeasonMatch[1]);
+    const seasonNo = seasonToken ? parseChineseNumber(seasonToken) : 0;
+    if (!Number.isFinite(seasonNo) || seasonNo <= 0) return null;
+
+    const chineseStyle = Boolean(chineseSeasonMatch);
+    const rangeLabelPrefix = chineseStyle ? `第${seasonNo}季` : `S${seasonNo}`;
+    const remainder = String((chineseSeasonMatch || englishSeasonMatch)[2] || "").trim();
+    const episodeToken = "([零〇一二两兩三四五六七八九十百\\d]{1,4})";
+    const quantifiedRange = remainder.match(new RegExp(
+      `^(?:第\\s*)?${episodeToken}\\s*(?:话|話|集)\\s*[-~～–—至到]\\s*(?:第\\s*)?${episodeToken}\\s*(?:话|話|集)`,
+      "i",
+    ));
+    const compactRange = quantifiedRange ? null : remainder.match(new RegExp(
+      `^(?:(?:EPISODE|E|EP)\\.?\\s*|第\\s*)?${episodeToken}\\s*[-~～–—至到]\\s*(?:(?:EPISODE|E|EP)\\.?\\s*|第\\s*)?${episodeToken}(?:\\s*(?:话|話|集))?`,
+      "i",
+    ));
+    const rangeMatch = quantifiedRange || compactRange;
     if (rangeMatch) {
-      const seasonNo = Number(rangeMatch[1]);
-      const episodeStart = Number(rangeMatch[2]);
-      const episodeEnd = Number(rangeMatch[3] || rangeMatch[2]);
-      if (seasonNo > 0 && episodeStart > 0 && episodeEnd >= episodeStart) {
-        return { seasonNo, episodeStart, episodeEnd, rangeLabel: `S${seasonNo} ${episodeStart}-${episodeEnd}` };
+      const episodeStart = parseChineseNumber(rangeMatch[1]);
+      const episodeEnd = parseChineseNumber(rangeMatch[2]);
+      if (episodeStart > 0 && episodeEnd >= episodeStart && episodeEnd <= 9999) {
+        return { seasonNo, episodeStart, episodeEnd, rangeLabel: `${rangeLabelPrefix} ${episodeStart}-${episodeEnd}` };
       }
     }
-    const chineseSeasonMatch = text.match(/(?:^|[^\d一二两兩三四五六七八九十百~～–—至到-])(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季(?:$|\s)/i);
-    if (chineseSeasonMatch) {
-      const seasonNo = parseChineseNumber(chineseSeasonMatch[1]);
-      if (seasonNo > 0) return { seasonNo, episodeStart: null, episodeEnd: null, rangeLabel: `第${seasonNo}季` };
+
+    const explicitSingle = remainder.match(new RegExp(`^(?:第\\s*)?${episodeToken}\\s*(?:话|話|集)`, "i"))
+      || remainder.match(new RegExp(`^(?:EPISODE|E|EP)\\.?\\s*${episodeToken}(?!\\d)`, "i"));
+    if (explicitSingle) {
+      const episodeNo = parseChineseNumber(explicitSingle[1]);
+      if (episodeNo > 0 && episodeNo <= 9999) {
+        return { seasonNo, episodeStart: episodeNo, episodeEnd: episodeNo, rangeLabel: `${rangeLabelPrefix} ${episodeNo}-${episodeNo}` };
+      }
     }
-    const seasonMatch = text.match(/(?:^|[^A-Z0-9])(?:S|SEASON)\s*0*(\d{1,2})(?:\b|\s)/i);
-    const seasonNo = seasonMatch ? Number(seasonMatch[1]) : 0;
-    return seasonNo > 0 ? { seasonNo, episodeStart: null, episodeEnd: null, rangeLabel: `S${seasonNo}` } : null;
+    return { seasonNo, episodeStart: null, episodeEnd: null, rangeLabel: rangeLabelPrefix };
   }
 
   function getVideoPartListNodes() {
@@ -10842,7 +10972,7 @@
   function getLongVideoOwnerInfo() {
     const domOwner = getPrimaryDomOwnerInfo();
     if (domOwner && (domOwner.mid || domOwner.uid)) return domOwner;
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const videoData = initial.videoData || initial.videoInfo || {};
     const currentBvidMatch = location.pathname.match(/\/video\/(BV[\w]+)/i);
     const currentBvid = currentBvidMatch ? currentBvidMatch[1].toUpperCase() : "";
@@ -11026,7 +11156,7 @@
   function getLongVideoDurationSeconds(video) {
     const direct = Number(video && video.duration);
     if (Number.isFinite(direct) && direct > 0) return direct;
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const videoData = initial.videoData || initial.videoInfo || {};
     const currentBvidMatch = location.pathname.match(/\/video\/(BV[\w]+)/i);
     const currentBvid = currentBvidMatch ? currentBvidMatch[1].toUpperCase() : "";
@@ -11137,13 +11267,22 @@
     if (overflowSeconds > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS) {
       return { active: false, reason: "首集起点加全季时长已超过视频总长，请校准首集开始时间。" };
     }
-    const autoMarkSafe = !segment.rangeFallback && !rangeTimingMismatch && timeline.safeForAutoMark && overflowSeconds <= LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS;
+    const trailingOverflowSeconds = Math.max(0, duration - timeline.endTime);
+    const timelineCoverageMismatch = !segment.rangeApplied
+      && trailingOverflowSeconds > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS;
+    const autoMarkSafe = !segment.rangeFallback
+      && !rangeTimingMismatch
+      && !timelineCoverageMismatch
+      && timeline.safeForAutoMark
+      && overflowSeconds <= LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS;
     return {
       active: true,
       reason: segment.rangeFallback
         ? `分P标注的 ${segment.rangeLabel || "章节范围"} 与当前 Bangumi 条目或视频时长不吻合，已按整季显示推测且不会自动标记。`
         : rangeTimingMismatch
         ? `分P标注的 ${segment.rangeLabel || "章节范围"} 对应正片时长明显短于视频，仅显示推测且不会自动标记。`
+        : timelineCoverageMismatch
+        ? "视频总长明显超过推测的整季时间线，仅显示推测且不会自动标记。"
         : autoMarkSafe
         ? "条件已满足，将按分集局部进度推测。"
         : "条件已满足，但分集时长不完整或时间线与视频不完全吻合，仅显示推测，不自动标记。",
@@ -11152,6 +11291,7 @@
       autoMarkSafe,
       segment,
       rangeTimingMismatch,
+      timelineCoverageMismatch,
     };
   }
 
@@ -11198,16 +11338,28 @@
     if (!text) return 0;
     if (/^\d{1,3}:\d{2}(?::\d{2})?$/.test(text)) {
       const parts = text.split(":").map(Number);
+      if (parts[parts.length - 1] >= 60 || (parts.length === 3 && parts[1] >= 60)) return 0;
       const seconds = parts.length === 3 ? parts[0] * 3600 + parts[1] * 60 + parts[2] : parts[0] * 60 + parts[1];
       return Number.isFinite(seconds) && seconds >= minSeconds && seconds <= maxSeconds ? Math.round(seconds) : 0;
     }
+    const compact = text.replace(/\s+/g, "");
+    const unitPattern = /(\d+(?:\.\d+)?)(hours?|hrs?|hr|h|小时|小時|minutes?|mins?|min|m|分钟|分鐘|分|seconds?|secs?|sec|s|秒)/gi;
     let seconds = 0;
-    const hours = text.match(/(\d+(?:\.\d+)?)\s*(?:h|hr|hrs|hour|hours|小时|小時)/);
-    const minutes = text.match(/(\d+(?:\.\d+)?)\s*(?:m|min|mins|minute|minutes|分钟|分鐘|分)/);
-    const secs = text.match(/(\d+(?:\.\d+)?)\s*(?:s|sec|secs|second|seconds|秒)/);
-    if (hours) seconds += Number(hours[1]) * 3600;
-    if (minutes) seconds += Number(minutes[1]) * 60;
-    if (secs) seconds += Number(secs[1]);
+    let cursor = 0;
+    let matched = false;
+    const seenUnits = new Set();
+    for (const match of compact.matchAll(unitPattern)) {
+      if (match.index !== cursor) return 0;
+      const amount = Number(match[1]);
+      const unit = String(match[2] || "").toLowerCase();
+      const kind = /^(?:h|小)/i.test(unit) ? "hours" : (/^(?:m|分)/i.test(unit) ? "minutes" : "seconds");
+      if (!Number.isFinite(amount) || seenUnits.has(kind)) return 0;
+      seenUnits.add(kind);
+      seconds += amount * (kind === "hours" ? 3600 : kind === "minutes" ? 60 : 1);
+      cursor = match.index + match[0].length;
+      matched = true;
+    }
+    if (!matched || cursor !== compact.length) return 0;
     return Number.isFinite(seconds) && seconds >= minSeconds && seconds <= maxSeconds ? Math.round(seconds) : 0;
   }
 
@@ -11419,7 +11571,7 @@
       const text = getActiveEpisodeNodeText(el, false);
       if (text) return text;
     }
-    const initial = window.__INITIAL_STATE__ || {};
+    const initial = getPageInitialState();
     const epInfo = initial.epInfo || initial.ep_info || initial.epInfoV2 || {};
     return epInfo.long_title || epInfo.title || epInfo.share_copy || "";
   }
@@ -11470,8 +11622,8 @@
     }
     const part = getCurrentVideoPartContext();
     if (part && part.seasonNo) return null;
-    if (part && part.partCount > 1) return part.partNo;
-    return getCurrentPartNoFromUrl();
+    if (!part || part.partCount <= 1 || isNonMainEpisodeTitle(part.title)) return null;
+    return detectEpisodeNo(part.title);
   }
 
   function getActiveEpisodeNodeText(el, requireVisible = true) {
@@ -11497,12 +11649,12 @@
     candidates.push(rawText, stripTrailingDurationText(rawText));
     return candidates
       .map((text) => String(text || "").replace(/\s+/g, " ").trim())
-      .find((text) => text && detectEpisodeNo(text)) || "";
+      .find((text) => text && detectEpisodeNo(text, { allowBare: true })) || "";
   }
 
   function stripTrailingDurationText(text) {
     return String(text || "")
-      .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
+      .replace(/\s+\d{1,3}:\d{2}(?::\d{2})?\s*$/i, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -11620,6 +11772,7 @@
   function isCurrentEpisodeNumber(episode, localNo, total) {
     const currentNo = Number(state.currentEpisodeNo);
     if (!Number.isFinite(currentNo) || currentNo <= 0) return false;
+    if (!Number.isInteger(currentNo)) return Number(episode && episode.sort) === currentNo;
     if (currentNo <= Number(total || 0)) return Number(localNo) === currentNo;
     return Number(episode && episode.sort) === currentNo;
   }

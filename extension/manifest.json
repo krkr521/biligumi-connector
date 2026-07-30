@@ -5,8 +5,10 @@
   "description": "Embed Bangumi collection, rating, episode progress and OP/ED skip controls into Bilibili watch pages.",
   "permissions": [
     "storage",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
+  "minimum_chrome_version": "95",
   "host_permissions": [
     "https://www.bilibili.com/video/*",
     "https://www.bilibili.com/bangumi/play/*",

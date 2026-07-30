@@ -8,6 +8,7 @@
   const MSG_OPEN_DELETE_BRIDGE = "biligumi-open-delete-bridge";
   const MSG_FOCUS_DELETE_BRIDGE = "biligumi-focus-delete-bridge";
   const MSG_CLOSE_DELETE_BRIDGE = "biligumi-close-delete-bridge";
+  const MSG_READ_PAGE_STATE = "biligumi-read-page-state-v1";
   const RUNTIME_STATE_KEY = "__biligumiOpedRuntimeState";
   const BILIBILI_URL_PATTERNS = [
     "https://www.bilibili.com/video/*",
@@ -34,6 +35,14 @@
     if (message && message.type === MSG_CLOSE_DELETE_BRIDGE) {
       closeDeleteBridgeTab(sender, message.tabId).then(
         () => sendResponse({ ok: true }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
+    if (message && message.type === MSG_READ_PAGE_STATE) {
+      readBilibiliPublicPageState(sender).then(
+        (state) => sendResponse({ ok: true, state }),
         (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
       );
       return true;
@@ -93,6 +102,127 @@
       throw new Error("Blocked delete bridge tab close");
     }
     await tabsRemove(tab.id);
+  }
+
+  async function readBilibiliPublicPageState(sender) {
+    if (
+      !sender
+      || sender.frameId !== 0
+      || !sender.tab
+      || !Number.isInteger(sender.tab.id)
+      || !isBilibiliVideoUrl(sender.url || sender.tab.url)
+    ) {
+      throw new Error("Blocked page-state sender");
+    }
+    const results = await chrome.scripting.executeScript({
+      target: { tabId: sender.tab.id, frameIds: [0] },
+      world: "MAIN",
+      func: collectBilibiliPublicPageState,
+    });
+    const result = Array.isArray(results) && results[0] ? results[0].result : null;
+    return normalizeBilibiliPublicPageState(result);
+  }
+
+  function collectBilibiliPublicPageState() {
+    const initial = window.__INITIAL_STATE__;
+    if (!initial || typeof initial !== "object") {
+      return { schemaVersion: 1, href: location.href };
+    }
+    const mediaInfo = initial.mediaInfo || initial.media_info || {};
+    const epInfo = initial.epInfo || initial.ep_info || initial.epInfoV2 || {};
+    const videoData = initial.videoData || initial.videoInfo || {};
+    const ownerCandidates = [
+      videoData.owner,
+      initial.owner,
+      initial.aidData && initial.aidData.owner,
+      initial.videoInfo && initial.videoInfo.owner,
+      initial.arc && initial.arc.owner,
+      initial.view && initial.view.owner,
+    ];
+    const owner = ownerCandidates.find((candidate) => (
+      candidate && typeof candidate === "object"
+      && (candidate.mid || candidate.uid || candidate.name || candidate.username)
+    )) || {};
+    return {
+      schemaVersion: 1,
+      href: location.href,
+      identity: {
+        bvid: videoData.bvid || initial.bvid || "",
+        seasonId: initial.season_id || mediaInfo.season_id || mediaInfo.seasonId || mediaInfo.season_id_str || "",
+        mediaId: initial.media_id || mediaInfo.media_id || mediaInfo.mediaId || mediaInfo.media_id_str || "",
+        episodeId: epInfo.id || epInfo.ep_id || epInfo.epId || initial.ep_id || initial.epId || "",
+      },
+      titles: {
+        mediaTitle: mediaInfo.title || mediaInfo.name || "",
+        seasonTitle: mediaInfo.season_title || mediaInfo.seasonTitle || initial.season_title || initial.seasonTitle || epInfo.season_title || epInfo.seasonTitle || "",
+        episodeTitle: epInfo.title || "",
+        episodeLongTitle: epInfo.long_title || epInfo.longTitle || "",
+        shareCopy: epInfo.share_copy || epInfo.shareCopy || "",
+      },
+      owner: {
+        mid: owner.mid || "",
+        uid: owner.uid || "",
+        name: owner.name || "",
+        username: owner.username || "",
+      },
+      durationSeconds: videoData.duration || initial.duration || 0,
+    };
+  }
+
+  function normalizeBilibiliPublicPageState(value) {
+    const input = value && typeof value === "object" ? value : {};
+    const href = normalizeBilibiliStateHref(input.href);
+    if (!href) throw new Error("Invalid page-state URL");
+    const identity = input.identity && typeof input.identity === "object" ? input.identity : {};
+    const titles = input.titles && typeof input.titles === "object" ? input.titles : {};
+    const owner = input.owner && typeof input.owner === "object" ? input.owner : {};
+    const duration = Number(input.durationSeconds);
+    return {
+      schemaVersion: 1,
+      href,
+      identity: {
+        bvid: /^BV[a-z0-9]{5,20}$/i.test(String(identity.bvid || "")) ? String(identity.bvid) : "",
+        seasonId: normalizeNumericId(identity.seasonId),
+        mediaId: normalizeNumericId(identity.mediaId),
+        episodeId: normalizeNumericId(identity.episodeId),
+      },
+      titles: {
+        mediaTitle: normalizePublicText(titles.mediaTitle, 500),
+        seasonTitle: normalizePublicText(titles.seasonTitle, 500),
+        episodeTitle: normalizePublicText(titles.episodeTitle, 500),
+        episodeLongTitle: normalizePublicText(titles.episodeLongTitle, 500),
+        shareCopy: normalizePublicText(titles.shareCopy, 500),
+      },
+      owner: {
+        mid: normalizeNumericId(owner.mid),
+        uid: normalizeNumericId(owner.uid),
+        name: normalizePublicText(owner.name, 100),
+        username: normalizePublicText(owner.username, 100),
+      },
+      durationSeconds: Number.isFinite(duration) && duration > 0 && duration <= 7 * 24 * 60 * 60 ? duration : 0,
+    };
+  }
+
+  function normalizeBilibiliStateHref(value) {
+    try {
+      const parsed = new URL(String(value || ""));
+      return parsed.protocol === "https:"
+        && parsed.hostname === "www.bilibili.com"
+        && (parsed.pathname.startsWith("/video/") || parsed.pathname.startsWith("/bangumi/play/"))
+        ? parsed.href
+        : "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function normalizeNumericId(value) {
+    const text = String(value == null ? "" : value).trim();
+    return /^\d{1,20}$/.test(text) ? text : "";
+  }
+
+  function normalizePublicText(value, maxLength) {
+    return String(value == null ? "" : value).replace(/\s+/g, " ").trim().slice(0, maxLength);
   }
 
   function isDeleteBridgeUrl(url) {
@@ -308,7 +438,8 @@
   function isBilibiliVideoUrl(url) {
     try {
       const parsed = new URL(url || "");
-      return parsed.hostname === "www.bilibili.com"
+      return parsed.protocol === "https:"
+        && parsed.hostname === "www.bilibili.com"
         && (parsed.pathname.startsWith("/video/") || parsed.pathname.startsWith("/bangumi/play/"));
     } catch (_error) {
       return false;
