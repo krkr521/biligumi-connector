@@ -40,6 +40,33 @@ for (const name of CONFIG_FUNCTIONS) {
   );
 }
 
+// The hover-panel UI layer must stay mirrored too (identity-only guard;
+// these functions need a DOM, so behavior is reviewed rather than sandboxed).
+const HOVER_UI_FUNCTIONS = [
+  "refreshOpedSkipButton",
+  "buildOpedSkipHoverPanel",
+  "syncOpedSkipHoverPanel",
+  "handleOpedSkipButtonMouseEnter",
+  "handleOpedSkipButtonMouseLeave",
+  "cancelOpedSkipHoverHide",
+  "scheduleOpedSkipHoverHide",
+  "handleOpedHoverSliderPointerDown",
+  "handleOpedHoverGlobalPointerUp",
+  "handleOpedHoverSliderInput",
+  "isOpedSkipHoverEvent",
+  "findOpedSkipButtonPlacement",
+  "handleOpedSkipButtonClick",
+  "handleOpedSkipButtonMouseDown",
+  "handleOpedSkipButtonKeydown",
+];
+for (const name of HOVER_UI_FUNCTIONS) {
+  assert.equal(
+    extractFunction(extensionSource, name),
+    extractFunction(userscriptSource, name),
+    `${name} must stay identical between userscript and extension`,
+  );
+}
+
 const CONSTANTS = [
   "DEFAULT_OPED_SKIP_SECONDS",
   "OPED_SKIP_SLIDER_MIN",
@@ -52,6 +79,10 @@ for (const source of [userscriptSource, extensionSource]) {
   assert.equal(constants.OPED_SKIP_SLIDER_MIN, 20);
   assert.equal(constants.OPED_SKIP_SLIDER_MAX, 100);
   assert.equal(constants.OPED_SKIP_SLIDER_STEP, 5);
+  assert.equal(
+    extractConstants(source, ["OPED_SKIP_HOVER_HIDE_DELAY_MS"]).OPED_SKIP_HOVER_HIDE_DELAY_MS,
+    300,
+  );
 }
 
 function buildApi(source) {
@@ -132,6 +163,16 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.ok(
     !/settings-oped-skip-seconds"[^>]*disabled/.test(renderBlock),
     `${label}: settings seconds input must not be subject-gated anymore`,
+  );
+}
+
+// Placement: the button anchors to the rendered time label only. The bare
+// bottom-left container fallback made it flash at the video corner on load.
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  const placementBlock = extractFunction(source, "findOpedSkipButtonPlacement");
+  assert.ok(
+    !/control-bottom-left/.test(placementBlock),
+    `${label}: placement must not fall back to the bare bottom-left container`,
   );
 }
 
