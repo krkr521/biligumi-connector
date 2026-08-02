@@ -9738,9 +9738,20 @@
     for (const selector of selectors) {
       const element = document.querySelector(selector);
       const title = element && getElementTitleText(element);
-      if (title && cleanTitle(title)) return title;
+      const cleanedTitle = title && cleanTitle(title);
+      if (cleanedTitle && !isBilibiliCollectionArchiveTitle(cleanedTitle)) return title;
     }
     return "";
+  }
+
+  function isBilibiliCollectionArchiveTitle(value) {
+    const raw = String(value || "");
+    const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+    const compact = normalized
+      .replace(/^[「『《【\[]+|[」』》】\]]+$/g, "")
+      .replace(/\s+/g, "")
+      .trim();
+    return /^(?:(?:\d{2}|\d{4})年[\\/／＼.．_-]?)?\d{1,2}月(?:新番|番剧|番劇|动画|動畫|动漫|動漫|合集)*$/i.test(compact);
   }
 
   function getElementTitleText(element) {
@@ -10144,7 +10155,27 @@
   function suggestSearchKeyword() {
     return state.subject
       ? displaySubjectName(state.subject)
-      : getCurrentSeasonSearchKeyword() || cleanTitle(getBilibiliCollectionTitle()) || state.pageTitle;
+      : getCurrentSeasonSearchKeyword() || getCurrentPageSearchKeyword() || cleanTitle(getBilibiliCollectionTitle());
+  }
+
+  function getCurrentPageSearchKeyword() {
+    const keyword = String(state.pageTitle || "").trim();
+    if (!keyword) return "";
+    const rawTitle = String(state.rawTitle || getPageTitle() || "").trim();
+    return isStandaloneBilibiliPartTitle(rawTitle) ? "" : keyword;
+  }
+
+  function isStandaloneBilibiliPartTitle(value) {
+    const raw = String(value || "");
+    const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC").trim() : raw.trim();
+    if (!normalized) return false;
+    // Only part-style wrappers make a bare number metadata. Quoted numbers may be real titles such as 『86』.
+    if (/^[（(【\[]\s*\d+(?:\.\d+)?\s*[）)】\]]$/.test(normalized)) return true;
+    const unwrapped = normalized
+      .replace(/^[「『《【\[]\s*/, "")
+      .replace(/\s*[」』》】\]]$/, "")
+      .trim();
+    return new RegExp(`^${EPISODE_MARKER_SOURCE}$`, "i").test(unwrapped);
   }
 
   function getCurrentSeasonSearchKeyword() {
