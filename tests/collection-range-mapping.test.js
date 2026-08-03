@@ -39,11 +39,79 @@ for (const [label, currentBindingSource] of [
   ["userscript", extractFunction(source, "getCurrentBinding")],
   ["extension", extractFunction(extensionSource, "getCurrentBinding")],
 ]) {
-  assert.match(currentBindingSource, /if \(collectionRule\) return Number\(collectionRule\.subjectId\) \|\| null;\s+return null;/,
-    `${label} must not inherit a whole-BV binding for an unmapped recognized episode`);
+  assert.match(currentBindingSource, /isOrdinaryEpisodeCollectionForTotal\(collectionContext, declaredTotalEpisodes\)/,
+    `${label} may reuse a whole-BV binding only for a strict ordinary episode list`);
   assert.match(currentBindingSource, /if \(collectionLayout\) return null;/,
     `${label} must fail closed on long-range and non-content parts of a recognized mixed collection`);
 }
+let bindingReuseContext = {
+  bvid: "BV1MB3W6HEZN",
+  seasonKey: "default",
+  episodeNo: 4,
+  groupStart: 1,
+  groupEnd: 5,
+  groupLogicalEpisodeCount: 5,
+  hasSplitEpisodes: false,
+  segmentCount: 1,
+};
+const bindingReuseSandbox = {
+  STORAGE: { bindings: "bindings", bindingSubjects: "bindingSubjects", collectionMappings: "collectionMappings" },
+  state: {
+    message: "",
+    bindingGuardMessage: "",
+    bindings: { direct: 622633 },
+    bindingSubjects: { "622633": { totalEpisodes: 13 } },
+    collectionMappings: {},
+  },
+  readJsonValue(key, fallback) {
+    if (key === "bindings") return bindingReuseSandbox.state.bindings;
+    if (key === "bindingSubjects") return bindingReuseSandbox.state.bindingSubjects;
+    if (key === "collectionMappings") return bindingReuseSandbox.state.collectionMappings;
+    return fallback;
+  },
+  normalizeCollectionMappings: (value) => value,
+  getCurrentCollectionPartContext: () => bindingReuseContext,
+  getCollectionMappingRule: () => null,
+  getCollectionPartDirectBindingSubjectId: () => null,
+  getCurrentDirectBindingSubjectId: () => 622633,
+  getStoredSubjectDeclaredTotalEpisodeCount: () => 13,
+};
+runInSandbox([
+  functionSource("getCollectionLogicalEpisodeCount"),
+  functionSource("isOrdinaryEpisodeCollectionForTotal"),
+  functionSource("getCurrentBinding"),
+  "globalThis.readCurrentBinding = getCurrentBinding;",
+].join("\n"), bindingReuseSandbox);
+assert.equal(bindingReuseSandbox.readCurrentBinding(), 622633,
+  "a plain ongoing 1-5 list may reuse its ordinary whole-BV binding");
+bindingReuseContext = { ...bindingReuseContext, seasonKey: "season:2", seasonNo: 2 };
+assert.equal(bindingReuseSandbox.readCurrentBinding(), null,
+  "an incomplete second-season group must not inherit the first season's whole-BV binding");
+bindingReuseContext = {
+  ...bindingReuseContext,
+  seasonKey: "default",
+  seasonNo: null,
+  hasSplitEpisodes: true,
+  segmentCount: 2,
+};
+assert.equal(bindingReuseSandbox.readCurrentBinding(), null,
+  "an incomplete split group remains isolated even though batch detection is deferred");
+bindingReuseSandbox.getCollectionPartDirectBindingSubjectId = () => 731234;
+assert.equal(bindingReuseSandbox.readCurrentBinding(), 731234,
+  "an incomplete structured group may reload its explicit current-part binding");
+const isolatedCollectionKeySandbox = {
+  getCurrentCollectionPartContext: () => null,
+  state: { bindings: { "bili:BV1MB3W6HEZN:p4": 731234 } },
+};
+runInSandbox([
+  functionSource("getCollectionPartBindingKey"),
+  functionSource("getCollectionPartDirectBindingSubjectId"),
+  "globalThis.readCollectionPartKey = getCollectionPartBindingKey;",
+  "globalThis.readCollectionPartSubject = getCollectionPartDirectBindingSubjectId;",
+].join("\n"), isolatedCollectionKeySandbox);
+const isolatedCollectionContext = { bvid: "bv1mb3w6hezn", partNo: 4 };
+assert.equal(isolatedCollectionKeySandbox.readCollectionPartKey(isolatedCollectionContext), "bili:BV1MB3W6HEZN:p4");
+assert.equal(isolatedCollectionKeySandbox.readCollectionPartSubject(isolatedCollectionContext), 731234);
 const isolatedWriteSandbox = {
   getCurrentLongVideoPartBindingKey: () => "",
   getCurrentCollectionLayoutContext: () => ({ currentKind: "unmapped" }),
@@ -232,6 +300,7 @@ const sandbox = {
   state: { collectionMappings: {}, longVideoEpisodeGuess: null },
   getCurrentCollectionLayoutContext: () => null,
   getLongVideoEpisodeModeDecision: () => null,
+  isCurrentOrdinaryEpisodeCollection: () => false,
   stripTrailingDurationText: (text) => String(text || "")
     .replace(/\s+\d{1,2}:\d{2}(?::\d{2})?\s*$/i, "")
     .replace(/\s+/g, " ")
@@ -252,6 +321,9 @@ runInSandbox([
   functionSource("getCollectionMappingResolution"),
   functionSource("getCollectionMappingRule"),
   functionSource("getCollectionMappedEpisodeNo"),
+  functionSource("getCollectionLogicalEpisodeCount"),
+  functionSource("isCollectionRangeMappingEligible"),
+  functionSource("isOrdinaryEpisodeCollectionForTotal"),
   functionSource("putCollectionMappingRule"),
   functionSource("removeCollectionMappingRule"),
   functionSource("formatCollectionTargetEpisodeLabel"),
@@ -270,6 +342,9 @@ runInSandbox([
   parseBareCollectionEpisodeTitle,
   getCollectionMappingResolution,
   getCollectionMappedEpisodeNo,
+  getCollectionLogicalEpisodeCount,
+  isCollectionRangeMappingEligible,
+  isOrdinaryEpisodeCollectionForTotal,
   putCollectionMappingRule,
   formatCollectionTargetEpisodeLabel,
   formatCollectionTargetRange,
@@ -323,6 +398,36 @@ assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("（13）").episodeNo, 
 assert.equal(sandbox.api.parseBareCollectionEpisodeTitle("1080P"), null);
 assert.equal(collectionConstants.MIN_COLLECTION_PARSED_PARTS, 4);
 assert.equal(collectionConstants.MAX_COLLECTION_SEGMENTS, 8);
+
+const plainFiveEpisodeContext = {
+  bvid: "BV1MB3W6HEZN",
+  seasonKey: "default",
+  episodeNo: 4,
+  groupStart: 1,
+  groupEnd: 5,
+  groupLogicalEpisodeCount: 5,
+  parsedPartCount: 5,
+  hasSplitEpisodes: false,
+  segmentCount: 1,
+};
+assert.equal(sandbox.api.isCollectionRangeMappingEligible(plainFiveEpisodeContext, 0), false,
+  "a missing declared total means the subject is unfinished and cannot enter range mapping");
+assert.equal(sandbox.api.isCollectionRangeMappingEligible(plainFiveEpisodeContext, 13), false,
+  "five uploaded episodes out of a declared thirteen remain an ordinary ongoing season");
+assert.equal(sandbox.api.isCollectionRangeMappingEligible(plainFiveEpisodeContext, 5), false,
+  "a complete one-part-per-episode season still uses ordinary binding");
+assert.equal(sandbox.api.isOrdinaryEpisodeCollectionForTotal(plainFiveEpisodeContext, 0), true);
+assert.equal(sandbox.api.isOrdinaryEpisodeCollectionForTotal(plainFiveEpisodeContext, 13), true);
+assert.equal(sandbox.api.isCollectionRangeMappingEligible({
+  ...plainFiveEpisodeContext,
+  hasSplitEpisodes: true,
+  segmentCount: 2,
+}, 5), true, "a completed split season still needs range mapping");
+assert.equal(sandbox.api.isCollectionRangeMappingEligible({
+  ...plainFiveEpisodeContext,
+  groupEnd: 16,
+  groupLogicalEpisodeCount: 16,
+}, 8), true, "a numeric list longer than the selected subject remains a multi-title collection");
 
 const now = Date.now();
 const progressFixture = {};
@@ -395,12 +500,25 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     segmentCount: 2, fragmentIndex: 1,
   };
   sandbox.getCurrentCollectionPartContext = () => currentContext;
+  sandbox.getSubjectDeclaredTotalEpisodeCountForMapping = async () => sandbox.declaredTotalEpisodes;
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 11;
   sandbox.getSubjectMainEpisodeInfoForMapping = async (subjectId, inspectEpisodeZero) => ({
     episodeCount: await sandbox.getSubjectMainEpisodeCountForMapping(subjectId),
     hasEpisodeZero: Boolean(inspectEpisodeZero && sandbox.apiEpisodeZero),
   });
   sandbox.state.collectionMappings = {};
+  currentContext = { ...plainFiveEpisodeContext };
+  sandbox.declaredTotalEpisodes = 13;
+  assert.equal(await sandbox.api.buildCollectionRangeBindingProposal(622633), null,
+    "the live five-of-thirteen shape never proposes P4-P5 as Bangumi episodes 1-2");
+  sandbox.declaredTotalEpisodes = 0;
+  assert.equal(await sandbox.api.buildCollectionRangeBindingProposal(622633), null,
+    "a subject without total_episodes never enters range mapping");
+  currentContext = {
+    bvid, seasonKey: "default", episodeNo: 1, groupStart: 1, groupEnd: 23,
+    segmentCount: 2, fragmentIndex: 1,
+  };
+  sandbox.declaredTotalEpisodes = 11;
   let proposal = await sandbox.api.buildCollectionRangeBindingProposal(1001);
   assert.deepEqual(plain(proposal.rule), {
     bvid, id: "default:1-11", seasonKey: "default", sourceStart: 1, sourceEnd: 11,
@@ -415,6 +533,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   };
   currentContext = { ...currentContext, episodeNo: 12 };
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 12;
+  sandbox.declaredTotalEpisodes = 12;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(1002);
   assert.equal(proposal.rule.sourceStart, 12);
   assert.equal(proposal.rule.sourceEnd, 23);
@@ -427,6 +546,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     segmentCount: 1, fragmentIndex: 1,
   };
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 13;
+  sandbox.declaredTotalEpisodes = 13;
   sandbox.apiEpisodeZero = false;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(373247);
   assert.equal(proposal.rule.sourceStart, 0);
@@ -461,10 +581,9 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     segmentCount: 1, fragmentIndex: 1,
   };
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 12;
+  sandbox.declaredTotalEpisodes = 12;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(3001);
-  assert.equal(proposal.rule.sourceStart, 5);
-  assert.equal(proposal.rule.sourceEnd, 8);
-  assert.equal(proposal.rule.targetStart, 5, "an ongoing collection must continue the same Bangumi episode numbering");
+  assert.equal(proposal, null, "an unfinished season never extends a range mapping");
 
   // Mid-range rebind must replace the covering rule wholesale, not orphan 1..N-1.
   sandbox.state.collectionMappings = {
@@ -478,6 +597,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     segmentCount: 2, fragmentIndex: 1,
   };
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 11;
+  sandbox.declaredTotalEpisodes = 11;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(9001);
   assert.equal(proposal.rule.sourceStart, 1, "covering rule rebind keeps the original range start");
   assert.equal(proposal.rule.sourceEnd, 11);
@@ -754,6 +874,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   sandbox.state.collectionMappings = {};
   currentContext = plainNumericContext;
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 8;
+  sandbox.declaredTotalEpisodes = 8;
   sandbox.apiEpisodeZero = false;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(425998);
   assert.equal(proposal.rule.sourceStart, 1);
@@ -770,6 +891,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   sandbox.state.collectionMappings = {};
   currentContext = parenthesizedContext;
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 12;
+  sandbox.declaredTotalEpisodes = 12;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(338424);
   assert.equal(proposal.rule.sourceStart, 13);
   assert.equal(proposal.rule.sourceEnd, 24,
@@ -1079,6 +1201,7 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
 
   const failClosedSandbox = {
     getCurrentCollectionPartContext: () => ({ bvid, episodeNo: 1 }),
+    isCurrentOrdinaryEpisodeCollection: () => false,
     getCollectionMappingRule: () => null,
     getCurrentCollectionLayoutContext: () => null,
     detectEpisodeNo: () => { throw new Error("legacy title fallback must not run"); },
@@ -1152,6 +1275,38 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
   );
   const explicitZeroInfo = await episodeInfoSandbox.readEpisodeInfo(373247, true);
   assert.deepEqual(plain(explicitZeroInfo), { episodeCount: 13, hasEpisodeZero: true });
+
+  const declaredTotalSandbox = {
+    state: { subject: null },
+    nextSubject: { id: 622633, total_episodes: 0 },
+    remembered: [],
+    bgmRequest: async (path) => {
+      assert.equal(path, "/v0/subjects/622633");
+      return declaredTotalSandbox.nextSubject;
+    },
+    rememberBindingSubject: async (subject) => {
+      declaredTotalSandbox.remembered.push(subject);
+    },
+  };
+  runInSandbox(
+    [
+      functionSource("getDeclaredTotalEpisodeCount"),
+      functionSource("getSubjectDeclaredTotalEpisodeCountForMapping", true),
+      "globalThis.readDeclaredTotal = getSubjectDeclaredTotalEpisodeCountForMapping;",
+    ].join("\n"),
+    declaredTotalSandbox,
+  );
+  assert.equal(await declaredTotalSandbox.readDeclaredTotal(622633), 0,
+    "an explicit zero total is unfinished even when episode records already exist");
+  declaredTotalSandbox.nextSubject = { id: 622633, total_episodes: 13 };
+  assert.equal(await declaredTotalSandbox.readDeclaredTotal(622633), 13,
+    "a positive declared total enables the later completion comparison");
+  declaredTotalSandbox.nextSubject = { id: 622633 };
+  assert.equal(await declaredTotalSandbox.readDeclaredTotal(622633), 0,
+    "a missing total_episodes field is also unfinished");
+  assert.equal(declaredTotalSandbox.remembered.length, 3);
+  assert.equal(declaredTotalSandbox.remembered[2].total_episodes, 0,
+    "an authoritative missing total is persisted as unfinished evidence for reloads");
 
   let apiCalls = 0;
   const countEpisodes = [

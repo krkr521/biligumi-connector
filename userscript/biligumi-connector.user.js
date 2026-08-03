@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.10
+// @version      0.7.12
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -39,7 +39,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.10";
+  const SCRIPT_VERSION = "0.7.12";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -2959,6 +2959,15 @@
     if (collectionContext) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return Number(collectionRule.subjectId) || null;
+      const isolatedSubjectId = getCollectionPartDirectBindingSubjectId(collectionContext);
+      if (isolatedSubjectId) return isolatedSubjectId;
+      const directSubjectId = getCurrentDirectBindingSubjectId();
+      const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(directSubjectId);
+      if (
+        directSubjectId
+        && declaredTotalEpisodes != null
+        && isOrdinaryEpisodeCollectionForTotal(collectionContext, declaredTotalEpisodes)
+      ) return directSubjectId;
       return null;
     }
     const collectionLayout = getCurrentCollectionLayoutContext();
@@ -4096,6 +4105,13 @@
       if (getCollectionMappingRules(context.bvid).length) {
         return `<div class="biligumi-notice">检测到合集；当前分P「${escapeHtml(context.title)}」尚未映射。请为这一段绑定正确的 Bangumi 条目。</div>`;
       }
+      const directSubjectId = state.subjectId || getCurrentDirectBindingSubjectId();
+      const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(directSubjectId);
+      if (
+        !directSubjectId
+        || declaredTotalEpisodes == null
+        || !isCollectionRangeMappingEligible(context, declaredTotalEpisodes)
+      ) return "";
       return `<div class="biligumi-notice">检测到多条目合集（${context.parsedPartCount} 个可识别分P）。当前未建立范围映射，已停止继承整 BV 绑定；请选择正确的 Bangumi 条目。</div>`;
     }
     const layout = getCurrentCollectionLayoutContext();
@@ -5351,6 +5367,12 @@
       || (state.subject && Number(state.subject.id) === Number(subjectId) ? state.subject : null);
   }
 
+  function getDeclaredTotalEpisodeCount(subject) {
+    if (!subject || !Object.prototype.hasOwnProperty.call(subject, "total_episodes")) return null;
+    const total = Number(subject.total_episodes);
+    return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+  }
+
   function buildLongVideoBindingPromptState(subjectId, routeContext, extras = {}) {
     const subject = resolveLongVideoBindingSubject(subjectId);
     return {
@@ -5624,6 +5646,14 @@
     const legacyBindingKeys = getBindingKeysForCurrentPage();
     const collectionProposal = await buildCollectionRangeBindingProposal(subjectId);
     if (!isCurrentPageContext(context)) return;
+    const collectionContext = getCurrentCollectionPartContext();
+    const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(subjectId);
+    const isolatedCollectionPartKey = collectionContext
+      && declaredTotalEpisodes != null
+      && !isOrdinaryEpisodeCollectionForTotal(collectionContext, declaredTotalEpisodes)
+      ? getCollectionPartBindingKey(collectionContext)
+      : "";
+    const directBindingKeys = isolatedCollectionPartKey ? [isolatedCollectionPartKey] : legacyBindingKeys;
     const longVideoRangeProposal = collectionProposal
       ? null
       : await buildLongVideoRangeGroupBindingProposal(subjectId);
@@ -5670,11 +5700,11 @@
           rangeGroupWriteOutcome = applyLongVideoRangeGroupBinding(
             bindings,
             longVideoRangeProposal,
-            legacyBindingKeys,
+            directBindingKeys,
             subjectId,
           );
         } else {
-          for (const key of legacyBindingKeys) bindings[key] = subjectId;
+          for (const key of directBindingKeys) bindings[key] = subjectId;
         }
         applied = true;
         return true;
@@ -5713,6 +5743,11 @@
     }
     const collectionContext = getCurrentCollectionPartContext();
     const collectionRule = collectionContext && getCollectionMappingRule(collectionContext);
+    const isolatedCollectionPartKey = collectionRule ? "" : getCollectionPartBindingKey(collectionContext);
+    const hasIsolatedCollectionBinding = Boolean(
+      isolatedCollectionPartKey
+      && Number(state.bindings && state.bindings[isolatedCollectionPartKey]) === Number(state.subjectId)
+    );
     const longVideoBindingSource = collectionRule ? null : getCurrentLongVideoBindingSource(state.subjectId);
     const context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     const subjectId = Number(state.subjectId);
@@ -5740,6 +5775,8 @@
     } else {
       const bindingKeys = longVideoBindingSource
         ? [longVideoBindingSource.key]
+        : hasIsolatedCollectionBinding
+        ? [isolatedCollectionPartKey]
         : getBindingKeysForCurrentPage();
       await updateStoredBindings((bindings) => {
         if (!isCurrentPageContext(context)) return false;
@@ -9100,14 +9137,27 @@
   async function rememberBindingSubject(subject) {
     const subjectId = Number(subject && subject.id);
     const extractedNames = extractSubjectBindingNames(subject);
-    if (!subjectId || !extractedNames.length) return;
+    const declaredTotalEpisodes = getDeclaredTotalEpisodeCount(subject);
+    if (!subjectId || (!extractedNames.length && declaredTotalEpisodes == null)) return;
     await updateStoredBindingSubjects((subjects) => {
       const key = String(subjectId);
       const previous = subjects[key] && typeof subjects[key] === "object" ? subjects[key] : {};
       const previousNames = Array.isArray(previous.names) ? previous.names : [];
       const names = uniqueSubjectBindingNames([...extractedNames, ...previousNames]).slice(0, 40);
-      if (JSON.stringify(names) === JSON.stringify(previousNames)) return false;
-      subjects[key] = { names, updatedAt: Date.now() };
+      const previousTotalEpisodes = Object.prototype.hasOwnProperty.call(previous, "totalEpisodes")
+        ? Number(previous.totalEpisodes)
+        : null;
+      const nextTotalEpisodes = declaredTotalEpisodes == null ? previousTotalEpisodes : declaredTotalEpisodes;
+      if (
+        JSON.stringify(names) === JSON.stringify(previousNames)
+        && nextTotalEpisodes === previousTotalEpisodes
+      ) return false;
+      subjects[key] = {
+        ...previous,
+        names,
+        ...(nextTotalEpisodes == null ? {} : { totalEpisodes: nextTotalEpisodes }),
+        updatedAt: Date.now(),
+      };
       return true;
     });
   }
@@ -10243,7 +10293,7 @@
 
   function detectCurrentEpisodeNo(rawTitle) {
     const collectionContext = getCurrentCollectionPartContext();
-    if (collectionContext) {
+    if (collectionContext && !isCurrentOrdinaryEpisodeCollection(collectionContext)) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
       return null;
@@ -10739,6 +10789,7 @@
       fragmentsByEpisode.get(key).add(Math.max(1, Number(row.parsed.fragmentIndex) || 1));
     });
     const actualFragments = fragmentsByEpisode.get(parsed.episodeNo);
+    const hasSplitEpisodes = Array.from(fragmentsByEpisode.values()).some((fragments) => fragments.size > 1);
     return {
       ...part,
       ...parsed,
@@ -10747,8 +10798,82 @@
       groupEnd: logicalEpisodes[logicalEpisodes.length - 1],
       groupLogicalEpisodeCount: logicalEpisodes.length,
       parsedPartCount: parsedRows.length,
+      hasSplitEpisodes,
       segmentCount: Math.max(1, actualFragments ? actualFragments.size : 1),
     };
+  }
+
+  function getCollectionLogicalEpisodeCount(context) {
+    const explicitCount = Number(context && context.groupLogicalEpisodeCount);
+    if (Number.isInteger(explicitCount) && explicitCount > 0) return explicitCount;
+    const start = Number(context && context.groupStart);
+    const end = Number(context && context.groupEnd);
+    return Number.isInteger(start) && Number.isInteger(end) && end >= start ? end - start + 1 : 0;
+  }
+
+  function isCollectionRangeMappingEligible(context, declaredTotalEpisodes) {
+    const total = Number(declaredTotalEpisodes);
+    if (!context || !Number.isInteger(total) || total <= 0) return false;
+    const logicalCount = getCollectionLogicalEpisodeCount(context);
+    if (!logicalCount || logicalCount < total) return false;
+    return Boolean(
+      context.hasSplitEpisodes
+      || Number(context.segmentCount) > 1
+      || context.seasonKey !== "default"
+      || Number(context.groupStart) === 0
+      || logicalCount > total
+    );
+  }
+
+  function isOrdinaryEpisodeCollectionForTotal(context, declaredTotalEpisodes) {
+    if (!context || context.seasonKey !== "default" || Number(context.groupStart) !== 1) return false;
+    if (context.hasSplitEpisodes || Number(context.segmentCount) > 1) return false;
+    const logicalCount = getCollectionLogicalEpisodeCount(context);
+    if (!logicalCount) return false;
+    const total = Number(declaredTotalEpisodes);
+    return Number.isInteger(total) && (total <= 0 || logicalCount <= total);
+  }
+
+  function getStoredSubjectDeclaredTotalEpisodeCount(subjectId) {
+    const safeSubjectId = Number(subjectId);
+    if (!safeSubjectId) return null;
+    if (state.subject && Number(state.subject.id) === safeSubjectId) {
+      const loadedTotal = getDeclaredTotalEpisodeCount(state.subject);
+      if (loadedTotal != null) return loadedTotal;
+    }
+    const evidence = state.bindingSubjects && state.bindingSubjects[String(safeSubjectId)];
+    if (!evidence || !Object.prototype.hasOwnProperty.call(evidence, "totalEpisodes")) return null;
+    const total = Number(evidence.totalEpisodes);
+    return Number.isFinite(total) && total > 0 ? Math.round(total) : 0;
+  }
+
+  function getCollectionPartBindingKey(context = getCurrentCollectionPartContext()) {
+    const bvid = String(context && context.bvid || "").toUpperCase();
+    const partNo = Number(context && context.partNo);
+    return bvid && Number.isInteger(partNo) && partNo > 0 ? `bili:${bvid}:p${partNo}` : "";
+  }
+
+  function getCollectionPartDirectBindingSubjectId(context = getCurrentCollectionPartContext()) {
+    const key = getCollectionPartBindingKey(context);
+    const subjectId = Number(key && state.bindings && state.bindings[key]);
+    return subjectId > 0 ? subjectId : null;
+  }
+
+  function getCurrentDirectBindingSubjectId() {
+    const bindings = state.bindings && typeof state.bindings === "object" ? state.bindings : {};
+    for (const key of getDirectBindingKeysForCurrentPage()) {
+      const subjectId = Number(bindings[key]);
+      if (subjectId > 0) return subjectId;
+    }
+    return null;
+  }
+
+  function isCurrentOrdinaryEpisodeCollection(context = getCurrentCollectionPartContext()) {
+    if (!context) return false;
+    const subjectId = Number(state.subjectId) || getCurrentDirectBindingSubjectId();
+    const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(subjectId);
+    return declaredTotalEpisodes != null
+      && isOrdinaryEpisodeCollectionForTotal(context, declaredTotalEpisodes);
   }
 
   function getCollectionMappingRules(bvid) {
@@ -10809,13 +10934,16 @@
     if (!context) return null;
     const existingResolution = getCollectionMappingResolution(context);
     if (existingResolution.ambiguous) throw new Error("当前分P命中多条合集规则，请先删除冲突规则");
-    // Intentionally fail closed: without the authoritative episode count a guessed range
-    // could bind or auto-mark the wrong Bangumi season.
+    const declaredTotalEpisodes = await getSubjectDeclaredTotalEpisodeCountForMapping(subjectId);
+    if (!isCollectionRangeMappingEligible(context, declaredTotalEpisodes)) return null;
+    // Range mapping is allowed only after Bangumi declares a completed total. The
+    // type=0 list below verifies that the corresponding episode records are available.
     const inspectEpisodeZero = context.groupStart === 0
       || Number(existingResolution.rule && existingResolution.rule.sourceStart) === 0;
     const episodeInfo = await getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero);
-    const episodeCount = Number(episodeInfo && episodeInfo.episodeCount);
-    if (!Number.isFinite(episodeCount) || episodeCount <= 0) {
+    const availableEpisodeCount = Number(episodeInfo && episodeInfo.episodeCount);
+    const episodeCount = Number(declaredTotalEpisodes);
+    if (!Number.isFinite(availableEpisodeCount) || availableEpisodeCount < episodeCount) {
       throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
     }
     // If the current episode already sits inside a rule, replace that whole range
@@ -10880,17 +11008,31 @@
     const bindings = readJsonValue(STORAGE.bindings, {});
     const existingSubjectId = Number(bindings && bindings[context.key]) || null;
     if (existingSubjectId && existingSubjectId !== safeSubjectId) return null;
+    let declaredTotalEpisodes = 0;
+    try {
+      declaredTotalEpisodes = await getSubjectDeclaredTotalEpisodeCountForMapping(safeSubjectId);
+    } catch (_) {
+      return null;
+    }
+    const coveredEpisodeCount = Number(context.groupEnd) - Number(context.groupStart) + 1;
+    if (
+      !Number.isInteger(declaredTotalEpisodes)
+      || declaredTotalEpisodes <= 0
+      || !Number.isInteger(coveredEpisodeCount)
+      || coveredEpisodeCount < declaredTotalEpisodes
+    ) return null;
     let episodeCount = 0;
     try {
       episodeCount = await getSubjectMainEpisodeCountForMapping(safeSubjectId);
     } catch (_) {
       return null;
     }
-    if (!Number.isFinite(episodeCount) || episodeCount < context.groupEnd) return null;
+    if (!Number.isFinite(episodeCount) || episodeCount < Math.max(context.groupEnd, declaredTotalEpisodes)) return null;
     return {
       ...context,
       subjectId: safeSubjectId,
       episodeCount,
+      declaredTotalEpisodes,
       alreadyBound: existingSubjectId === safeSubjectId,
     };
   }
@@ -10911,6 +11053,21 @@
     if (Number.isFinite(total) && total > 0) return Math.round(total);
     // This request intentionally uses limit=1, so data.length is not a total.
     throw new Error("无法读取该 Bangumi 条目的正片话数");
+  }
+
+  async function getSubjectDeclaredTotalEpisodeCountForMapping(subjectId) {
+    const safeSubjectId = Number(subjectId);
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0) return 0;
+    let subject = state.subject && Number(state.subject.id) === safeSubjectId ? state.subject : null;
+    if (!subject || getDeclaredTotalEpisodeCount(subject) == null) {
+      subject = await bgmRequest(`/v0/subjects/${safeSubjectId}`);
+    }
+    const total = getDeclaredTotalEpisodeCount(subject);
+    // A full subject response without this field is authoritative unfinished
+    // evidence. Persist zero so an ordinary ongoing collection can reload its
+    // normal whole-BV binding without ever becoming range-eligible.
+    await rememberBindingSubject(total == null ? { ...subject, total_episodes: 0 } : subject);
+    return total == null ? 0 : total;
   }
 
   async function getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero = false) {
@@ -10987,6 +11144,8 @@
   }
 
   function isCurrentCollectionPartAutoMarkEligible() {
+    const collectionContext = getCurrentCollectionPartContext();
+    if (collectionContext && isCurrentOrdinaryEpisodeCollection(collectionContext)) return true;
     const layout = getCurrentCollectionLayoutContext();
     if (layout && layout.currentKind === "unmapped") return false;
     if (layout && layout.currentKind === "long-range") {
@@ -10997,7 +11156,7 @@
       if (!guess || !guess.active || !guess.episode || !guess.autoMarkSafe) return false;
       return true;
     }
-    const context = getCurrentCollectionPartContext();
+    const context = collectionContext;
     if (!context) return true;
     const resolution = getCollectionMappingResolution(context);
     if (resolution.ambiguous) return false;
@@ -11039,6 +11198,7 @@
   async function recordCurrentCollectionSegmentProgressIfNeeded() {
     const context = getCurrentCollectionPartContext();
     if (!context) return true;
+    if (isCurrentOrdinaryEpisodeCollection(context)) return true;
     const rule = getCollectionMappingRule(context);
     if (!rule) return false;
     if (!rule.autoProgress) return false;
@@ -11938,7 +12098,7 @@
 
   function getCurrentVideoPartEpisodeNo() {
     const collectionContext = getCurrentCollectionPartContext();
-    if (collectionContext) {
+    if (collectionContext && !isCurrentOrdinaryEpisodeCollection(collectionContext)) {
       const collectionRule = getCollectionMappingRule(collectionContext);
       if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
       return null;

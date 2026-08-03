@@ -141,8 +141,10 @@ const sandbox = {
   getPrimaryDomOwnerInfo: () => ({ mid: 42, name: "测试 UP" }),
   getActiveVideoElement: () => null,
   mainEpisodeCount: 24,
+  declaredEpisodeTotal: 24,
   readJsonValue: (key, fallback) => key === SRC_STORAGE.bindings ? sandbox.state.bindings : fallback,
   getSubjectMainEpisodeCountForMapping: async () => sandbox.mainEpisodeCount,
+  getSubjectDeclaredTotalEpisodeCountForMapping: async () => sandbox.declaredEpisodeTotal,
   autoWatchThreshold: 50,
   getAutoWatchThreshold: () => sandbox.autoWatchThreshold,
   isOfficialBangumiPage: () => false,
@@ -369,6 +371,20 @@ sandbox.mainEpisodeCount = 24;
 let inheritedRangeProposal = await logic.buildLongVideoRangeGroupBindingProposal(42);
 assert.equal(inheritedRangeProposal.key, "bili:BV1TEST:range:s1:1-24");
 assert.equal(inheritedRangeProposal.episodeCount, 24);
+assert.equal(inheritedRangeProposal.declaredTotalEpisodes, 24);
+sandbox.declaredEpisodeTotal = 0;
+assert.equal(
+  await logic.buildLongVideoRangeGroupBindingProposal(42),
+  null,
+  "a long-video range group never batches a subject without a declared total",
+);
+sandbox.declaredEpisodeTotal = 25;
+assert.equal(
+  await logic.buildLongVideoRangeGroupBindingProposal(42),
+  null,
+  "an ongoing 1-24 source group cannot batch a Bangumi subject declaring 25 total episodes",
+);
+sandbox.declaredEpisodeTotal = 24;
 sandbox.mainEpisodeCount = 12;
 assert.equal(
   await logic.buildLongVideoRangeGroupBindingProposal(42),
