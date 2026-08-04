@@ -49,7 +49,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.12";
+  const SCRIPT_VERSION = "0.3.13";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -609,9 +609,8 @@
       color: #6b7280;
       font-size: 12px;
       line-height: 1.25;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      overflow-wrap: anywhere;
+      white-space: normal;
     }
     #${CHARACTER_STRIP_ID} .biligumi-character-empty {
       padding: 14px 16px;
@@ -4015,14 +4014,30 @@
     return state.subjectId ? state.characterError : state.previewCharacterError;
   }
 
+  function getDisplayCharacterActors(character) {
+    const actors = character && Array.isArray(character.actors) ? character.actors : [];
+    const displayActors = actors.filter((actor) => actor && actor.name);
+    // Verified two-CV pairs are reversed from Bangumi web order; 3+ groups have no simple transform.
+    if (displayActors.length === 2) displayActors.reverse();
+    return displayActors;
+  }
+
   function renderCharacterCard(character) {
-    const actor = Array.isArray(character.actors) ? character.actors[0] : null;
+    const actors = getDisplayCharacterActors(character);
     const image = getBestCharacterImage(character);
     const characterId = Number(character.id) || 0;
     const characterUrl = characterId ? `${BGM_WEB_BASE}/character/${characterId}` : "";
-    const actorName = actor && actor.name ? String(actor.name) : "";
-    const actorId = Number(actor && actor.id) || 0;
-    const actorUrl = actorId ? `${BGM_WEB_BASE}/person/${actorId}` : "";
+    const actorNames = actors.map((actor) => String(actor.name));
+    const actorHtml = actors
+      .map((actor) => {
+        const actorName = String(actor.name);
+        const actorId = Number(actor.id) || 0;
+        const actorUrl = actorId ? `${BGM_WEB_BASE}/person/${actorId}` : "";
+        return actorUrl
+          ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>`
+          : escapeHtml(actorName);
+      })
+      .join(" / ");
     return `
       <div class="biligumi-character-card" title="${escapeHtml(character.name)}">
         ${characterUrl ? `<a href="${characterUrl}" target="_blank" rel="noreferrer">` : "<div>"}
@@ -4034,7 +4049,7 @@
           ? `<a class="biligumi-character-name" href="${characterUrl}" target="_blank" rel="noreferrer">${escapeHtml(character.name)}</a>`
           : `<div class="biligumi-character-name">${escapeHtml(character.name)}</div>`}
         <div class="biligumi-character-relation">${escapeHtml(character.relation || "角色")}</div>
-        <div class="biligumi-character-cv">CV ${actorUrl ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>` : escapeHtml(actorName || "未录入")}</div>
+        <div class="biligumi-character-cv" title="${escapeHtml(actorNames.join(" / ") || "未录入")}">CV ${actorHtml || "未录入"}</div>
       </div>
     `;
   }
