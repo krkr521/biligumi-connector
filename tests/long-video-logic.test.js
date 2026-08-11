@@ -12,6 +12,7 @@ const {
   extractConstants,
   extractObjectConstant,
 } = require("./_source");
+const oshiNoKoFixture = require("./fixtures/oshi-no-ko.json");
 
 const userscriptSource = readSource(userscriptPath);
 
@@ -255,6 +256,25 @@ const extendedFirst = episodes.map((episode, index) => ({
 const extendedTimeline = logic.buildLongVideoEpisodeTimeline(extendedFirst, 0);
 assert.equal(logic.inferLongVideoEpisode({ currentTime: 47 * 60 }, { active: true, timeline: extendedTimeline }).episodeNo, 1);
 assert.equal(logic.inferLongVideoEpisode({ currentTime: 48 * 60 }, { active: true, timeline: extendedTimeline }).episodeNo, 2);
+
+const oshiNoKoSeason1Duration = oshiNoKoFixture.season1.episodes
+  .reduce((total, episode) => total + episode.duration_seconds, 0);
+const oshiNoKoSeason1Timeline = logic.buildLongVideoEpisodeTimeline(oshiNoKoFixture.season1.episodes, 0);
+assert.equal(oshiNoKoSeason1Duration, 19530);
+assert.equal(oshiNoKoSeason1Timeline.items[0].duration, 4920,
+  "Oshi no Ko S1 keeps its non-standard 82-minute premiere in the timeline");
+assert.equal(oshiNoKoSeason1Timeline.items[1].startTime, 4920);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4919 }, { active: true, timeline: oshiNoKoSeason1Timeline }).episodeNo,
+  1,
+);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4920 }, { active: true, timeline: oshiNoKoSeason1Timeline }).episodeNo,
+  2,
+  "Inference crosses from the extended premiere to episode 2 at the real boundary",
+);
+assert.equal(oshiNoKoSeason1Timeline.endTime, oshiNoKoSeason1Duration);
+assert.equal(oshiNoKoSeason1Timeline.safeForAutoMark, true);
 
 const parsedSeasonRange = logic.parseLongVideoPartTitle("S2 13-15");
 assert.equal(parsedSeasonRange.seasonNo, 2);
@@ -632,6 +652,118 @@ sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.renderLongVideoEpisodeHint(), "",
   "unconfirmed long videos must not show calibration controls");
 sandbox.getActiveVideoElement = () => null;
+
+// Real Bangumi snapshots for Oshi no Ko exercise the movie guard, irregular
+// episode durations, a whole-season compilation, and a multi-season BV.
+const oshiNoKoSeason1 = oshiNoKoFixture.season1;
+const oshiNoKoSeason2 = oshiNoKoFixture.season2;
+sandbox.state.subjectId = oshiNoKoSeason1.subject.id;
+sandbox.state.subject = oshiNoKoSeason1.subject;
+sandbox.state.episodes = oshiNoKoSeason1.episodes;
+sandbox.state.searchResults = [];
+sandbox.state.animeMovieClassifications = {
+  [oshiNoKoSeason1.subject.id]: { isMovie: true, checkedAt: Date.now() },
+};
+sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.longVideoEpisodeOffsets = { "mid:42": 0 };
+sandbox.state.longVideoEpisodeVideoOffsets = {};
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+
+assert.equal(logic.getAnimeMoviePlatformDecision(oshiNoKoSeason1.subject), false);
+assert.equal(logic.isSingleEpisodeAnimeMovie(oshiNoKoSeason1.episodes), false,
+  "An 82-minute premiere inside an 11-episode TV season is not a movie");
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1.episodes[0].duration_seconds }).reason,
+  "short_duration",
+  "A standalone upload of Oshi no Ko episode 1 binds normally without movie or long-video inference",
+);
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1Duration }).action,
+  "prompt",
+  "A whole-season Oshi no Ko compilation offers long-video inference",
+);
+sandbox.state.longVideoEpisodeGuessEnabled = true;
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1Duration }).action,
+  "auto",
+  "The same season compilation enters automatic inference when the setting is enabled",
+);
+sandbox.state.longVideoEpisodeGuessEnabled = false;
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+const oshiNoKoSeason1Detection = logic.getLongVideoDetection({ duration: oshiNoKoSeason1Duration });
+assert.equal(oshiNoKoSeason1Detection.active, true);
+assert.equal(oshiNoKoSeason1Detection.autoMarkSafe, true);
+assert.equal(oshiNoKoSeason1Detection.timeline.items.length, 11);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4920 }, oshiNoKoSeason1Detection).episodeNo,
+  2,
+  "Whole-season inference uses the real extended-premiere boundary",
+);
+
+const oshiNoKoSeasonPartNodes = [
+  ["【我推的孩子】 第一季 1-11", false],
+  ["【我推的孩子】 第二季 1-13", true],
+].map(([title, active]) => ({
+  className: `simple-base-item page-item${active ? " active" : ""}`,
+  textContent: title,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const oshiNoKoSeasonPartContainer = { children: oshiNoKoSeasonPartNodes };
+oshiNoKoSeasonPartNodes.forEach((node) => {
+  node.parentElement = oshiNoKoSeasonPartContainer;
+  node.closest = (selector) => selector === ".page-list" ? oshiNoKoSeasonPartContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list")
+  ? oshiNoKoSeasonPartNodes.find((node) => /(?:^|\s)active(?:\s|$)/.test(node.className))
+  : null;
+sandbox.document.querySelectorAll = (selector) => selector === ".multi-p .page-list .page-item"
+  ? oshiNoKoSeasonPartNodes
+  : [];
+sandbox.state.subjectId = oshiNoKoSeason2.subject.id;
+sandbox.state.subject = oshiNoKoSeason2.subject;
+sandbox.state.episodes = oshiNoKoSeason2.episodes;
+sandbox.state.bindings = {
+  "bili:BV1TEST:p1": oshiNoKoSeason1.subject.id,
+  "bili:BV1TEST:p2": oshiNoKoSeason2.subject.id,
+};
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST:p1": true, "bvid:BV1TEST:p2": true };
+const oshiNoKoSeason2Part = logic.getCurrentVideoPartContext();
+assert.equal(oshiNoKoSeason2Part.seasonNo, 2);
+assert.equal(oshiNoKoSeason2Part.episodeStart, 1);
+assert.equal(oshiNoKoSeason2Part.episodeEnd, 13);
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p2");
+assert.equal(logic.getCurrentLongVideoBindingSource(oshiNoKoSeason2.subject.id).key, "bili:BV1TEST:p2",
+  "A multi-season BV reads the second season from its own part binding");
+const oshiNoKoSeason2Duration = oshiNoKoSeason2.episodes
+  .reduce((total, episode) => total + episode.duration_seconds, 0);
+const oshiNoKoSeason2Detection = logic.getLongVideoDetection({ duration: oshiNoKoSeason2Duration });
+assert.equal(oshiNoKoSeason2Detection.active, true);
+assert.equal(oshiNoKoSeason2Detection.segment.rangeApplied, true);
+assert.equal(oshiNoKoSeason2Detection.timeline.items.length, 13);
+assert.equal(oshiNoKoSeason2Detection.timeline.items[0].localNo, 1,
+  "Season-local inference starts at episode 1 even when Bangumi sorts S2 as episodes 12-24");
+
+oshiNoKoSeasonPartNodes[0].className += " active";
+oshiNoKoSeasonPartNodes[1].className = oshiNoKoSeasonPartNodes[1].className.replace(/\sactive\b/, "");
+sandbox.state.subjectId = oshiNoKoSeason1.subject.id;
+sandbox.state.subject = oshiNoKoSeason1.subject;
+sandbox.state.episodes = oshiNoKoSeason1.episodes;
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p1");
+assert.equal(logic.getCurrentLongVideoBindingSource(oshiNoKoSeason1.subject.id).key, "bili:BV1TEST:p1",
+  "Switching back to S1 restores the first season's isolated binding");
+
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.subjectId = 1;
+sandbox.state.subject = null;
+sandbox.state.episodes = episodes;
+sandbox.state.bindings = {};
+sandbox.state.animeMovieClassifications = {};
+sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.longVideoEpisodeOffsets = { "mid:42": 2 * 60 * 60 };
+sandbox.state.longVideoEpisodeVideoOffsets = {};
 
 sandbox.state.longVideoEpisodeModes = {};
 const movieEpisode = [{
