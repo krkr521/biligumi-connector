@@ -119,6 +119,7 @@ function createImplementation(label, source) {
     getLongVideoDurationSeconds: (video) => Number(video && video.duration),
     getLongVideoEpisodeModeDecision: () => true,
     isSingleEpisodeAnimeMovie: () => false,
+    getLoadedAnimeMovieClassification: () => false,
     getCachedAnimeMovieClassification: () => null,
     getLongVideoOwnerKey: () => "owner:parser-test",
     getNormalEpisodes: () => sandbox.testEpisodes,

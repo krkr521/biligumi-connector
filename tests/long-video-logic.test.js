@@ -138,7 +138,11 @@ const sandbox = {
     episodes,
   },
   location: new URL("https://www.bilibili.com/video/BV1TEST"),
-  window: { __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } } },
+  window: {
+    __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } },
+    setTimeout,
+    clearTimeout,
+  },
   getPageInitialState: () => sandbox.window.__INITIAL_STATE__ || {},
   document: { querySelectorAll: () => [] },
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
@@ -641,6 +645,31 @@ assert.equal(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).active, fals
   "A movie must disable inference even when an old per-video decision enabled it");
 assert.match(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).reason, /动画电影/);
 
+const extraLongMovie = [{ ...movieEpisode[0], duration_seconds: 3 * 60 * 60 + 1 }];
+assert.equal(logic.isSingleEpisodeAnimeMovie(extraLongMovie), true,
+  "Movie classification must not inherit the long-video timeline parser's three-hour cap");
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: true, checkedAt: Date.now() } };
+sandbox.state.longVideoEpisodeModes = {};
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt",
+  "A loaded multi-episode list must override a stale movie cache entry");
+sandbox.state.longVideoDetectionCache = { key: "stale", value: { active: true } };
+sandbox.state.longVideoDetectionKeyMemo = { cheapKey: "stale", fullKey: "stale", stamp: Date.now() };
+await logic.classifyAnimeMovieSubject(1);
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, false,
+  "Loaded episode data must refresh a contradictory movie cache entry");
+assert.equal(sandbox.state.longVideoDetectionCache, null, "Refreshing classification invalidates detection results");
+assert.equal(sandbox.state.longVideoDetectionKeyMemo, null, "Refreshing classification invalidates the detection key memo");
+
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: false, checkedAt: Date.now() } };
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "bind",
+  "A loaded movie must override a stale non-movie cache entry");
+await logic.classifyAnimeMovieSubject(1);
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, true,
+  "Loaded movie data must refresh a contradictory cache entry");
+
 sandbox.state.longVideoEpisodeModes = {};
 sandbox.state.episodes = [{ ...movieEpisode[0], duration_seconds: 60 * 60 }];
 sandbox.state.animeMovieClassifications = {};
@@ -665,6 +694,19 @@ sandbox.animeMovieApiResponse = { total: 2, data: [movieEpisode[0], { ...movieEp
 const remoteSeriesReadiness = await logic.getLongVideoBindReadinessForSubject(78, { duration: 3 * 60 * 60 });
 assert.equal(remoteSeriesReadiness.action, "prompt", "A multi-episode subject keeps the existing long-video flow");
 assert.equal(sandbox.state.animeMovieClassifications["78"].isMovie, false);
+
+sandbox.animeMovieApiResponse = { total: 1, data: [{ ...movieEpisode[0], duration_seconds: undefined, duration: "01:30:00" }] };
+const rawApiMovieReadiness = await logic.getLongVideoBindReadinessForSubject(79, { duration: 3 * 60 * 60 });
+assert.equal(rawApiMovieReadiness.action, "bind", "Raw Bangumi duration strings must classify movies before binding");
+assert.equal(rawApiMovieReadiness.reason, "anime_movie");
+
+sandbox.animeMovieApiResponse = new Promise(() => {});
+const classificationStartedAt = Date.now();
+const timedReadiness = await logic.getLongVideoBindReadinessForSubject(80, { duration: 3 * 60 * 60 }, {
+  classificationTimeoutMs: 20,
+});
+assert.equal(timedReadiness.action, "prompt", "A stalled movie lookup must fall back to the original readiness");
+assert.ok(Date.now() - classificationStartedAt < 1000, "A stalled movie lookup must respect its wait budget");
 
 sandbox.state.episodes = episodes;
 sandbox.state.animeMovieClassifications = {};
