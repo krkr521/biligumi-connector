@@ -11733,13 +11733,29 @@
     return episodes.length ? isSingleEpisodeAnimeMovie(episodes) : null;
   }
 
+  function getAnimeMoviePlatformDecision(subject) {
+    if (!subject || Number(subject.type) !== 2) return subject ? false : null;
+    const platform = String(subject.platform || "").trim();
+    if (!platform) return null;
+    const normalized = platform.toUpperCase();
+    if (platform === "剧场版" || normalized === "MOVIE") return true;
+    if (["TV", "OVA", "WEB"].includes(normalized)) return false;
+    return null;
+  }
+
   function classifyAnimeMovieSubject(subjectId) {
     const safeSubjectId = Number(subjectId);
     if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0) return Promise.resolve(false);
+    const subject = resolveLongVideoBindingSubject(safeSubjectId);
+    const platformDecision = getAnimeMoviePlatformDecision(subject);
+    const cached = getCachedAnimeMovieClassification(safeSubjectId);
+    if (platformDecision !== null) {
+      if (cached === platformDecision) return Promise.resolve(platformDecision);
+      return cacheAnimeMovieClassification(safeSubjectId, platformDecision).then(() => platformDecision);
+    }
     const requestKey = String(safeSubjectId);
     if (animeMovieClassificationRequests.has(requestKey)) return animeMovieClassificationRequests.get(requestKey);
     const loaded = getLoadedAnimeMovieClassification(safeSubjectId);
-    const cached = getCachedAnimeMovieClassification(safeSubjectId);
     if (loaded !== null && loaded === cached) return Promise.resolve(loaded);
     if (loaded === null && cached !== null) return Promise.resolve(cached);
     const request = (async () => {
@@ -11785,6 +11801,10 @@
 
   async function getLongVideoBindReadinessForSubject(subjectId, video, options = {}) {
     const readiness = getLongVideoBindReadiness(video, subjectId);
+    if (readiness.reason === "anime_movie") {
+      await classifyAnimeMovieSubject(subjectId);
+      return readiness;
+    }
     if (!["prompt", "auto"].includes(readiness.action)) return readiness;
     const isMovie = await classifyAnimeMovieSubjectWithTimeout(subjectId, options.classificationTimeoutMs);
     if (isMovie !== true) return readiness;
@@ -11800,9 +11820,12 @@
       return { action: "bind", reason: "not_applicable" };
     }
     const safeSubjectId = Number(subjectId);
+    const subject = resolveLongVideoBindingSubject(safeSubjectId);
+    const platformDecision = getAnimeMoviePlatformDecision(subject);
     const loadedMovieClassification = getLoadedAnimeMovieClassification(safeSubjectId);
-    if (loadedMovieClassification === true
-      || (loadedMovieClassification === null && getCachedAnimeMovieClassification(safeSubjectId) === true)) {
+    if (platformDecision === true
+      || (platformDecision === null && (loadedMovieClassification === true
+        || (loadedMovieClassification === null && getCachedAnimeMovieClassification(safeSubjectId) === true)))) {
       return { action: "bind", reason: "anime_movie" };
     }
     if (getLongVideoEpisodeModeDecision() !== null) {
@@ -11869,9 +11892,11 @@
 
   function getLongVideoDetection(video) {
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
+    const platformDecision = getAnimeMoviePlatformDecision(state.subject);
     const loadedMovieClassification = getLoadedAnimeMovieClassification(state.subjectId);
-    if (loadedMovieClassification === true
-      || (loadedMovieClassification === null && getCachedAnimeMovieClassification(state.subjectId) === true)) {
+    if (platformDecision === true
+      || (platformDecision === null && (loadedMovieClassification === true
+        || (loadedMovieClassification === null && getCachedAnimeMovieClassification(state.subjectId) === true)))) {
       return { active: false, reason: "当前 Bangumi 条目已识别为动画电影。" };
     }
     const duration = getLongVideoDurationSeconds(video);

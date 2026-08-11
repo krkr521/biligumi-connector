@@ -134,6 +134,8 @@ const sandbox = {
     disabledAutoProgressVideos: {},
     rawTitle: "普通超长视频",
     subjectId: 1,
+    subject: null,
+    searchResults: [],
     bindings: {},
     episodes,
   },
@@ -169,6 +171,9 @@ const sandbox = {
     if (sandbox.animeMovieApiResponse instanceof Error) throw sandbox.animeMovieApiResponse;
     return sandbox.animeMovieApiResponse;
   },
+  resolveLongVideoBindingSubject: (subjectId) => sandbox.state.searchResults.find(
+    (item) => Number(item && item.id) === Number(subjectId),
+  ) || (sandbox.state.subject && Number(sandbox.state.subject.id) === Number(subjectId) ? sandbox.state.subject : null),
 };
 
 // Real implementations replace former hand-written stubs; extraction is strict.
@@ -195,6 +200,7 @@ vm.runInContext(`${userscriptLogic}\n${userscriptBindingKeys}\n${rangeGroupPropo
   normalizeAnimeMovieClassifications,
   getCachedAnimeMovieClassification,
   isSingleEpisodeAnimeMovie,
+  getAnimeMoviePlatformDecision,
   classifyAnimeMovieSubject,
   getLongVideoBindReadinessForSubject,
   shouldOfferLongVideoBindingPrompt,
@@ -634,6 +640,26 @@ const movieEpisode = [{
   name: "Movie",
   duration_seconds: 90 * 60,
 }];
+sandbox.state.subject = { id: 1, type: 2, platform: "剧场版" };
+sandbox.state.episodes = [{ ...movieEpisode[0], duration_seconds: 50 * 60 }];
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), true);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).reason, "anime_movie",
+  "An explicit movie platform must classify even when the only episode is shorter than one hour");
+await logic.getLongVideoBindReadinessForSubject(1, { duration: 3 * 60 * 60 });
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, true,
+  "Platform-based movie decisions are persisted in the subject cache");
+
+sandbox.state.subject = { id: 1, type: 2, platform: "OVA" };
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: true, checkedAt: Date.now() } };
+assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), false);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt",
+  "A known OVA platform must override both the duration fallback and a stale positive cache");
+assert.equal(logic.getAnimeMoviePlatformDecision({ id: 2, type: 2, platform: "WEB" }), false);
+assert.equal(logic.getAnimeMoviePlatformDecision({ id: 3, type: 2, platform: "Movie" }), true);
+
+sandbox.state.subject = null;
 sandbox.state.episodes = movieEpisode;
 sandbox.state.animeMovieClassifications = {};
 assert.equal(logic.isSingleEpisodeAnimeMovie(movieEpisode), true);
@@ -679,6 +705,7 @@ assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, 
 
 sandbox.state.episodes = episodes;
 sandbox.state.animeMovieClassifications = {};
+sandbox.state.searchResults = [];
 sandbox.animeMovieApiCallCount = 0;
 sandbox.animeMovieApiResponse = { total: 1, data: movieEpisode };
 const remoteMovieReadiness = await logic.getLongVideoBindReadinessForSubject(77, { duration: 3 * 60 * 60 });
@@ -695,14 +722,23 @@ const remoteSeriesReadiness = await logic.getLongVideoBindReadinessForSubject(78
 assert.equal(remoteSeriesReadiness.action, "prompt", "A multi-episode subject keeps the existing long-video flow");
 assert.equal(sandbox.state.animeMovieClassifications["78"].isMovie, false);
 
+sandbox.state.searchResults = [{ id: 79, type: 2, platform: "Movie" }];
+sandbox.animeMovieApiResponse = new Error("platform classification should avoid the episode API");
+const platformMovieReadiness = await logic.getLongVideoBindReadinessForSubject(79, { duration: 3 * 60 * 60 });
+assert.equal(platformMovieReadiness.reason, "anime_movie");
+assert.equal(sandbox.state.animeMovieClassifications["79"].isMovie, true);
+assert.equal(sandbox.animeMovieApiCallCount, 2,
+  "A known movie platform must not request the episode list");
+
+sandbox.state.searchResults = [];
 sandbox.animeMovieApiResponse = { total: 1, data: [{ ...movieEpisode[0], duration_seconds: undefined, duration: "01:30:00" }] };
-const rawApiMovieReadiness = await logic.getLongVideoBindReadinessForSubject(79, { duration: 3 * 60 * 60 });
+const rawApiMovieReadiness = await logic.getLongVideoBindReadinessForSubject(80, { duration: 3 * 60 * 60 });
 assert.equal(rawApiMovieReadiness.action, "bind", "Raw Bangumi duration strings must classify movies before binding");
 assert.equal(rawApiMovieReadiness.reason, "anime_movie");
 
 sandbox.animeMovieApiResponse = new Promise(() => {});
 const classificationStartedAt = Date.now();
-const timedReadiness = await logic.getLongVideoBindReadinessForSubject(80, { duration: 3 * 60 * 60 }, {
+const timedReadiness = await logic.getLongVideoBindReadinessForSubject(81, { duration: 3 * 60 * 60 }, {
   classificationTimeoutMs: 20,
 });
 assert.equal(timedReadiness.action, "prompt", "A stalled movie lookup must fall back to the original readiness");
