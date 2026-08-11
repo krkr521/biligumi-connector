@@ -64,7 +64,7 @@
     longVideoEpisodeOffsets: "biligumi.longVideoEpisodeOffsets",
     longVideoEpisodeVideoOffsets: "biligumi.longVideoEpisodeVideoOffsets",
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
-    animeMovieClassifications: "biligumi.animeMovieClassifications",
+    animeMovieClassifications: "biligumi.animeMovieClassifications.v2",
     disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
     deleteBridge: "biligumi.deleteBridge",
   };

@@ -30,6 +30,11 @@ const SRC_CONSTANTS = extractConstants(userscriptSource, [
   "AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS",
 ]);
 const SRC_STORAGE = extractObjectConstant(userscriptSource, "STORAGE");
+assert.equal(
+  SRC_STORAGE.animeMovieClassifications,
+  "biligumi.animeMovieClassifications.v2",
+  "WEB fallback semantics require a new cache namespace so legacy false decisions are not reused",
+);
 
 function readLogicBlock(filePath) {
   const source = fs.readFileSync(filePath, "utf8");
