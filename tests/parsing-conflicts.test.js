@@ -119,6 +119,7 @@ function createImplementation(label, source) {
     isOfficialBangumiPage: () => false,
     getLongVideoDurationSeconds: (video) => Number(video && video.duration),
     getLongVideoEpisodeModeDecision: () => true,
+    resolveLongVideoBindingSubject: () => null,
     isSingleEpisodeAnimeMovie: () => false,
     getLoadedAnimeMovieClassification: () => false,
     getCachedAnimeMovieClassification: () => null,

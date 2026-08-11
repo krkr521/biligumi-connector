@@ -11748,7 +11748,7 @@
   async function getLongVideoBindReadinessForSubject(subjectId, video, options = {}) {
     const readiness = getLongVideoBindReadiness(video, subjectId);
     if (readiness.reason === "anime_movie") {
-      await classifyAnimeMovieSubject(subjectId);
+      classifyAnimeMovieSubject(subjectId).catch(() => {});
       return readiness;
     }
     if (!["prompt", "auto"].includes(readiness.action)) return readiness;
@@ -11838,7 +11838,7 @@
 
   function getLongVideoDetection(video) {
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
-    const platformDecision = getAnimeMoviePlatformDecision(state.subject);
+    const platformDecision = getAnimeMoviePlatformDecision(resolveLongVideoBindingSubject(state.subjectId));
     const loadedMovieClassification = getLoadedAnimeMovieClassification(state.subjectId);
     if (platformDecision === true
       || (platformDecision === null && (loadedMovieClassification === true

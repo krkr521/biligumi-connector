@@ -161,7 +161,8 @@ const sandbox = {
   detectCurrentEpisodeNo: () => null,
   pad2: (value) => String(value).padStart(2, "0"),
   render: () => {},
-  writeJsonValueAsync: async () => {},
+  writeJsonValueAsync: (...args) => sandbox.writeJsonValueAsyncImpl(...args),
+  writeJsonValueAsyncImpl: async () => {},
   resetAutoWatchObservationState: () => {},
   animeMovieClassificationRequests: new Map(),
   animeMovieApiResponse: null,
@@ -646,9 +647,14 @@ sandbox.state.animeMovieClassifications = {};
 assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), true);
 assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).reason, "anime_movie",
   "An explicit movie platform must classify even when the only episode is shorter than one hour");
+sandbox.writeJsonValueAsyncImpl = () => new Promise(() => {});
+const platformReadinessStartedAt = Date.now();
 await logic.getLongVideoBindReadinessForSubject(1, { duration: 3 * 60 * 60 });
+assert.ok(Date.now() - platformReadinessStartedAt < 1000,
+  "An already-decided movie readiness must not wait for classification cache storage");
 assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, true,
   "Platform-based movie decisions are persisted in the subject cache");
+sandbox.writeJsonValueAsyncImpl = async () => {};
 
 sandbox.state.subject = { id: 1, type: 2, platform: "OVA" };
 sandbox.state.episodes = movieEpisode;
@@ -659,6 +665,16 @@ assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, 
 assert.equal(logic.getAnimeMoviePlatformDecision({ id: 2, type: 2, platform: "WEB" }), false);
 assert.equal(logic.getAnimeMoviePlatformDecision({ id: 3, type: 2, platform: "Movie" }), true);
 
+sandbox.state.subjectId = 2;
+sandbox.state.subject = { id: 1, type: 2, platform: "剧场版" };
+sandbox.state.searchResults = [];
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, true,
+  "A stale SPA subject must not apply its movie platform to the current subject id");
+
+sandbox.state.subjectId = 1;
 sandbox.state.subject = null;
 sandbox.state.episodes = movieEpisode;
 sandbox.state.animeMovieClassifications = {};
