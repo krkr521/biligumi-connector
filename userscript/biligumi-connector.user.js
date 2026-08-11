@@ -11739,7 +11739,7 @@
     if (!platform) return null;
     const normalized = platform.toUpperCase();
     if (platform === "剧场版" || normalized === "MOVIE") return true;
-    if (["TV", "OVA", "WEB"].includes(normalized)) return false;
+    if (["TV", "OVA"].includes(normalized)) return false;
     return null;
   }
 

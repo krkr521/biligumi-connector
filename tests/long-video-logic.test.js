@@ -662,8 +662,24 @@ sandbox.state.animeMovieClassifications = { "1": { isMovie: true, checkedAt: Dat
 assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), false);
 assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt",
   "A known OVA platform must override both the duration fallback and a stale positive cache");
-assert.equal(logic.getAnimeMoviePlatformDecision({ id: 2, type: 2, platform: "WEB" }), false);
+assert.equal(logic.getAnimeMoviePlatformDecision({ id: 2, type: 2, platform: "WEB" }), null,
+  "WEB describes a distribution platform and must allow the episode-duration fallback");
 assert.equal(logic.getAnimeMoviePlatformDecision({ id: 3, type: 2, platform: "Movie" }), true);
+
+// Bangumi subject 643828: THE RIBBON HERO is a 108m animated movie whose platform is WEB.
+sandbox.state.subject = { id: 643828, type: 2, platform: "WEB" };
+sandbox.state.subjectId = 643828;
+sandbox.state.episodes = [{
+  id: 1696686,
+  type: 0,
+  sort: 1,
+  duration: "01:48:51",
+  duration_seconds: 6531,
+}];
+sandbox.state.animeMovieClassifications = {};
+const ribbonHeroReadiness = logic.getLongVideoBindReadiness({ duration: 6531 }, 643828);
+assert.equal(ribbonHeroReadiness.reason, "anime_movie",
+  "A single long WEB release such as THE RIBBON HERO must use the movie fallback");
 
 sandbox.state.subjectId = 2;
 sandbox.state.subject = { id: 1, type: 2, platform: "剧场版" };
