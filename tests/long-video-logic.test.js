@@ -21,6 +21,9 @@ const SRC_CONSTANTS = extractConstants(userscriptSource, [
   "DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS",
   "DEFAULT_EPISODE_DURATION_SECONDS",
   "LONG_VIDEO_MIN_DURATION_SECONDS",
+  "ANIME_MOVIE_MIN_EPISODE_DURATION_SECONDS",
+  "ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_AGE_MS",
+  "ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_ENTRIES",
   "LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS",
   "LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS",
   "AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS",
@@ -127,6 +130,7 @@ const sandbox = {
     longVideoEpisodeOffsets: { "mid:42": 2 * 60 * 60 },
     longVideoEpisodeVideoOffsets: {},
     longVideoEpisodeModes: { "bvid:BV1TEST": true },
+    animeMovieClassifications: {},
     disabledAutoProgressVideos: {},
     rawTitle: "普通超长视频",
     subjectId: 1,
@@ -153,6 +157,14 @@ const sandbox = {
   render: () => {},
   writeJsonValueAsync: async () => {},
   resetAutoWatchObservationState: () => {},
+  animeMovieClassificationRequests: new Map(),
+  animeMovieApiResponse: null,
+  animeMovieApiCallCount: 0,
+  bgmRequest: async () => {
+    sandbox.animeMovieApiCallCount += 1;
+    if (sandbox.animeMovieApiResponse instanceof Error) throw sandbox.animeMovieApiResponse;
+    return sandbox.animeMovieApiResponse;
+  },
 };
 
 // Real implementations replace former hand-written stubs; extraction is strict.
@@ -176,6 +188,11 @@ vm.runInContext(`${userscriptLogic}\n${userscriptBindingKeys}\n${rangeGroupPropo
   getLongVideoDetection,
   getLongVideoEpisodeModeDecision,
   getLongVideoDurationSeconds,
+  normalizeAnimeMovieClassifications,
+  getCachedAnimeMovieClassification,
+  isSingleEpisodeAnimeMovie,
+  classifyAnimeMovieSubject,
+  getLongVideoBindReadinessForSubject,
   shouldOfferLongVideoBindingPrompt,
   getLongVideoBindReadiness,
   parseLongVideoPartTitle,
@@ -606,6 +623,51 @@ assert.equal(logic.renderLongVideoEpisodeHint(), "",
 sandbox.getActiveVideoElement = () => null;
 
 sandbox.state.longVideoEpisodeModes = {};
+const movieEpisode = [{
+  id: 7001,
+  type: 0,
+  sort: 1,
+  name: "Movie",
+  duration_seconds: 90 * 60,
+}];
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.isSingleEpisodeAnimeMovie(movieEpisode), true);
+const localMovieReadiness = logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 });
+assert.equal(localMovieReadiness.action, "bind", "A loaded single-episode movie must skip the long-video prompt");
+assert.equal(localMovieReadiness.reason, "anime_movie");
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+assert.equal(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).active, false,
+  "A movie must disable inference even when an old per-video decision enabled it");
+assert.match(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).reason, /动画电影/);
+
+sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.episodes = [{ ...movieEpisode[0], duration_seconds: 60 * 60 }];
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.isSingleEpisodeAnimeMovie(sandbox.state.episodes), false,
+  "The movie duration threshold is strict: exactly one hour is not enough");
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt");
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
+sandbox.animeMovieApiCallCount = 0;
+sandbox.animeMovieApiResponse = { total: 1, data: movieEpisode };
+const remoteMovieReadiness = await logic.getLongVideoBindReadinessForSubject(77, { duration: 3 * 60 * 60 });
+assert.equal(remoteMovieReadiness.action, "bind", "Pre-bind classification must suppress the prompt for a remote movie subject");
+assert.equal(remoteMovieReadiness.reason, "anime_movie");
+assert.equal(sandbox.state.animeMovieClassifications["77"].isMovie, true);
+assert.equal(sandbox.animeMovieApiCallCount, 1);
+sandbox.animeMovieApiResponse = new Error("cache should avoid this request");
+assert.equal((await logic.getLongVideoBindReadinessForSubject(77, { duration: 3 * 60 * 60 })).action, "bind");
+assert.equal(sandbox.animeMovieApiCallCount, 1, "The subject-scoped movie cache must avoid a repeated API request");
+
+sandbox.animeMovieApiResponse = { total: 2, data: [movieEpisode[0], { ...movieEpisode[0], id: 7002, sort: 2 }] };
+const remoteSeriesReadiness = await logic.getLongVideoBindReadinessForSubject(78, { duration: 3 * 60 * 60 });
+assert.equal(remoteSeriesReadiness.action, "prompt", "A multi-episode subject keeps the existing long-video flow");
+assert.equal(sandbox.state.animeMovieClassifications["78"].isMovie, false);
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 }), false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 + 1 }), true);

@@ -64,6 +64,7 @@
     longVideoEpisodeOffsets: "biligumi.longVideoEpisodeOffsets",
     longVideoEpisodeVideoOffsets: "biligumi.longVideoEpisodeVideoOffsets",
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
+    animeMovieClassifications: "biligumi.animeMovieClassifications",
     disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
     deleteBridge: "biligumi.deleteBridge",
   };
@@ -134,6 +135,7 @@
   const nonMainPreviewRequests = new Map();
   const subjectInfoLinkRequests = new Map();
   const subjectInfoLinkCache = new Map();
+  const animeMovieClassificationRequests = new Map();
   const BINDINGS_LOCK_NAME = "biligumi-connector-bindings-v1";
   let bindingsUpdateQueue = Promise.resolve();
   const COLLECTION_COMMENT_MAX_LENGTH = 380;
@@ -149,6 +151,9 @@
   const AUTO_WATCH_RATE_LIMIT_MAX_SECONDS = 300;
   const LONG_VIDEO_DETECTION_KEY_MEMO_MS = 2500;
   const LONG_VIDEO_MIN_DURATION_SECONDS = 2 * 60 * 60;
+  const ANIME_MOVIE_MIN_EPISODE_DURATION_SECONDS = 60 * 60;
+  const ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+  const ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_ENTRIES = 200;
   const DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS = 2 * 60 * 60;
   const DEFAULT_EPISODE_DURATION_SECONDS = 24 * 60;
   const LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS = 45 * 60;
@@ -244,6 +249,7 @@
     longVideoEpisodeOffsets: readJsonValue(STORAGE.longVideoEpisodeOffsets, {}),
     longVideoEpisodeVideoOffsets: readJsonValue(STORAGE.longVideoEpisodeVideoOffsets, {}),
     longVideoEpisodeModes: readJsonValue(STORAGE.longVideoEpisodeModes, {}),
+    animeMovieClassifications: normalizeAnimeMovieClassifications(readJsonValue(STORAGE.animeMovieClassifications, {})),
     disabledAutoProgressVideos: readJsonValue(STORAGE.disabledAutoProgressVideos, {}),
     longVideoEpisodeGuess: null,
     longVideoEpisodeRenderKey: "",
@@ -5327,7 +5333,8 @@
   async function requestBindSubject(subjectId, context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
     const safeSubjectId = Number(subjectId);
     if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrentPageContext(context)) return;
-    const readiness = getLongVideoBindReadiness(getActiveVideoElement());
+    const readiness = await getLongVideoBindReadinessForSubject(safeSubjectId, getActiveVideoElement());
+    if (!isCurrentPageContext(context)) return;
     if (readiness.action === "prompt") {
       showLongVideoBindingPrompt(safeSubjectId, context, {
         phase: "prompt",
@@ -5398,6 +5405,8 @@
 
   function maybeOfferLongVideoAutoIdentify(video = getActiveVideoElement()) {
     if (!state.subjectId) return false;
+    if (!state.subject || !getNormalEpisodes().length) return false;
+    classifyAnimeMovieSubject(state.subjectId).catch(() => {});
     if (state.longVideoBindingPrompt) return false;
     if (state.longVideoIdentifyDismissedKey === getLongVideoIdentifyDismissKey()) return false;
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return false;
@@ -5531,77 +5540,85 @@
     state.busy = false;
     render();
 
-    const poll = () => {
+    let pollInFlight = false;
+    const poll = async () => {
       if (seq !== longVideoBindWaitSeq) return;
-      if (!isCurrentPageContext(routeContext)) {
-        clearLongVideoBindingPrompt({ render: true });
-        return;
-      }
-      const readiness = getLongVideoBindReadiness(getActiveVideoElement());
-      const promptMode = (state.longVideoBindingPrompt && state.longVideoBindingPrompt.mode) || seed.mode || "bind";
-      if (readiness.action === "prompt") {
-        showLongVideoBindingPrompt(safeSubjectId, routeContext, {
-          phase: "prompt",
-          mode: promptMode,
-          durationSeconds: readiness.durationSeconds,
-          subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
-        });
-        return;
-      }
-      if (readiness.action === "auto") {
-        clearLongVideoBindingPrompt();
-        applyLongVideoAutoAccept(safeSubjectId, routeContext, promptMode).catch(showError);
-        return;
-      }
-      if (readiness.action === "bind") {
-        const wasIdentify = promptMode === "identify";
-        clearLongVideoBindingPrompt();
-        if (wasIdentify) {
-          render();
-          refreshLongVideoEpisodeGuess(getActiveVideoElement());
+      if (pollInFlight) return;
+      pollInFlight = true;
+      try {
+        if (!isCurrentPageContext(routeContext)) {
+          clearLongVideoBindingPrompt({ render: true });
           return;
         }
-        bindSubject(safeSubjectId, routeContext).catch(showError);
-        return;
-      }
-      if (Date.now() - startedAt >= LONG_VIDEO_BIND_WAIT_TIMEOUT_MS) {
-        stopLongVideoBindingWaitLoop();
-        state.longVideoBindingPrompt = buildLongVideoBindingPromptState(safeSubjectId, routeContext, {
-          subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
-          mode: promptMode,
-          phase: "timeout",
-          waitingFor: readiness.waitingFor || "duration",
-          statusText: "暂时读取不到视频时长。",
-          durationSeconds: 0,
-        });
-        render();
-        return;
-      }
-      const nextStatus = readiness.statusText || "正在读取视频时长…";
-      const nextPartTitle = String(getCurrentVideoPartContext()?.title || "");
-      const pending = state.longVideoBindingPrompt;
-      if (pending && pending.phase === "waiting"
-        && (pending.statusText !== nextStatus || pending.partTitle !== nextPartTitle)) {
-        state.longVideoBindingPrompt = {
-          ...pending,
-          statusText: nextStatus,
-          partTitle: nextPartTitle,
-          waitingFor: readiness.waitingFor || "duration",
-        };
-        render();
+        const readiness = await getLongVideoBindReadinessForSubject(safeSubjectId, getActiveVideoElement());
+        if (seq !== longVideoBindWaitSeq || !isCurrentPageContext(routeContext)) return;
+        const promptMode = (state.longVideoBindingPrompt && state.longVideoBindingPrompt.mode) || seed.mode || "bind";
+        if (readiness.action === "prompt") {
+          showLongVideoBindingPrompt(safeSubjectId, routeContext, {
+            phase: "prompt",
+            mode: promptMode,
+            durationSeconds: readiness.durationSeconds,
+            subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
+          });
+          return;
+        }
+        if (readiness.action === "auto") {
+          clearLongVideoBindingPrompt();
+          applyLongVideoAutoAccept(safeSubjectId, routeContext, promptMode).catch(showError);
+          return;
+        }
+        if (readiness.action === "bind") {
+          const wasIdentify = promptMode === "identify";
+          clearLongVideoBindingPrompt();
+          if (wasIdentify) {
+            render();
+            refreshLongVideoEpisodeGuess(getActiveVideoElement());
+            return;
+          }
+          bindSubject(safeSubjectId, routeContext).catch(showError);
+          return;
+        }
+        if (Date.now() - startedAt >= LONG_VIDEO_BIND_WAIT_TIMEOUT_MS) {
+          stopLongVideoBindingWaitLoop();
+          state.longVideoBindingPrompt = buildLongVideoBindingPromptState(safeSubjectId, routeContext, {
+            subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
+            mode: promptMode,
+            phase: "timeout",
+            waitingFor: readiness.waitingFor || "duration",
+            statusText: "暂时读取不到视频时长。",
+            durationSeconds: 0,
+          });
+          render();
+          return;
+        }
+        const nextStatus = readiness.statusText || "正在读取视频时长…";
+        const nextPartTitle = String(getCurrentVideoPartContext()?.title || "");
+        const pending = state.longVideoBindingPrompt;
+        if (pending && pending.phase === "waiting"
+          && (pending.statusText !== nextStatus || pending.partTitle !== nextPartTitle)) {
+          state.longVideoBindingPrompt = {
+            ...pending,
+            statusText: nextStatus,
+            partTitle: nextPartTitle,
+            waitingFor: readiness.waitingFor || "duration",
+          };
+          render();
+        }
+      } finally {
+        pollInFlight = false;
       }
     };
 
-    longVideoBindWaitTimer = window.setInterval(poll, LONG_VIDEO_BIND_WAIT_POLL_MS);
+    longVideoBindWaitTimer = window.setInterval(() => poll().catch(showError), LONG_VIDEO_BIND_WAIT_POLL_MS);
     const video = getActiveVideoElement();
     if (video) {
       const onMeta = () => {
-        if (seq === longVideoBindWaitSeq) poll();
+        if (seq === longVideoBindWaitSeq) poll().catch(showError);
       };
       video.addEventListener("loadedmetadata", onMeta, { once: true });
       video.addEventListener("durationchange", onMeta, { once: true });
     }
-    poll();
+    poll().catch(showError);
   }
 
   function retryLongVideoBindingWait() {
@@ -11648,13 +11665,98 @@
     return (!currentBvid || !initialBvid || currentBvid === initialBvid) && Number.isFinite(fallback) && fallback > 0 ? fallback : 0;
   }
 
+  function normalizeAnimeMovieClassifications(value) {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    const now = Date.now();
+    return Object.fromEntries(Object.entries(value)
+      .filter(([subjectId, entry]) => (
+        /^\d+$/.test(subjectId)
+        && entry
+        && typeof entry === "object"
+        && typeof entry.isMovie === "boolean"
+        && Number.isFinite(Number(entry.checkedAt))
+        && now - Number(entry.checkedAt) <= ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_AGE_MS
+      ))
+      .sort((left, right) => Number(right[1].checkedAt) - Number(left[1].checkedAt))
+      .slice(0, ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_ENTRIES));
+  }
+
+  function getCachedAnimeMovieClassification(subjectId) {
+    const key = String(Number(subjectId) || "");
+    if (!key) return null;
+    const normalized = normalizeAnimeMovieClassifications(state.animeMovieClassifications);
+    state.animeMovieClassifications = normalized;
+    const entry = normalized[key];
+    return entry ? entry.isMovie === true : null;
+  }
+
+  async function cacheAnimeMovieClassification(subjectId, isMovie) {
+    const key = String(Number(subjectId) || "");
+    if (!key) return;
+    state.animeMovieClassifications = normalizeAnimeMovieClassifications({
+      ...state.animeMovieClassifications,
+      [key]: { isMovie: Boolean(isMovie), checkedAt: Date.now() },
+    });
+    await writeJsonValueAsync(STORAGE.animeMovieClassifications, state.animeMovieClassifications);
+  }
+
+  function isSingleEpisodeAnimeMovie(episodes) {
+    const normalEpisodes = Array.isArray(episodes) ? episodes : [];
+    return normalEpisodes.length === 1
+      && getEpisodeDurationSeconds(normalEpisodes[0]) > ANIME_MOVIE_MIN_EPISODE_DURATION_SECONDS;
+  }
+
+  function classifyAnimeMovieSubject(subjectId) {
+    const safeSubjectId = Number(subjectId);
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0) return Promise.resolve(false);
+    const cached = getCachedAnimeMovieClassification(safeSubjectId);
+    if (cached !== null) return Promise.resolve(cached);
+    const requestKey = String(safeSubjectId);
+    if (animeMovieClassificationRequests.has(requestKey)) return animeMovieClassificationRequests.get(requestKey);
+    const request = (async () => {
+      let episodes = Number(state.subjectId) === safeSubjectId ? getNormalEpisodes() : [];
+      if (!episodes.length) {
+        let response;
+        try {
+          response = await bgmRequest(`/v0/episodes?subject_id=${safeSubjectId}&type=0&limit=2&offset=0`);
+        } catch (_) {
+          return false;
+        }
+        const total = Number(response && response.total);
+        const data = Array.isArray(response && response.data) ? response.data : [];
+        if (!Number.isInteger(total) || total < 0 || (total === 1 && data.length !== 1)) return false;
+        episodes = total === 1 ? data : [];
+        const isMovie = total === 1 && isSingleEpisodeAnimeMovie(episodes);
+        await cacheAnimeMovieClassification(safeSubjectId, isMovie);
+        return isMovie;
+      }
+      const isMovie = isSingleEpisodeAnimeMovie(episodes);
+      await cacheAnimeMovieClassification(safeSubjectId, isMovie);
+      return isMovie;
+    })().finally(() => animeMovieClassificationRequests.delete(requestKey));
+    animeMovieClassificationRequests.set(requestKey, request);
+    return request;
+  }
+
+  async function getLongVideoBindReadinessForSubject(subjectId, video) {
+    const readiness = getLongVideoBindReadiness(video, subjectId);
+    if (!["prompt", "auto"].includes(readiness.action)) return readiness;
+    if (!(await classifyAnimeMovieSubject(subjectId))) return readiness;
+    return { action: "bind", reason: "anime_movie", durationSeconds: readiness.durationSeconds };
+  }
+
   function shouldOfferLongVideoBindingPrompt(video) {
     return getLongVideoBindReadiness(video).action === "prompt";
   }
 
-  function getLongVideoBindReadiness(video) {
+  function getLongVideoBindReadiness(video, subjectId = state.subjectId) {
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) {
       return { action: "bind", reason: "not_applicable" };
+    }
+    const safeSubjectId = Number(subjectId);
+    const localEpisodes = safeSubjectId > 0 && Number(state.subjectId) === safeSubjectId ? getNormalEpisodes() : [];
+    if (isSingleEpisodeAnimeMovie(localEpisodes) || getCachedAnimeMovieClassification(safeSubjectId) === true) {
+      return { action: "bind", reason: "anime_movie" };
     }
     if (getLongVideoEpisodeModeDecision() !== null) {
       return { action: "bind", reason: "decision_known" };
@@ -11720,6 +11822,9 @@
 
   function getLongVideoDetection(video) {
     if (isOfficialBangumiPage() || !/\/video\//i.test(location.pathname)) return { active: false, reason: "仅支持普通 B站视频页。" };
+    if (isSingleEpisodeAnimeMovie(getNormalEpisodes()) || getCachedAnimeMovieClassification(state.subjectId) === true) {
+      return { active: false, reason: "当前 Bangumi 条目已识别为动画电影。" };
+    }
     const duration = getLongVideoDurationSeconds(video);
     if (!Number.isFinite(duration) || duration <= 0) return { active: false, reason: "正在等待播放器时长。" };
     if (duration <= LONG_VIDEO_MIN_DURATION_SECONDS) return { active: false, reason: `视频未超过 ${formatTimecode(LONG_VIDEO_MIN_DURATION_SECONDS)}。` };

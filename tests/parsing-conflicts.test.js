@@ -118,6 +118,8 @@ function createImplementation(label, source) {
     isOfficialBangumiPage: () => false,
     getLongVideoDurationSeconds: (video) => Number(video && video.duration),
     getLongVideoEpisodeModeDecision: () => true,
+    isSingleEpisodeAnimeMovie: () => false,
+    getCachedAnimeMovieClassification: () => null,
     getLongVideoOwnerKey: () => "owner:parser-test",
     getNormalEpisodes: () => sandbox.testEpisodes,
     getEffectiveLongVideoOffsetSeconds: () => sandbox.testOffsetSeconds,
