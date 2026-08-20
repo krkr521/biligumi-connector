@@ -11873,7 +11873,11 @@
     }
     const overflowSeconds = Math.max(0, timeline.endTime - duration);
     if (overflowSeconds > LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS) {
-      return { active: false, reason: "首集起点加全季时长已超过视频总长，请校准首集开始时间。" };
+      return {
+        active: false,
+        reason: "首集起点加全季时长已超过视频总长，请校准首集开始时间。",
+        canCalibrateOffset: true,
+      };
     }
     const trailingOverflowSeconds = Math.max(0, duration - timeline.endTime);
     const timelineCoverageMismatch = !segment.rangeApplied
@@ -12086,8 +12090,10 @@
       const detection = getLongVideoDetection(video);
       if (detection.active) return "";
       const reason = String(detection.reason || "当前参数无法推测分集。");
-      const actions = renderLongVideoOffsetActions();
-      return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">实验推测暂不可用：${escapeHtml(reason)} 请把播放进度移到第一集正片真正开始的位置，再设置起点。</div>${actions}</div>`;
+      const canCalibrateOffset = detection.canCalibrateOffset === true;
+      const calibrationHelp = canCalibrateOffset ? " 请把播放进度移到第一集正片真正开始的位置，再设置起点。" : "";
+      const actions = canCalibrateOffset ? renderLongVideoOffsetActions() : "";
+      return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">实验推测暂不可用：${escapeHtml(reason)}${calibrationHelp}</div>${actions}</div>`;
     }
     const actions = renderLongVideoOffsetActions();
     let text = "";

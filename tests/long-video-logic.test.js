@@ -642,6 +642,8 @@ assert.match(
   /达到设置的 80% 后自动标记/,
   "the long-video hint exposes the shared automatic-mark threshold",
 );
+assert.match(logic.renderLongVideoEpisodeHint(), /data-action="capture-long-video-video-offset"/,
+  "an active long-video guess keeps the manual start-offset action");
 
 // An invalid default offset must not hide the control needed to correct it.
 sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime - 46 * 60, currentTime: 10 });
@@ -653,6 +655,15 @@ assert.match(calibrationHint, /实验推测暂不可用/);
 assert.match(calibrationHint, /首集起点加全季时长已超过视频总长/);
 assert.match(calibrationHint, /data-action="capture-long-video-video-offset"/,
   "inactive long-video detection must still expose the start-offset action");
+
+// Unavailable states unrelated to the start offset must not offer a misleading
+// calibration action or tell the user to move the playback position.
+sandbox.state.episodes = episodes.slice(0, 3);
+const insufficientEpisodesHint = logic.renderLongVideoEpisodeHint();
+assert.match(insufficientEpisodesHint, /Bangumi 可用正片章节少于 4 集/);
+assert.doesNotMatch(insufficientEpisodesHint, /capture-long-video-video-offset/);
+assert.doesNotMatch(insufficientEpisodesHint, /请把播放进度移到第一集正片真正开始的位置/);
+sandbox.state.episodes = episodes;
 sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.renderLongVideoEpisodeHint(), "",
   "unconfirmed long videos must not show calibration controls");
