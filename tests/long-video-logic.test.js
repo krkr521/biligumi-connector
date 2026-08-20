@@ -836,9 +836,25 @@ const localMovieReadiness = logic.getLongVideoBindReadiness({ duration: 3 * 60 *
 assert.equal(localMovieReadiness.action, "bind", "A loaded single-episode movie must skip the long-video prompt");
 assert.equal(localMovieReadiness.reason, "anime_movie");
 sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
-assert.equal(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).active, false,
+const movieDetection = logic.getLongVideoDetection({ duration: 3 * 60 * 60 });
+assert.equal(movieDetection.active, false,
   "A movie must disable inference even when an old per-video decision enabled it");
-assert.match(logic.getLongVideoDetection({ duration: 3 * 60 * 60 }).reason, /动画电影/);
+assert.match(movieDetection.reason, /动画电影/);
+assert.equal(movieDetection.suppressHint, true);
+sandbox.getActiveVideoElement = () => ({ duration: 3 * 60 * 60, currentTime: 10 });
+sandbox.state.longVideoEpisodeGuess = {
+  active: true,
+  stage: "episode",
+  episode: movieEpisode[0],
+  episodeNo: 1,
+  episodePercent: 25,
+  autoMarkSafe: true,
+  segment: {},
+};
+assert.equal(logic.renderLongVideoEpisodeHint(), "",
+  "A recognized movie silently suppresses both stale inference and the calibration panel");
+sandbox.state.longVideoEpisodeGuess = null;
+sandbox.getActiveVideoElement = () => null;
 
 const extraLongMovie = [{ ...movieEpisode[0], duration_seconds: 3 * 60 * 60 + 1 }];
 assert.equal(logic.isSingleEpisodeAnimeMovie(extraLongMovie), true,

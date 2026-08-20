@@ -11843,7 +11843,7 @@
     if (platformDecision === true
       || (platformDecision === null && (loadedMovieClassification === true
         || (loadedMovieClassification === null && getCachedAnimeMovieClassification(state.subjectId) === true)))) {
-      return { active: false, reason: "当前 Bangumi 条目已识别为动画电影。" };
+      return { active: false, reason: "当前 Bangumi 条目已识别为动画电影。", suppressHint: true };
     }
     const duration = getLongVideoDurationSeconds(video);
     if (!Number.isFinite(duration) || duration <= 0) return { active: false, reason: "正在等待播放器时长。" };
@@ -12075,9 +12075,11 @@
   }
 
   function renderLongVideoEpisodeHint() {
+    const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
+    if (longVideoModeEnabled && getLongVideoDetection(getActiveVideoElement()).suppressHint) return "";
     const guess = state.longVideoEpisodeGuess;
     if (!guess || !guess.active) {
-      if (isCurrentVideoAutoProgressDisabled() || getLongVideoEpisodeModeDecision() !== true) return "";
+      if (isCurrentVideoAutoProgressDisabled() || !longVideoModeEnabled) return "";
       const video = getActiveVideoElement();
       const duration = getLongVideoDurationSeconds(video);
       if (!Number.isFinite(duration) || duration <= LONG_VIDEO_MIN_DURATION_SECONDS) return "";
