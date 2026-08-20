@@ -1,0 +1,50 @@
+{
+  "season1": {
+    "subject": {
+      "id": 386809,
+      "type": 2,
+      "name": "【推しの子】",
+      "name_cn": "【我推的孩子】",
+      "platform": "TV",
+      "total_episodes": 15
+    },
+    "episodes": [
+      { "id": 1153155, "type": 0, "sort": 1, "duration": "01:22:00", "duration_seconds": 4920 },
+      { "id": 1153156, "type": 0, "sort": 2, "duration": "00:24:40", "duration_seconds": 1480 },
+      { "id": 1153157, "type": 0, "sort": 3, "duration": "00:25:15", "duration_seconds": 1515 },
+      { "id": 1153158, "type": 0, "sort": 4, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1153159, "type": 0, "sort": 5, "duration": "00:24:00", "duration_seconds": 1440 },
+      { "id": 1153160, "type": 0, "sort": 6, "duration": "00:25:00", "duration_seconds": 1500 },
+      { "id": 1153161, "type": 0, "sort": 7, "duration": "00:24:40", "duration_seconds": 1480 },
+      { "id": 1153162, "type": 0, "sort": 8, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1153163, "type": 0, "sort": 9, "duration": "00:25:10", "duration_seconds": 1510 },
+      { "id": 1153164, "type": 0, "sort": 10, "duration": "00:24:15", "duration_seconds": 1455 },
+      { "id": 1153165, "type": 0, "sort": 11, "duration": "00:23:10", "duration_seconds": 1390 }
+    ]
+  },
+  "season2": {
+    "subject": {
+      "id": 443428,
+      "type": 2,
+      "name": "【推しの子】 第2期",
+      "name_cn": "【我推的孩子】 第二季",
+      "platform": "TV",
+      "total_episodes": 14
+    },
+    "episodes": [
+      { "id": 1349007, "type": 0, "sort": 12, "duration": "00:25:20", "duration_seconds": 1520 },
+      { "id": 1349008, "type": 0, "sort": 13, "duration": "00:23:45", "duration_seconds": 1425 },
+      { "id": 1349009, "type": 0, "sort": 14, "duration": "00:26:50", "duration_seconds": 1610 },
+      { "id": 1349010, "type": 0, "sort": 15, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1349011, "type": 0, "sort": 16, "duration": "00:25:30", "duration_seconds": 1530 },
+      { "id": 1349012, "type": 0, "sort": 17, "duration": "00:25:30", "duration_seconds": 1530 },
+      { "id": 1349013, "type": 0, "sort": 18, "duration": "00:23:50", "duration_seconds": 1430 },
+      { "id": 1349014, "type": 0, "sort": 19, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1349015, "type": 0, "sort": 20, "duration": "00:25:00", "duration_seconds": 1500 },
+      { "id": 1349016, "type": 0, "sort": 21, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1349017, "type": 0, "sort": 22, "duration": "00:23:40", "duration_seconds": 1420 },
+      { "id": 1349018, "type": 0, "sort": 23, "duration": "00:25:30", "duration_seconds": 1530 },
+      { "id": 1363721, "type": 0, "sort": 24, "duration": "00:23:40", "duration_seconds": 1420 }
+    ]
+  }
+}
