@@ -12134,14 +12134,14 @@
 
   function renderLongVideoEpisodeHint() {
     const longVideoModeEnabled = getLongVideoEpisodeModeDecision() === true;
-    if (longVideoModeEnabled && getLongVideoDetection(getActiveVideoElement()).suppressHint) return "";
+    const video = getActiveVideoElement();
+    const detection = longVideoModeEnabled ? getLongVideoDetection(video) : null;
+    if (detection?.suppressHint) return "";
     const guess = state.longVideoEpisodeGuess;
-    if (!guess || !guess.active) {
+    if (!guess || !guess.active || !detection?.active) {
       if (isCurrentVideoAutoProgressDisabled() || !longVideoModeEnabled) return "";
-      const video = getActiveVideoElement();
       const duration = getLongVideoDurationSeconds(video);
       if (!Number.isFinite(duration) || duration <= LONG_VIDEO_MIN_DURATION_SECONDS) return "";
-      const detection = getLongVideoDetection(video);
       if (detection.active) return "";
       const reason = String(detection.reason || "当前参数无法推测分集。");
       const canCalibrateOffset = detection.canCalibrateOffset === true;

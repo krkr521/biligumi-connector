@@ -628,6 +628,7 @@ assert.equal(tenMinuteOverflow.autoMarkSafe, false);
 assert.equal(logic.getLongVideoDetection({ duration: timeline.endTime - 46 * 60 }).active, false);
 
 sandbox.autoWatchThreshold = 80;
+sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime, currentTime: 2 * 60 * 60 + 42 * 60 });
 sandbox.state.longVideoEpisodeGuess = {
   active: true,
   stage: "episode",
@@ -659,6 +660,15 @@ assert.match(calibrationHint, /data-action="capture-long-video-video-offset"/,
 // Unavailable states unrelated to the start offset must not offer a misleading
 // calibration action or tell the user to move the playback position.
 sandbox.state.episodes = episodes.slice(0, 3);
+sandbox.state.longVideoEpisodeGuess = {
+  active: true,
+  stage: "episode",
+  episode: episodes[2],
+  episodeNo: 3,
+  episodePercent: 42,
+  autoMarkSafe: true,
+  segment: {},
+};
 const insufficientEpisodesHint = logic.renderLongVideoEpisodeHint();
 assert.match(insufficientEpisodesHint, /Bangumi 可用正片章节少于 4 集/);
 assert.doesNotMatch(insufficientEpisodesHint, /capture-long-video-video-offset/);
@@ -666,7 +676,8 @@ assert.doesNotMatch(insufficientEpisodesHint, /请把播放进度移到第一集
 sandbox.state.episodes = episodes;
 sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.renderLongVideoEpisodeHint(), "",
-  "unconfirmed long videos must not show calibration controls");
+  "unconfirmed long videos must not render a stale active guess or calibration controls");
+sandbox.state.longVideoEpisodeGuess = null;
 sandbox.getActiveVideoElement = () => null;
 
 // Real Bangumi snapshots for Oshi no Ko exercise the movie guard, irregular
