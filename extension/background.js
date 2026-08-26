@@ -49,9 +49,13 @@
     }
 
     if (message && message.type === MSG_HTTP_REQUEST) {
-      handleHttpRequest(message.request).then(
+      handleHttpRequest(message.request, sender).then(
         (response) => sendResponse({ ok: true, response }),
-        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+        (error) => sendResponse({
+          ok: false,
+          error: String(error && error.message || error),
+          errorKind: String(error && error.errorKind || "network"),
+        }),
       );
       return true;
     }
@@ -247,7 +251,8 @@
     }
   }
 
-  async function handleHttpRequest(request) {
+  async function handleHttpRequest(request, sender) {
+    if (!isAllowedHttpSender(sender)) throw makeHttpProxyError("Blocked extension request sender", "validation");
     const normalized = normalizeHttpRequest(request);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), normalized.timeout);
@@ -257,6 +262,7 @@
         headers: normalized.headers,
         body: normalized.body,
         credentials: normalized.credentials,
+        redirect: normalized.redirect,
         signal: controller.signal,
       });
       const responseText = await response.text();
@@ -264,6 +270,9 @@
       response.headers.forEach((value, key) => {
         responseHeaders.push(`${key}: ${value}`);
       });
+      if (normalized.redirect === "error" && response.url && response.url !== normalized.url) {
+        throw makeHttpProxyError("Blocked API redirect", "validation");
+      }
       return {
         status: response.status,
         statusText: response.statusText,
@@ -272,6 +281,10 @@
         responseHeaders: responseHeaders.join("\r\n"),
         finalUrl: response.url,
       };
+    } catch (error) {
+      if (error && error.name === "AbortError") throw makeHttpProxyError("Extension HTTP request timed out", "timeout");
+      if (error && error.errorKind) throw error;
+      throw makeHttpProxyError(String(error && error.message || error), "network");
     } finally {
       clearTimeout(timeoutId);
     }
@@ -279,58 +292,69 @@
 
   function normalizeHttpRequest(request) {
     const url = String(request && request.url || "");
-    if (!isAllowedHttpUrl(url)) throw new Error("Blocked extension request URL");
+    const target = classifyHttpTarget(url);
+    if (!target) throw makeHttpProxyError("Blocked extension request URL", "validation");
     const method = String(request && request.method || "GET").toUpperCase();
-    const headers = filterRequestHeaders(request && request.headers);
+    const allowedMethods = target === "web" ? new Set(["GET"]) : new Set(["GET", "POST", "PATCH"]);
+    if (!allowedMethods.has(method)) throw makeHttpProxyError("Blocked extension request method", "validation");
+    const body = request && request.data != null ? String(request.data) : undefined;
+    if (method === "GET" && body) throw makeHttpProxyError("Blocked GET request body", "validation");
+    if (body && body.length > 64 * 1024) throw makeHttpProxyError("Blocked oversized request body", "validation");
+    const headers = filterRequestHeaders(request && request.headers, target);
     return {
       url,
       method,
       headers,
-      body: request && request.data != null ? String(request.data) : undefined,
+      body,
       responseType: String(request && request.responseType || ""),
-    // Defense-in-depth: only GET requests may carry cookies (the credentialed
-    // caller is bgmWebRequest, a GET HTML scrape). Mutating methods are proxied
-    // cookie-less so a future bug/compromise cannot perform cookie-authenticated
-    // state changes through this proxy.
-    credentials: request && request.withCredentials && method === "GET" ? "include" : "omit",
+      credentials: target === "web" && request && request.withCredentials ? "include" : "omit",
+      redirect: target === "api" ? "error" : "follow",
       timeout: Math.max(1000, Math.min(120000, Number(request && request.timeout) || 30000)),
     };
   }
 
-  function isAllowedHttpUrl(url) {
+  function isAllowedHttpSender(sender) {
+    if (!sender || sender.frameId !== 0 || !sender.tab || !Number.isInteger(sender.tab.id)) return false;
+    const url = sender.url || sender.tab.url || "";
+    return isBilibiliVideoUrl(url) || isDeleteBridgeTabUrl(url);
+  }
+
+  function classifyHttpTarget(url) {
     try {
-      const parsed = new URL(url);
-      // api.bgm.tv (token API) and bgm.tv (HTML scrape) are the only real proxy
-      // targets. www.bilibili.com was dead surface that widened the credentialed
-      // blast radius without any caller; it has been removed.
-      return parsed.protocol === "https:" && (
-        parsed.hostname === "api.bgm.tv"
-        || parsed.hostname === "bgm.tv"
-      );
+      const parsed = new URL(String(url || ""));
+      if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password || parsed.hash) return "";
+      const apiHosts = new Set(["api.bgm.tv", "api.bangumi.pro", "bgmapi.anibt.net"]);
+      if (apiHosts.has(parsed.hostname) && parsed.pathname.startsWith("/v0/")) return "api";
+      if (parsed.hostname === "bgm.tv" && /^\/(?:subject\/\d+|login)(?:\/)?$/.test(parsed.pathname)) return "web";
+      return "";
     } catch (_error) {
-      return false;
+      return "";
     }
   }
 
-  function filterRequestHeaders(headers) {
-    const blocked = new Set([
-      "accept-encoding",
-      "connection",
-      "content-length",
-      "cookie",
-      "host",
-      "origin",
-      "referer",
-      "user-agent",
-    ]);
+  function isAllowedHttpUrl(url) {
+    return Boolean(classifyHttpTarget(url));
+  }
+
+  function filterRequestHeaders(headers, target = "api") {
+    const allowed = target === "web"
+      ? new Set(["accept"])
+      : new Set(["accept", "content-type", "authorization"]);
     const result = {};
     Object.entries(headers && typeof headers === "object" ? headers : {}).forEach(([key, value]) => {
       const normalizedKey = String(key || "").toLowerCase();
-      if (!normalizedKey || blocked.has(normalizedKey)) return;
+      if (!allowed.has(normalizedKey)) return;
       result[key] = String(value);
     });
     return result;
   }
+
+  function makeHttpProxyError(message, errorKind) {
+    const error = new Error(message);
+    error.errorKind = errorKind;
+    return error;
+  }
+
 
   function tryParseJson(value) {
     try {

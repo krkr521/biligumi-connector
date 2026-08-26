@@ -35,6 +35,10 @@
   "use strict";
 
   const API_BASE = "https://api.bgm.tv";
+  const BGM_API_RELAYS = Object.freeze({
+    "api.bangumi.pro": "https://api.bangumi.pro",
+    "bgmapi.anibt.net": "https://bgmapi.anibt.net",
+  });
   const BGM_WEB_BASE = "https://bgm.tv";
   const DELETE_BRIDGE_PARAM = "biligumi_delete_bridge";
   const DELETE_BRIDGE_TTL_MS = 5 * 60 * 1000;
@@ -46,6 +50,7 @@
   const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
   const CHARACTER_STRIP_ID = "biligumi-connector-characters";
   const SETTINGS_ID = "biligumi-connector-settings";
+  const API_RELAY_ID = "biligumi-connector-api-relay";
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
@@ -154,6 +159,7 @@
   const REQUEST_DEDUP_TTL = 500;
   const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 800;
+  const BGM_API_REQUEST_TIMEOUT_MS = 10000;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
   const AUTO_WATCH_TIMEUPDATE_MIN_INTERVAL_MS = 1000;
   const AUTO_WATCH_FAILURE_COOLDOWN_BASE_MS = 5000;
@@ -269,6 +275,7 @@
     longVideoDetectionKeyMemo: null,
     longVideoBindingPrompt: null,
     inlineConfirm: null,
+    apiRelayPrompt: null,
     longVideoIdentifyDismissedKey: "",
     nonMainResults: [],
     nonMainKeyword: "",
@@ -315,6 +322,112 @@
       color: var(--bgm-ink);
       font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
+    #${API_RELAY_ID} {
+      --bgm-pink: #d9758c;
+      --bgm-ink: #1f2329;
+      --bgm-muted: #7f8792;
+      --bgm-border: #e6e9ef;
+      position: fixed;
+      inset: 0;
+      z-index: 2147483647;
+      display: grid;
+      place-items: center;
+      box-sizing: border-box;
+      padding: 18px;
+      background: rgba(15, 23, 42, .38);
+      font: 14px/1.45 Arial, "Microsoft YaHei", sans-serif;
+    }
+    #${API_RELAY_ID} * { box-sizing: border-box; }
+    #${API_RELAY_ID} .biligumi-api-relay-card {
+      width: min(460px, calc(100vw - 36px));
+      max-height: calc(100vh - 36px);
+      overflow: auto;
+      padding: 16px;
+      border: 1px solid #efc4cc;
+      border-radius: 10px;
+      background: #fff;
+      color: var(--bgm-ink);
+      box-shadow: 0 12px 28px rgba(52, 64, 84, .24);
+    }
+    #${API_RELAY_ID} .biligumi-api-relay-title {
+      color: #bd2441;
+      font-size: 15px;
+      font-weight: 700;
+    }
+    #${API_RELAY_ID} .biligumi-api-relay-text {
+      margin-top: 8px;
+      color: #344252;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    #${API_RELAY_ID} .biligumi-api-relay-warning {
+      margin-top: 10px;
+      padding: 9px 10px;
+      border: 1px solid #f3c4cd;
+      border-left: 3px solid #d03030;
+      border-radius: 8px;
+      background: #fff0f2;
+      color: #bd2441;
+      font-size: 12px;
+      font-weight: 700;
+      line-height: 1.55;
+    }
+    #${API_RELAY_ID} .biligumi-api-relay-help {
+      margin-top: 8px;
+      color: var(--bgm-muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    #${API_RELAY_ID} .biligumi-api-relay-actions {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 7px;
+      margin-top: 12px;
+    }
+    #${API_RELAY_ID} .biligumi-button {
+      min-height: 30px;
+      padding: 4px 10px;
+      border: 1px solid var(--bgm-border);
+      border-radius: 6px;
+      background: #fff;
+      color: var(--bgm-ink);
+      font: inherit;
+      cursor: pointer;
+      transition: background .16s, border-color .16s, color .16s;
+    }
+    #${API_RELAY_ID} .biligumi-button:hover {
+      border-color: var(--bgm-pink);
+      background: #fff7f9;
+      color: var(--bgm-pink);
+    }
+    #${API_RELAY_ID} .biligumi-button.primary {
+      border-color: var(--bgm-pink);
+      background: var(--bgm-pink);
+      color: #fff;
+      font-weight: 600;
+    }
+    #${API_RELAY_ID} .biligumi-button.primary:hover {
+      border-color: #c25f75;
+      background: #c25f75;
+      color: #fff;
+    }
+    #${API_RELAY_ID} .biligumi-button.danger {
+      border-color: #d96363;
+      background: #d96363;
+      color: #fff;
+      font-weight: 600;
+    }
+    #${API_RELAY_ID} .biligumi-button.danger:hover {
+      border-color: #c94e4e;
+      background: #c94e4e;
+      color: #fff;
+    }
+    #${API_RELAY_ID} .biligumi-button:disabled {
+      cursor: not-allowed;
+      opacity: .55;
+    }
+
     #${PANEL_ID} {
       box-shadow: 0 4px 18px rgba(23, 27, 38, 0.08);
     }
@@ -2877,6 +2990,7 @@
     state.collectionEditorContext = null;
     state.collectionDeleteConfirmSubjectId = null;
     removeModal();
+    if (typeof removeBgmApiRelayPrompt === "function") removeBgmApiRelayPrompt(true);
     settleInlineConfirm(false);
     state.busy = true;
     state.message = "正在等待 B站页面更新...";
@@ -2916,6 +3030,7 @@
     state.episodes = [];
     state.episodeCollections = [];
     state.collectionDeleteConfirmSubjectId = null;
+    if (typeof removeBgmApiRelayPrompt === "function") removeBgmApiRelayPrompt(true);
     state.busy = false;
     state.message = state.bindingGuardMessage || "";
     state.standaloneSearchExpanded = false;
@@ -4950,9 +5065,11 @@
   function handlePanelClick(event) {
     const panel = document.getElementById(PANEL_ID);
     const settings = document.getElementById(SETTINGS_ID);
+    const apiRelay = document.getElementById(API_RELAY_ID);
     const inPanel = Boolean(panel && panel.contains(event.target));
     const inSettings = Boolean(settings && settings.contains(event.target));
-    if (!inPanel && !inSettings) return;
+    const inApiRelay = Boolean(apiRelay && apiRelay.contains(event.target));
+    if (!inPanel && !inSettings && !inApiRelay) return;
     if (!event.isTrusted) {
       event.preventDefault();
       event.stopPropagation();
@@ -4961,11 +5078,12 @@
     }
 
     const target = event.target.closest("[data-action]");
-    if (!target || !(inPanel ? panel.contains(target) : settings.contains(target))) return;
+    const actionRoot = inPanel ? panel : (inSettings ? settings : apiRelay);
+    if (!target || !actionRoot || !actionRoot.contains(target)) return;
 
     const action = target.dataset.action;
     if (action === "noop") return;
-    if (!shouldHandleModalAction(event, settings, target, action)) {
+    if (!shouldHandleModalAction(event, actionRoot, target, action)) {
       event.preventDefault();
       event.stopPropagation();
       if (event.stopImmediatePropagation) event.stopImmediatePropagation();
@@ -5022,6 +5140,9 @@
     if (action === "bind") requestBindSubject(Number(target.dataset.subjectId)).catch(showError);
     if (action === "inline-confirm-accept") settleInlineConfirm(true);
     if (action === "inline-confirm-cancel") settleInlineConfirm(false);
+    if (action === "dismiss-api-relay") settleBgmApiRelayPrompt("cancel");
+    if (action === "retry-official-api") settleBgmApiRelayPrompt("official");
+    if (action === "use-api-relay") settleBgmApiRelayPrompt(target.dataset.relay || "cancel");
     if (action === "confirm-long-video-bind") resolveLongVideoBindingPrompt(true).catch(showError);
     if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
     if (action === "retry-long-video-bind-wait") retryLongVideoBindingWait();
@@ -8644,7 +8765,7 @@
   }
 
   function shouldHandleModalAction(event, settings, target, action) {
-    if (action !== "settings-cancel" && action !== "collection-cancel" && action !== "inline-confirm-cancel") return true;
+    if (action !== "settings-cancel" && action !== "collection-cancel" && action !== "inline-confirm-cancel" && action !== "dismiss-api-relay") return true;
     if (!isModalBackdropTarget(settings, target)) return true;
     const closeFromBackdropClick = isModalBackdropTarget(settings, event.target)
       && settings.dataset.backdropPointerStarted === "1"
@@ -8808,9 +8929,103 @@
     render();
   }
 
+  function requestBgmApiFallbackChoice({ authenticated = false } = {}) {
+    if (state.apiRelayPrompt && state.apiRelayPrompt.promise) {
+      if (authenticated && !state.apiRelayPrompt.authenticated) {
+        state.apiRelayPrompt.authenticated = true;
+        mountBgmApiRelayPrompt();
+      }
+      return state.apiRelayPrompt.promise;
+    }
+    const returnFocus = document.activeElement;
+    let resolveChoice = null;
+    const promise = new Promise((resolve) => { resolveChoice = resolve; });
+    state.apiRelayPrompt = { authenticated: Boolean(authenticated), returnFocus, resolve: resolveChoice, promise };
+    document.addEventListener("keydown", handleBgmApiRelayKeydown, true);
+    mountBgmApiRelayPrompt();
+    return promise;
+  }
+
+  function renderBgmApiRelayPrompt() {
+    const pending = state.apiRelayPrompt;
+    if (!pending) return "";
+    const authDetail = pending.authenticated
+      ? "本次失败的请求需要认证，切换后会立即把 Authorization 请求头中的 Bangumi Access Token 发往所选第三方。"
+      : "本次请求可能不需要认证，但后续带 Token 的请求仍会有相同风险。";
+    return [
+      '<div class="biligumi-api-relay-card" data-action="noop" role="alertdialog" aria-modal="true" aria-labelledby="biligumi-api-relay-title" aria-describedby="biligumi-api-relay-warning">',
+      '<div id="biligumi-api-relay-title" class="biligumi-api-relay-title">无法连接官方 Bangumi API</div>',
+      '<div class="biligumi-api-relay-text">已多次尝试 api.bgm.tv，请求超时或无法到达。你可以重试官方接口，或手动选择一个第三方中继，仅重试当前这批失败的请求。</div>',
+      '<div id="biligumi-api-relay-warning" class="biligumi-api-relay-warning">危险：切换中继后，Bangumi Access Token、Authorization 请求头、收藏和进度等 API 请求内容会经过第三方服务器。对方可能读取或记录这些信息；这不是 Bangumi 官方服务。' + escapeHtml(authDetail) + ' 请只在你信任该站点时继续。</div>',
+      '<div class="biligumi-api-relay-help">不会自动选择或记住中继。点击红色按钮即代表你明确同意仅为当前这批失败请求使用对应第三方地址。</div>',
+      '<div class="biligumi-api-relay-actions">',
+      '<button type="button" class="biligumi-button" data-action="dismiss-api-relay">稍后再说</button>',
+      '<button type="button" class="biligumi-button primary" data-action="retry-official-api">重试官方 API</button>',
+      '<button type="button" class="biligumi-button danger" data-action="use-api-relay" data-relay="api.bangumi.pro" aria-describedby="biligumi-api-relay-warning">使用 api.bangumi.pro</button>',
+      '<button type="button" class="biligumi-button danger" data-action="use-api-relay" data-relay="bgmapi.anibt.net" aria-describedby="biligumi-api-relay-warning">使用 bgmapi.anibt.net</button>',
+      '</div>',
+      '</div>',
+    ].join("");
+  }
+
+  function mountBgmApiRelayPrompt() {
+    removeBgmApiRelayPrompt(false);
+    if (!state.apiRelayPrompt) return;
+    const wrapper = document.createElement("div");
+    wrapper.id = API_RELAY_ID;
+    wrapper.dataset.action = "dismiss-api-relay";
+    wrapper.innerHTML = renderBgmApiRelayPrompt();
+    document.body.appendChild(wrapper);
+    wrapper.addEventListener("pointerdown", handleModalPointerDown, true);
+    wrapper.addEventListener("pointerup", handleModalPointerUp, true);
+    const retry = wrapper.querySelector('[data-action="retry-official-api"]');
+    if (retry && retry.focus) retry.focus();
+  }
+
+  function handleBgmApiRelayKeydown(event) {
+    const wrapper = document.getElementById(API_RELAY_ID);
+    if (!wrapper || !event) return;
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      settleBgmApiRelayPrompt("cancel");
+      return;
+    }
+    if (event.key !== "Tab") return;
+    const controls = Array.from(wrapper.querySelectorAll('button:not([disabled])'));
+    if (!controls.length) return;
+    const first = controls[0];
+    const last = controls[controls.length - 1];
+    if (event.shiftKey ? document.activeElement !== first : document.activeElement !== last) return;
+    event.preventDefault();
+    (event.shiftKey ? last : first).focus();
+  }
+
+  function settleBgmApiRelayPrompt(choice) {
+    const pending = state.apiRelayPrompt;
+    if (!pending) return;
+    const allowed = choice === "official" || Object.prototype.hasOwnProperty.call(BGM_API_RELAYS, choice);
+    state.apiRelayPrompt = null;
+    document.removeEventListener("keydown", handleBgmApiRelayKeydown, true);
+    removeBgmApiRelayPrompt(false);
+    if (pending.returnFocus && pending.returnFocus.isConnected && pending.returnFocus.focus) pending.returnFocus.focus();
+    pending.resolve(allowed ? choice : "cancel");
+  }
+
+  function removeBgmApiRelayPrompt(cancel = true) {
+    const existing = document.getElementById(API_RELAY_ID);
+    if (existing) existing.remove();
+    if (cancel && state.apiRelayPrompt) {
+      const pending = state.apiRelayPrompt;
+      state.apiRelayPrompt = null;
+      document.removeEventListener("keydown", handleBgmApiRelayKeydown, true);
+      pending.resolve("cancel");
+    }
+  }
+
   function bgmRequest(path, options = {}) {
     const method = options.method || "GET";
-    const url = `${API_BASE}${path}`;
+    const url = buildBgmApiUrl(path, API_BASE);
     const data = options.body ? JSON.stringify(options.body) : undefined;
     const shouldDedup = options.dedup === true || (options.dedup !== false && method === "GET");
     const authToken = options.authToken != null ? String(options.authToken || "") : String(state.token || "");
@@ -8818,7 +9033,15 @@
     const dedupKey = `${method} ${url} ${authKey} ${data || ""}`;
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
-    const promise = bgmRequestWithRetry(method, url, data, { ...options, authToken });
+    const requestOptions = { ...options, authToken };
+    const promise = bgmRequestWithRetry(method, url, data, requestOptions).catch(async (error) => {
+      if (!isRelayEligibleTransportError(error)) throw error;
+      const choice = await requestBgmApiFallbackChoice({ authenticated: Boolean(options.auth) });
+      if (choice === "cancel") throw error;
+      const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
+      if (!retryBase) throw error;
+      return bgmRequestOnce(method, buildBgmApiUrl(path, retryBase), data, requestOptions);
+    });
     if (shouldDedup) {
       pendingRequests.set(dedupKey, promise);
       promise.then(() => {
@@ -8828,6 +9051,15 @@
       });
     }
     return promise;
+  }
+
+  function buildBgmApiUrl(path, baseUrl = API_BASE) {
+    const normalizedPath = String(path || "");
+    const allowedBases = new Set([API_BASE, ...Object.values(BGM_API_RELAYS)]);
+    if (!normalizedPath.startsWith("/v0/") || !allowedBases.has(baseUrl)) {
+      throw new Error("Blocked Bangumi API target");
+    }
+    return `${baseUrl}${normalizedPath}`;
   }
 
   async function bgmRequestPagedData(path, options = {}) {
@@ -8899,8 +9131,12 @@
         headers,
         data,
         responseType: "json",
-        timeout: 30000,
+        timeout: BGM_API_REQUEST_TIMEOUT_MS,
         onload: (response) => {
+          if (!isExpectedBgmApiFinalUrl(response.finalUrl, url)) {
+            reject(new Error("Bangumi API 请求发生了跨站重定向，已拒绝响应；Token 可能已被第三方转发，请立即吊销并重新生成。"));
+            return;
+          }
           if (options.allow404 && response.status === 404) {
             resolve(null);
             return;
@@ -8915,8 +9151,15 @@
           }
           resolve(response.response || tryParseJson(response.responseText) || {});
         },
-        onerror: () => reject(makeNetworkError("Bangumi API 请求失败，可能是网络或 userscript 跨域权限问题")),
-        ontimeout: () => reject(makeNetworkError("Bangumi API 请求超时")),
+        onerror: (response) => {
+          const errorKind = String(response && response.errorKind || "network");
+          if (errorKind === "validation") {
+            reject(new Error(response && response.error || "扩展已拒绝不安全的 Bangumi API 请求"));
+            return;
+          }
+          reject(makeNetworkError("Bangumi API 请求失败，可能是网络或扩展跨域权限问题", "connection"));
+        },
+        ontimeout: () => reject(makeNetworkError("Bangumi API 请求超时", "timeout")),
       });
     });
   }
@@ -8966,10 +9209,31 @@
     return null;
   }
 
-  function makeNetworkError(message) {
+  function isExpectedBgmApiFinalUrl(finalUrl, requestedUrl) {
+    try {
+      const requested = new URL(String(requestedUrl || ""));
+      if (!finalUrl) return requested.origin === API_BASE;
+      const actual = new URL(String(finalUrl || ""));
+      return requested.origin === actual.origin && requested.pathname === actual.pathname;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  function makeNetworkError(message, transportKind = "connection") {
     const error = new Error(message);
     error.status = 0;
+    error.transportKind = transportKind;
+    error.isTransportFailure = true;
     return error;
+  }
+
+  function isRelayEligibleTransportError(error) {
+    return Boolean(
+      error
+      && error.isTransportFailure === true
+      && (error.transportKind === "connection" || error.transportKind === "timeout")
+    );
   }
 
   function parseBangumiWebUsername(html) {
@@ -13359,7 +13623,12 @@
         return;
       }
       if (!result || !result.ok) {
-        callHandler(details.onerror, { error: result && result.error || "Extension HTTP request failed" });
+        const payload = {
+          error: result && result.error || "Extension HTTP request failed",
+          errorKind: result && result.errorKind || "network",
+        };
+        if (payload.errorKind === "timeout") callHandler(details.ontimeout, payload);
+        else callHandler(details.onerror, payload);
         return;
       }
       callHandler(details.onload, result.response);
@@ -13384,6 +13653,7 @@
       headers: request.headers,
       body: request.data,
       credentials: request.withCredentials ? "include" : "omit",
+      redirect: request.url.startsWith("https://bgm.tv/") ? "follow" : "error",
       signal: controller.signal,
     }).then(async (response) => {
       window.clearTimeout(timeout);

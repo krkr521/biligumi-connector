@@ -36,6 +36,7 @@
 核心设置仍在 Bilibili 页面里的 Biligumi 面板中，包括：
 
 - Bangumi Access Token。
+- 官方 `api.bgm.tv` 超时或无法连接后，按次选择“重试官方 API”或第三方 API 中继；中继不会自动启用或保存。
 - 白名单。
 - 条目绑定、Bangumi 站内搜索、PV / 预告搜索候选、收藏状态、评分、章节状态。
 - 角色/CV 横栏、条目信息栏、官方番剧页布局兼容。
@@ -53,6 +54,7 @@
 
 ## 限制
 
+<span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bangumi.pro</code> 或 <code>bgmapi.anibt.net</code> 后，当前失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它们不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
 - Manifest commands 能否在浏览器完全非焦点时触发，取决于 Chrome/Edge、操作系统和快捷键是否被系统占用。
 - 插件版由 userscript 主体迁移而来，后续如果 userscript 更新，需要同步重新生成或移植 `extension/content.js`。
 - 如果目标标签页还没有加载 content script，或 Bilibili 页面结构阻止脚本访问播放器，命令可能不会生效。
