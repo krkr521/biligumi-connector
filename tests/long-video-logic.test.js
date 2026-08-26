@@ -12,6 +12,7 @@ const {
   extractConstants,
   extractObjectConstant,
 } = require("./_source");
+const oshiNoKoFixture = require("./fixtures/oshi-no-ko.json");
 
 const userscriptSource = readSource(userscriptPath);
 
@@ -21,11 +22,19 @@ const SRC_CONSTANTS = extractConstants(userscriptSource, [
   "DEFAULT_LONG_VIDEO_EPISODE_OFFSET_SECONDS",
   "DEFAULT_EPISODE_DURATION_SECONDS",
   "LONG_VIDEO_MIN_DURATION_SECONDS",
+  "ANIME_MOVIE_MIN_EPISODE_DURATION_SECONDS",
+  "ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_AGE_MS",
+  "ANIME_MOVIE_CLASSIFICATION_CACHE_MAX_ENTRIES",
   "LONG_VIDEO_DISPLAY_OVERFLOW_TOLERANCE_SECONDS",
   "LONG_VIDEO_AUTO_MARK_OVERFLOW_TOLERANCE_SECONDS",
   "AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS",
 ]);
 const SRC_STORAGE = extractObjectConstant(userscriptSource, "STORAGE");
+assert.equal(
+  SRC_STORAGE.animeMovieClassifications,
+  "biligumi.animeMovieClassifications.v2",
+  "WEB fallback semantics require a new cache namespace so legacy false decisions are not reused",
+);
 
 function readLogicBlock(filePath) {
   const source = fs.readFileSync(filePath, "utf8");
@@ -127,14 +136,21 @@ const sandbox = {
     longVideoEpisodeOffsets: { "mid:42": 2 * 60 * 60 },
     longVideoEpisodeVideoOffsets: {},
     longVideoEpisodeModes: { "bvid:BV1TEST": true },
+    animeMovieClassifications: {},
     disabledAutoProgressVideos: {},
     rawTitle: "普通超长视频",
     subjectId: 1,
+    subject: null,
+    searchResults: [],
     bindings: {},
     episodes,
   },
   location: new URL("https://www.bilibili.com/video/BV1TEST"),
-  window: { __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } } },
+  window: {
+    __INITIAL_STATE__: { videoData: { bvid: "BV1TEST" } },
+    setTimeout,
+    clearTimeout,
+  },
   getPageInitialState: () => sandbox.window.__INITIAL_STATE__ || {},
   document: { querySelectorAll: () => [] },
   getBvIdFromUrl: () => (sandbox.location.pathname.match(/\/video\/(BV[\w]+)/i) || [])[1] || "",
@@ -151,8 +167,20 @@ const sandbox = {
   detectCurrentEpisodeNo: () => null,
   pad2: (value) => String(value).padStart(2, "0"),
   render: () => {},
-  writeJsonValueAsync: async () => {},
+  writeJsonValueAsync: (...args) => sandbox.writeJsonValueAsyncImpl(...args),
+  writeJsonValueAsyncImpl: async () => {},
   resetAutoWatchObservationState: () => {},
+  animeMovieClassificationRequests: new Map(),
+  animeMovieApiResponse: null,
+  animeMovieApiCallCount: 0,
+  bgmRequest: async () => {
+    sandbox.animeMovieApiCallCount += 1;
+    if (sandbox.animeMovieApiResponse instanceof Error) throw sandbox.animeMovieApiResponse;
+    return sandbox.animeMovieApiResponse;
+  },
+  resolveLongVideoBindingSubject: (subjectId) => sandbox.state.searchResults.find(
+    (item) => Number(item && item.id) === Number(subjectId),
+  ) || (sandbox.state.subject && Number(sandbox.state.subject.id) === Number(subjectId) ? sandbox.state.subject : null),
 };
 
 // Real implementations replace former hand-written stubs; extraction is strict.
@@ -176,6 +204,12 @@ vm.runInContext(`${userscriptLogic}\n${userscriptBindingKeys}\n${rangeGroupPropo
   getLongVideoDetection,
   getLongVideoEpisodeModeDecision,
   getLongVideoDurationSeconds,
+  normalizeAnimeMovieClassifications,
+  getCachedAnimeMovieClassification,
+  isSingleEpisodeAnimeMovie,
+  getAnimeMoviePlatformDecision,
+  classifyAnimeMovieSubject,
+  getLongVideoBindReadinessForSubject,
   shouldOfferLongVideoBindingPrompt,
   getLongVideoBindReadiness,
   parseLongVideoPartTitle,
@@ -227,6 +261,25 @@ const extendedFirst = episodes.map((episode, index) => ({
 const extendedTimeline = logic.buildLongVideoEpisodeTimeline(extendedFirst, 0);
 assert.equal(logic.inferLongVideoEpisode({ currentTime: 47 * 60 }, { active: true, timeline: extendedTimeline }).episodeNo, 1);
 assert.equal(logic.inferLongVideoEpisode({ currentTime: 48 * 60 }, { active: true, timeline: extendedTimeline }).episodeNo, 2);
+
+const oshiNoKoSeason1Duration = oshiNoKoFixture.season1.episodes
+  .reduce((total, episode) => total + episode.duration_seconds, 0);
+const oshiNoKoSeason1Timeline = logic.buildLongVideoEpisodeTimeline(oshiNoKoFixture.season1.episodes, 0);
+assert.equal(oshiNoKoSeason1Duration, 19530);
+assert.equal(oshiNoKoSeason1Timeline.items[0].duration, 4920,
+  "Oshi no Ko S1 keeps its non-standard 82-minute premiere in the timeline");
+assert.equal(oshiNoKoSeason1Timeline.items[1].startTime, 4920);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4919 }, { active: true, timeline: oshiNoKoSeason1Timeline }).episodeNo,
+  1,
+);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4920 }, { active: true, timeline: oshiNoKoSeason1Timeline }).episodeNo,
+  2,
+  "Inference crosses from the extended premiere to episode 2 at the real boundary",
+);
+assert.equal(oshiNoKoSeason1Timeline.endTime, oshiNoKoSeason1Duration);
+assert.equal(oshiNoKoSeason1Timeline.safeForAutoMark, true);
 
 const parsedSeasonRange = logic.parseLongVideoPartTitle("S2 13-15");
 assert.equal(parsedSeasonRange.seasonNo, 2);
@@ -575,6 +628,7 @@ assert.equal(tenMinuteOverflow.autoMarkSafe, false);
 assert.equal(logic.getLongVideoDetection({ duration: timeline.endTime - 46 * 60 }).active, false);
 
 sandbox.autoWatchThreshold = 80;
+sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime, currentTime: 2 * 60 * 60 + 42 * 60 });
 sandbox.state.longVideoEpisodeGuess = {
   active: true,
   stage: "episode",
@@ -589,6 +643,8 @@ assert.match(
   /达到设置的 80% 后自动标记/,
   "the long-video hint exposes the shared automatic-mark threshold",
 );
+assert.match(logic.renderLongVideoEpisodeHint(), /data-action="capture-long-video-video-offset"/,
+  "an active long-video guess keeps the manual start-offset action");
 
 // An invalid default offset must not hide the control needed to correct it.
 sandbox.getActiveVideoElement = () => ({ duration: timeline.endTime - 46 * 60, currentTime: 10 });
@@ -600,12 +656,303 @@ assert.match(calibrationHint, /实验推测暂不可用/);
 assert.match(calibrationHint, /首集起点加全季时长已超过视频总长/);
 assert.match(calibrationHint, /data-action="capture-long-video-video-offset"/,
   "inactive long-video detection must still expose the start-offset action");
+
+// Unavailable states unrelated to the start offset must not offer a misleading
+// calibration action or tell the user to move the playback position.
+sandbox.state.episodes = episodes.slice(0, 3);
+sandbox.state.longVideoEpisodeGuess = {
+  active: true,
+  stage: "episode",
+  episode: episodes[2],
+  episodeNo: 3,
+  episodePercent: 42,
+  autoMarkSafe: true,
+  segment: {},
+};
+const insufficientEpisodesHint = logic.renderLongVideoEpisodeHint();
+assert.match(insufficientEpisodesHint, /Bangumi 可用正片章节少于 4 集/);
+assert.doesNotMatch(insufficientEpisodesHint, /capture-long-video-video-offset/);
+assert.doesNotMatch(insufficientEpisodesHint, /请把播放进度移到第一集正片真正开始的位置/);
+sandbox.state.episodes = episodes;
 sandbox.state.longVideoEpisodeModes = {};
 assert.equal(logic.renderLongVideoEpisodeHint(), "",
-  "unconfirmed long videos must not show calibration controls");
+  "unconfirmed long videos must not render a stale active guess or calibration controls");
+sandbox.state.longVideoEpisodeGuess = null;
 sandbox.getActiveVideoElement = () => null;
 
+// Real Bangumi snapshots for Oshi no Ko exercise the movie guard, irregular
+// episode durations, a whole-season compilation, and a multi-season BV.
+const oshiNoKoSeason1 = oshiNoKoFixture.season1;
+const oshiNoKoSeason2 = oshiNoKoFixture.season2;
+sandbox.state.subjectId = oshiNoKoSeason1.subject.id;
+sandbox.state.subject = oshiNoKoSeason1.subject;
+sandbox.state.episodes = oshiNoKoSeason1.episodes;
+sandbox.state.searchResults = [];
+sandbox.state.animeMovieClassifications = {
+  [oshiNoKoSeason1.subject.id]: { isMovie: true, checkedAt: Date.now() },
+};
 sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.longVideoEpisodeOffsets = { "mid:42": 0 };
+sandbox.state.longVideoEpisodeVideoOffsets = {};
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+
+assert.equal(logic.getAnimeMoviePlatformDecision(oshiNoKoSeason1.subject), false);
+assert.equal(logic.isSingleEpisodeAnimeMovie(oshiNoKoSeason1.episodes), false,
+  "An 82-minute premiere inside an 11-episode TV season is not a movie");
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1.episodes[0].duration_seconds }).reason,
+  "short_duration",
+  "A standalone upload of Oshi no Ko episode 1 binds normally without movie or long-video inference",
+);
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1Duration }).action,
+  "prompt",
+  "A whole-season Oshi no Ko compilation offers long-video inference",
+);
+sandbox.state.longVideoEpisodeGuessEnabled = true;
+assert.equal(
+  logic.getLongVideoBindReadiness({ duration: oshiNoKoSeason1Duration }).action,
+  "auto",
+  "The same season compilation enters automatic inference when the setting is enabled",
+);
+sandbox.state.longVideoEpisodeGuessEnabled = false;
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+const oshiNoKoSeason1Detection = logic.getLongVideoDetection({ duration: oshiNoKoSeason1Duration });
+assert.equal(oshiNoKoSeason1Detection.active, true);
+assert.equal(oshiNoKoSeason1Detection.autoMarkSafe, true);
+assert.equal(oshiNoKoSeason1Detection.timeline.items.length, 11);
+assert.equal(
+  logic.inferLongVideoEpisode({ currentTime: 4920 }, oshiNoKoSeason1Detection).episodeNo,
+  2,
+  "Whole-season inference uses the real extended-premiere boundary",
+);
+
+const oshiNoKoSeasonPartNodes = [
+  ["【我推的孩子】 第一季 1-11", false],
+  ["【我推的孩子】 第二季 1-13", true],
+].map(([title, active]) => ({
+  className: `simple-base-item page-item${active ? " active" : ""}`,
+  textContent: title,
+  getAttribute: (name) => name === "title" ? title : null,
+  querySelectorAll: () => [],
+}));
+const oshiNoKoSeasonPartContainer = { children: oshiNoKoSeasonPartNodes };
+oshiNoKoSeasonPartNodes.forEach((node) => {
+  node.parentElement = oshiNoKoSeasonPartContainer;
+  node.closest = (selector) => selector === ".page-list" ? oshiNoKoSeasonPartContainer : null;
+});
+sandbox.document.querySelector = (selector) => selector.startsWith(".multi-p .page-list")
+  ? oshiNoKoSeasonPartNodes.find((node) => /(?:^|\s)active(?:\s|$)/.test(node.className))
+  : null;
+sandbox.document.querySelectorAll = (selector) => selector === ".multi-p .page-list .page-item"
+  ? oshiNoKoSeasonPartNodes
+  : [];
+sandbox.state.subjectId = oshiNoKoSeason2.subject.id;
+sandbox.state.subject = oshiNoKoSeason2.subject;
+sandbox.state.episodes = oshiNoKoSeason2.episodes;
+sandbox.state.bindings = {
+  "bili:BV1TEST:p1": oshiNoKoSeason1.subject.id,
+  "bili:BV1TEST:p2": oshiNoKoSeason2.subject.id,
+};
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST:p1": true, "bvid:BV1TEST:p2": true };
+const oshiNoKoSeason2Part = logic.getCurrentVideoPartContext();
+assert.equal(oshiNoKoSeason2Part.seasonNo, 2);
+assert.equal(oshiNoKoSeason2Part.episodeStart, 1);
+assert.equal(oshiNoKoSeason2Part.episodeEnd, 13);
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p2");
+assert.equal(logic.getCurrentLongVideoBindingSource(oshiNoKoSeason2.subject.id).key, "bili:BV1TEST:p2",
+  "A multi-season BV reads the second season from its own part binding");
+const oshiNoKoSeason2Duration = oshiNoKoSeason2.episodes
+  .reduce((total, episode) => total + episode.duration_seconds, 0);
+const oshiNoKoSeason2Detection = logic.getLongVideoDetection({ duration: oshiNoKoSeason2Duration });
+assert.equal(oshiNoKoSeason2Detection.active, true);
+assert.equal(oshiNoKoSeason2Detection.segment.rangeApplied, true);
+assert.equal(oshiNoKoSeason2Detection.timeline.items.length, 13);
+assert.equal(oshiNoKoSeason2Detection.timeline.items[0].localNo, 1,
+  "Season-local inference starts at episode 1 even when Bangumi sorts S2 as episodes 12-24");
+
+oshiNoKoSeasonPartNodes[0].className += " active";
+oshiNoKoSeasonPartNodes[1].className = oshiNoKoSeasonPartNodes[1].className.replace(/\sactive\b/, "");
+sandbox.state.subjectId = oshiNoKoSeason1.subject.id;
+sandbox.state.subject = oshiNoKoSeason1.subject;
+sandbox.state.episodes = oshiNoKoSeason1.episodes;
+assert.equal(logic.getCurrentLongVideoPartBindingKey(), "bili:BV1TEST:p1");
+assert.equal(logic.getCurrentLongVideoBindingSource(oshiNoKoSeason1.subject.id).key, "bili:BV1TEST:p1",
+  "Switching back to S1 restores the first season's isolated binding");
+
+sandbox.document.querySelector = () => null;
+sandbox.document.querySelectorAll = () => [];
+sandbox.state.subjectId = 1;
+sandbox.state.subject = null;
+sandbox.state.episodes = episodes;
+sandbox.state.bindings = {};
+sandbox.state.animeMovieClassifications = {};
+sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.longVideoEpisodeOffsets = { "mid:42": 2 * 60 * 60 };
+sandbox.state.longVideoEpisodeVideoOffsets = {};
+
+sandbox.state.longVideoEpisodeModes = {};
+const movieEpisode = [{
+  id: 7001,
+  type: 0,
+  sort: 1,
+  name: "Movie",
+  duration_seconds: 90 * 60,
+}];
+sandbox.state.subject = { id: 1, type: 2, platform: "剧场版" };
+sandbox.state.episodes = [{ ...movieEpisode[0], duration_seconds: 50 * 60 }];
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), true);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).reason, "anime_movie",
+  "An explicit movie platform must classify even when the only episode is shorter than one hour");
+sandbox.writeJsonValueAsyncImpl = () => new Promise(() => {});
+const platformReadinessStartedAt = Date.now();
+await logic.getLongVideoBindReadinessForSubject(1, { duration: 3 * 60 * 60 });
+assert.ok(Date.now() - platformReadinessStartedAt < 1000,
+  "An already-decided movie readiness must not wait for classification cache storage");
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, true,
+  "Platform-based movie decisions are persisted in the subject cache");
+sandbox.writeJsonValueAsyncImpl = async () => {};
+
+sandbox.state.subject = { id: 1, type: 2, platform: "OVA" };
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: true, checkedAt: Date.now() } };
+assert.equal(logic.getAnimeMoviePlatformDecision(sandbox.state.subject), false);
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt",
+  "A known OVA platform must override both the duration fallback and a stale positive cache");
+assert.equal(logic.getAnimeMoviePlatformDecision({ id: 2, type: 2, platform: "WEB" }), null,
+  "WEB describes a distribution platform and must allow the episode-duration fallback");
+assert.equal(logic.getAnimeMoviePlatformDecision({ id: 3, type: 2, platform: "Movie" }), true);
+
+// Bangumi subject 643828: THE RIBBON HERO is a 108m animated movie whose platform is WEB.
+sandbox.state.subject = { id: 643828, type: 2, platform: "WEB" };
+sandbox.state.subjectId = 643828;
+sandbox.state.episodes = [{
+  id: 1696686,
+  type: 0,
+  sort: 1,
+  duration: "01:48:51",
+  duration_seconds: 6531,
+}];
+sandbox.state.animeMovieClassifications = {};
+const ribbonHeroReadiness = logic.getLongVideoBindReadiness({ duration: 6531 }, 643828);
+assert.equal(ribbonHeroReadiness.reason, "anime_movie",
+  "A single long WEB release such as THE RIBBON HERO must use the movie fallback");
+
+sandbox.state.subjectId = 2;
+sandbox.state.subject = { id: 1, type: 2, platform: "剧场版" };
+sandbox.state.searchResults = [];
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, true,
+  "A stale SPA subject must not apply its movie platform to the current subject id");
+
+sandbox.state.subjectId = 1;
+sandbox.state.subject = null;
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.isSingleEpisodeAnimeMovie(movieEpisode), true);
+const localMovieReadiness = logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 });
+assert.equal(localMovieReadiness.action, "bind", "A loaded single-episode movie must skip the long-video prompt");
+assert.equal(localMovieReadiness.reason, "anime_movie");
+sandbox.state.longVideoEpisodeModes = { "bvid:BV1TEST": true };
+const movieDetection = logic.getLongVideoDetection({ duration: 3 * 60 * 60 });
+assert.equal(movieDetection.active, false,
+  "A movie must disable inference even when an old per-video decision enabled it");
+assert.match(movieDetection.reason, /动画电影/);
+assert.equal(movieDetection.suppressHint, true);
+sandbox.getActiveVideoElement = () => ({ duration: 3 * 60 * 60, currentTime: 10 });
+sandbox.state.longVideoEpisodeGuess = {
+  active: true,
+  stage: "episode",
+  episode: movieEpisode[0],
+  episodeNo: 1,
+  episodePercent: 25,
+  autoMarkSafe: true,
+  segment: {},
+};
+assert.equal(logic.renderLongVideoEpisodeHint(), "",
+  "A recognized movie silently suppresses both stale inference and the calibration panel");
+sandbox.state.longVideoEpisodeGuess = null;
+sandbox.getActiveVideoElement = () => null;
+
+const extraLongMovie = [{ ...movieEpisode[0], duration_seconds: 3 * 60 * 60 + 1 }];
+assert.equal(logic.isSingleEpisodeAnimeMovie(extraLongMovie), true,
+  "Movie classification must not inherit the long-video timeline parser's three-hour cap");
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: true, checkedAt: Date.now() } };
+sandbox.state.longVideoEpisodeModes = {};
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt",
+  "A loaded multi-episode list must override a stale movie cache entry");
+sandbox.state.longVideoDetectionCache = { key: "stale", value: { active: true } };
+sandbox.state.longVideoDetectionKeyMemo = { cheapKey: "stale", fullKey: "stale", stamp: Date.now() };
+await logic.classifyAnimeMovieSubject(1);
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, false,
+  "Loaded episode data must refresh a contradictory movie cache entry");
+assert.equal(sandbox.state.longVideoDetectionCache, null, "Refreshing classification invalidates detection results");
+assert.equal(sandbox.state.longVideoDetectionKeyMemo, null, "Refreshing classification invalidates the detection key memo");
+
+sandbox.state.episodes = movieEpisode;
+sandbox.state.animeMovieClassifications = { "1": { isMovie: false, checkedAt: Date.now() } };
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "bind",
+  "A loaded movie must override a stale non-movie cache entry");
+await logic.classifyAnimeMovieSubject(1);
+assert.equal(sandbox.state.animeMovieClassifications["1"].isMovie, true,
+  "Loaded movie data must refresh a contradictory cache entry");
+
+sandbox.state.longVideoEpisodeModes = {};
+sandbox.state.episodes = [{ ...movieEpisode[0], duration_seconds: 60 * 60 }];
+sandbox.state.animeMovieClassifications = {};
+assert.equal(logic.isSingleEpisodeAnimeMovie(sandbox.state.episodes), false,
+  "The movie duration threshold is strict: exactly one hour is not enough");
+assert.equal(logic.getLongVideoBindReadiness({ duration: 3 * 60 * 60 }).action, "prompt");
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
+sandbox.state.searchResults = [];
+sandbox.animeMovieApiCallCount = 0;
+sandbox.animeMovieApiResponse = { total: 1, data: movieEpisode };
+const remoteMovieReadiness = await logic.getLongVideoBindReadinessForSubject(77, { duration: 3 * 60 * 60 });
+assert.equal(remoteMovieReadiness.action, "bind", "Pre-bind classification must suppress the prompt for a remote movie subject");
+assert.equal(remoteMovieReadiness.reason, "anime_movie");
+assert.equal(sandbox.state.animeMovieClassifications["77"].isMovie, true);
+assert.equal(sandbox.animeMovieApiCallCount, 1);
+sandbox.animeMovieApiResponse = new Error("cache should avoid this request");
+assert.equal((await logic.getLongVideoBindReadinessForSubject(77, { duration: 3 * 60 * 60 })).action, "bind");
+assert.equal(sandbox.animeMovieApiCallCount, 1, "The subject-scoped movie cache must avoid a repeated API request");
+
+sandbox.animeMovieApiResponse = { total: 2, data: [movieEpisode[0], { ...movieEpisode[0], id: 7002, sort: 2 }] };
+const remoteSeriesReadiness = await logic.getLongVideoBindReadinessForSubject(78, { duration: 3 * 60 * 60 });
+assert.equal(remoteSeriesReadiness.action, "prompt", "A multi-episode subject keeps the existing long-video flow");
+assert.equal(sandbox.state.animeMovieClassifications["78"].isMovie, false);
+
+sandbox.state.searchResults = [{ id: 79, type: 2, platform: "Movie" }];
+sandbox.animeMovieApiResponse = new Error("platform classification should avoid the episode API");
+const platformMovieReadiness = await logic.getLongVideoBindReadinessForSubject(79, { duration: 3 * 60 * 60 });
+assert.equal(platformMovieReadiness.reason, "anime_movie");
+assert.equal(sandbox.state.animeMovieClassifications["79"].isMovie, true);
+assert.equal(sandbox.animeMovieApiCallCount, 2,
+  "A known movie platform must not request the episode list");
+
+sandbox.state.searchResults = [];
+sandbox.animeMovieApiResponse = { total: 1, data: [{ ...movieEpisode[0], duration_seconds: undefined, duration: "01:30:00" }] };
+const rawApiMovieReadiness = await logic.getLongVideoBindReadinessForSubject(80, { duration: 3 * 60 * 60 });
+assert.equal(rawApiMovieReadiness.action, "bind", "Raw Bangumi duration strings must classify movies before binding");
+assert.equal(rawApiMovieReadiness.reason, "anime_movie");
+
+sandbox.animeMovieApiResponse = new Promise(() => {});
+const classificationStartedAt = Date.now();
+const timedReadiness = await logic.getLongVideoBindReadinessForSubject(81, { duration: 3 * 60 * 60 }, {
+  classificationTimeoutMs: 20,
+});
+assert.equal(timedReadiness.action, "prompt", "A stalled movie lookup must fall back to the original readiness");
+assert.ok(Date.now() - classificationStartedAt < 1000, "A stalled movie lookup must respect its wait budget");
+
+sandbox.state.episodes = episodes;
+sandbox.state.animeMovieClassifications = {};
 assert.equal(logic.getLongVideoDetection({ duration: 7 * 60 * 60 }).active, false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 }), false);
 assert.equal(logic.shouldOfferLongVideoBindingPrompt({ duration: 2 * 60 * 60 + 1 }), true);
