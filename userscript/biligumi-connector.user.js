@@ -11,6 +11,8 @@
 // @connect      api.bangumi.pro
 // @connect      bgmapi.anibt.net
 // @connect      bgm.tv
+// @connect      raw.githubusercontent.com
+// @connect      api.gitcode.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
@@ -47,6 +49,21 @@
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
   const SCRIPT_VERSION = "0.7.15";
+  const SCRIPT_UPDATE_TIMEOUT_MS = 10000;
+  const SCRIPT_UPDATE_SOURCES = [
+    {
+      id: "github",
+      label: "GitHub",
+      url: "https://raw.githubusercontent.com/krkr521/biligumi-connector/master/userscript/biligumi-connector.user.js",
+      checkUrl: "https://raw.githubusercontent.com/krkr521/biligumi-connector/master/userscript/biligumi-connector.user.js",
+    },
+    {
+      id: "gitcode",
+      label: "GitCode",
+      url: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/raw/userscript/biligumi-connector.user.js?ref=master",
+      checkUrl: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/raw/userscript/biligumi-connector.user.js?ref=master",
+    },
+  ];
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -2349,6 +2366,59 @@
       gap: 8px;
       padding: 0 12px 12px;
     }
+    #${SETTINGS_ID} .biligumi-update-actions {
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #eceff2;
+      background: linear-gradient(#fbfbfb, #f7f7f7);
+    }
+    #${SETTINGS_ID} .biligumi-update-meta {
+      min-width: 0;
+      color: #4f6072;
+    }
+    #${SETTINGS_ID} .biligumi-update-version {
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #${SETTINGS_ID} .biligumi-update-status {
+      margin-top: 3px;
+      color: #7b8794;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    #${SETTINGS_ID} .biligumi-update-status.available {
+      color: #c25f75;
+      font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-update-status.warning {
+      color: #d03030;
+    }
+    #${SETTINGS_ID} .biligumi-update-buttons {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #${SETTINGS_ID} .biligumi-update-status button {
+      margin-left: 5px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #2f8cff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    #${SETTINGS_ID} .biligumi-button:focus-visible,
+    #${SETTINGS_ID} .biligumi-update-status button:focus-visible {
+      outline: 2px solid rgba(47, 140, 255, .42);
+      outline-offset: 2px;
+    }
     #${SETTINGS_ID} .biligumi-collection-dialog .biligumi-settings-actions {
       justify-content: flex-start;
       align-items: center;
@@ -2497,6 +2567,17 @@
       }
       #${SETTINGS_ID} .biligumi-oped-hotkey-line {
         grid-template-columns: 1fr;
+      }
+      #${SETTINGS_ID} .biligumi-update-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      #${SETTINGS_ID} .biligumi-update-buttons {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+      }
+      #${SETTINGS_ID} .biligumi-update-buttons .biligumi-button {
+        width: 100%;
       }
     }
     #${PANEL_ID} .biligumi-collapsed-note {
@@ -2893,6 +2974,10 @@
   `);
 
   let routeRefreshSeq = 0;
+  let scriptUpdateCheckSeq = 0;
+  let scriptUpdateCheckPromise = null;
+  let scriptUpdateOpening = false;
+  let scriptUpdateState = { status: "idle", remoteVersion: "", source: null };
   let longVideoBindWaitSeq = 0;
   let longVideoBindWaitTimer = 0;
   let episodeContextRefreshSeq = 0;
@@ -4594,8 +4679,15 @@
             </div>
           </div>
         </div>
-        <div class="biligumi-settings-actions">
-          <button class="biligumi-button" data-action="settings-reset">恢复默认</button>
+        <div class="biligumi-settings-actions biligumi-update-actions">
+          <div class="biligumi-update-meta">
+            <div class="biligumi-update-version">当前版本 v${SCRIPT_VERSION}</div>
+            <div class="biligumi-update-status" data-role="settings-update-status" role="status" aria-live="polite">打开设置后自动检查更新。</div>
+          </div>
+          <div class="biligumi-update-buttons">
+            <button type="button" class="biligumi-button" data-action="open-script-update" data-role="settings-update-now" title="打开最新版用户脚本，由 Tampermonkey 确认安装或更新">立即更新</button>
+            <button type="button" class="biligumi-button" data-action="settings-reset">恢复默认</button>
+          </div>
         </div>
       </div>
     `;
@@ -5115,6 +5207,8 @@
     }
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
+    if (action === "check-script-update") checkScriptUpdate({ force: true }).catch(() => {});
+    if (action === "open-script-update") openLatestUserscript().catch(() => {});
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
     if (action === "clear-settings-token") clearSavedAccessToken().catch(showError);
     if (action === "open-whitelist-space") openWhitelistSpace(target);
@@ -8242,16 +8336,200 @@
     }
   }
 
+  function parseUserscriptVersion(source) {
+    const metadata = String(source || "").match(/^\/\/ ==UserScript==\s*$([\s\S]*?)^\/\/ ==\/UserScript==\s*$/m);
+    if (!metadata) return "";
+    const version = metadata[1].match(/^\/\/\s*@version\s+([^\s]+)\s*$/m);
+    return version ? version[1].trim() : "";
+  }
+
+  function compareScriptVersions(left, right) {
+    const parse = (value) => {
+      const normalized = String(value || "").trim().replace(/^v/i, "");
+      const [core, ...suffixParts] = normalized.split("-");
+      return {
+        core: core.split(".").map((part) => /^\d+$/.test(part) ? Number(part) : Number.NaN),
+        suffix: suffixParts.join("-").split(/[.-]/).filter(Boolean),
+      };
+    };
+    const a = parse(left);
+    const b = parse(right);
+    const length = Math.max(a.core.length, b.core.length);
+    for (let index = 0; index < length; index += 1) {
+      const aPart = a.core[index] === undefined ? 0 : a.core[index];
+      const bPart = b.core[index] === undefined ? 0 : b.core[index];
+      if (Number.isNaN(aPart) || Number.isNaN(bPart)) {
+        if (Number.isNaN(aPart) === Number.isNaN(bPart)) continue;
+        return Number.isNaN(aPart) ? -1 : 1;
+      }
+      const difference = aPart - bPart;
+      if (difference) return difference > 0 ? 1 : -1;
+    }
+    if (!a.suffix.length || !b.suffix.length) {
+      if (a.suffix.length === b.suffix.length) return 0;
+      return a.suffix.length ? -1 : 1;
+    }
+    const suffixLength = Math.max(a.suffix.length, b.suffix.length);
+    for (let index = 0; index < suffixLength; index += 1) {
+      const aPart = a.suffix[index];
+      const bPart = b.suffix[index];
+      if (aPart === undefined || bPart === undefined) return aPart === undefined ? -1 : 1;
+      if (aPart === bPart) continue;
+      const aNumber = /^\d+$/.test(aPart) ? Number(aPart) : null;
+      const bNumber = /^\d+$/.test(bPart) ? Number(bPart) : null;
+      if (aNumber !== null && bNumber !== null) return aNumber > bNumber ? 1 : -1;
+      if (aNumber !== null || bNumber !== null) return aNumber !== null ? -1 : 1;
+      return aPart > bPart ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function buildScriptUpdateCheckUrl(source) {
+    const separator = source.checkUrl.includes("?") ? "&" : "?";
+    return `${source.checkUrl}${separator}_biligumi_update=${Date.now()}`;
+  }
+
+  function fetchScriptSource(source) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        method: "GET",
+        url: buildScriptUpdateCheckUrl(source),
+        timeout: SCRIPT_UPDATE_TIMEOUT_MS,
+        responseType: "text",
+        headers: { Accept: "text/plain,*/*" },
+        onload(response) {
+          const status = Number(response && response.status);
+          const text = String(response && response.responseText || "");
+          if (status >= 200 && status < 300 && text) {
+            resolve(text);
+            return;
+          }
+          reject(new Error(`更新源响应异常（${status || "无状态码"}）`));
+        },
+        onerror() {
+          reject(new Error("更新源连接失败"));
+        },
+        ontimeout() {
+          reject(new Error("更新源连接超时"));
+        },
+      });
+    });
+  }
+
+  async function checkScriptUpdate(options = {}) {
+    if (scriptUpdateCheckPromise && !options.force) return scriptUpdateCheckPromise;
+    const checkSeq = ++scriptUpdateCheckSeq;
+    scriptUpdateState = { status: "checking", remoteVersion: "", source: null };
+    syncSettingsUpdateUi();
+
+    const task = (async () => {
+      for (const source of SCRIPT_UPDATE_SOURCES) {
+        try {
+          const scriptSource = await fetchScriptSource(source);
+          const remoteVersion = parseUserscriptVersion(scriptSource);
+          if (!remoteVersion) throw new Error("更新源未返回有效用户脚本");
+          if (checkSeq !== scriptUpdateCheckSeq) return scriptUpdateState;
+          scriptUpdateState = {
+            status: compareScriptVersions(remoteVersion, SCRIPT_VERSION) > 0 ? "available" : "current",
+            remoteVersion,
+            source,
+          };
+          syncSettingsUpdateUi();
+          return scriptUpdateState;
+        } catch (_) {
+          // Try the next source. GitHub is preferred; GitCode is the fallback.
+        }
+      }
+      if (checkSeq === scriptUpdateCheckSeq) {
+        scriptUpdateState = { status: "error", remoteVersion: "", source: null };
+        syncSettingsUpdateUi();
+      }
+      return scriptUpdateState;
+    })();
+
+    scriptUpdateCheckPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (scriptUpdateCheckPromise === task) scriptUpdateCheckPromise = null;
+    }
+  }
+
+  function syncSettingsUpdateUi(root = document.getElementById(SETTINGS_ID)) {
+    if (!isSettingsDialogOpen(root)) return;
+    const status = root.querySelector("[data-role='settings-update-status']");
+    const updateButton = root.querySelector("[data-role='settings-update-now']");
+    if (!status || !updateButton) return;
+
+    status.classList.remove("available", "warning");
+    status.replaceChildren();
+    status.setAttribute("aria-busy", scriptUpdateState.status === "checking" ? "true" : "false");
+    const sourceSuffix = scriptUpdateState.source && scriptUpdateState.source.id === "gitcode" ? "（来自 GitCode）" : "";
+    let message = "打开设置后自动检查更新。";
+    if (scriptUpdateState.status === "checking") message = "正在检查更新…";
+    if (scriptUpdateState.status === "current") message = `已是最新版本${sourceSuffix}`;
+    if (scriptUpdateState.status === "available") {
+      message = `发现新版本 v${scriptUpdateState.remoteVersion}${sourceSuffix}`;
+      status.classList.add("available");
+    }
+    if (scriptUpdateState.status === "error") {
+      message = "暂时无法检查更新。";
+      status.classList.add("warning");
+    }
+    status.append(document.createTextNode(message));
+    if (scriptUpdateState.status === "error") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.dataset.action = "check-script-update";
+      retry.textContent = "重试";
+      retry.setAttribute("aria-label", "重新检查插件更新");
+      status.appendChild(retry);
+    }
+
+    const hasUpdate = scriptUpdateState.status === "available";
+    updateButton.classList.toggle("primary", hasUpdate);
+    updateButton.disabled = scriptUpdateOpening;
+    updateButton.setAttribute("aria-label", hasUpdate
+      ? `打开 v${scriptUpdateState.remoteVersion} 用户脚本，由 Tampermonkey 确认更新`
+      : "打开最新版用户脚本，由 Tampermonkey 确认安装或更新");
+  }
+
+  async function openLatestUserscript() {
+    if (scriptUpdateOpening) return;
+    scriptUpdateOpening = true;
+    syncSettingsUpdateUi();
+    try {
+      let result = scriptUpdateState;
+      if (!result.source) result = await checkScriptUpdate();
+      const source = result && result.source;
+      if (!source) throw new Error("GitHub 与 GitCode 暂时都无法连接，请稍后再试。");
+      GM_openInTab(source.url, { active: true, insert: true, setParent: true });
+    } catch (error) {
+      if (scriptUpdateState.status !== "error") {
+        scriptUpdateState = { status: "error", remoteVersion: "", source: null };
+      }
+      syncSettingsUpdateUi();
+      throw error;
+    } finally {
+      scriptUpdateOpening = false;
+      syncSettingsUpdateUi();
+    }
+  }
+
   function openSettings() {
     state.settingsOpen = true;
     state.collectionEditorOpen = false;
     state.error = "";
     mountModal("settings-cancel", renderSettingsDialog());
+    syncSettingsUpdateUi();
+    checkScriptUpdate().catch(() => {});
     render();
   }
 
   function closeSettings() {
     settleInlineConfirm(false);
+    scriptUpdateCheckSeq += 1;
+    scriptUpdateCheckPromise = null;
     state.settingsOpen = false;
     removeModal();
     render();
