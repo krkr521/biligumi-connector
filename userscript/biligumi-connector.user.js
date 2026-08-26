@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.15
+// @version      0.7.16
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -48,7 +48,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.15";
+  const SCRIPT_VERSION = "0.7.16";
   const SCRIPT_UPDATE_TIMEOUT_MS = 10000;
   const SCRIPT_UPDATE_SOURCES = [
     {

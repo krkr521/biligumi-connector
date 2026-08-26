@@ -28,7 +28,7 @@ runInSandbox(pureFunctions + "\n;globalThis.updatePure = { parseUserscriptVersio
 
 assert.match(source, /^\/\/ @connect\s+raw\.githubusercontent\.com$/m);
 assert.match(source, /^\/\/ @connect\s+api\.gitcode\.com$/m);
-assert.equal(constants.SCRIPT_VERSION, "0.7.15");
+assert.equal(constants.SCRIPT_VERSION, "0.7.16");
 assert.equal(constants.SCRIPT_UPDATE_TIMEOUT_MS, 10000);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES.length, 2);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES[0].id, "github");
