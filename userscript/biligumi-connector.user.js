@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.13
+// @version      0.7.15
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -39,7 +39,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.13";
+  const SCRIPT_VERSION = "0.7.15";
   const STORAGE = {
     token: "biligumi.token",
     bindings: "biligumi.bindings",
@@ -4008,28 +4008,55 @@
 
   function getDisplayCharacterActors(character) {
     const actors = character && Array.isArray(character.actors) ? character.actors : [];
-    const displayActors = actors.filter((actor) => actor && actor.name);
-    // Verified two-CV pairs are reversed from Bangumi web order; 3+ groups have no simple transform.
-    if (displayActors.length === 2) displayActors.reverse();
-    return displayActors;
+    return actors
+      .filter((actor) => actor && actor.name)
+      .slice()
+      .sort((left, right) => {
+        const leftOrder = Number.isFinite(left._biligumiOrder) ? left._biligumiOrder : Number.MAX_SAFE_INTEGER;
+        const rightOrder = Number.isFinite(right._biligumiOrder) ? right._biligumiOrder : Number.MAX_SAFE_INTEGER;
+        return leftOrder - rightOrder;
+      });
+  }
+
+  function getDisplayCharacterActorGroups(character) {
+    const actors = getDisplayCharacterActors(character);
+    const fallbackLabel = actors.length > 1 ? "出演" : "CV";
+    const groups = [];
+    const groupsByLabel = new Map();
+    actors.forEach((actor) => {
+      const label = String(actor._biligumiRelation || "").trim() || fallbackLabel;
+      let group = groupsByLabel.get(label);
+      if (!group) {
+        group = { label, actors: [] };
+        groupsByLabel.set(label, group);
+        groups.push(group);
+      }
+      group.actors.push(actor);
+    });
+    return groups;
   }
 
   function renderCharacterCard(character) {
-    const actors = getDisplayCharacterActors(character);
+    const actorGroups = getDisplayCharacterActorGroups(character);
     const image = getBestCharacterImage(character);
     const characterId = Number(character.id) || 0;
     const characterUrl = characterId ? `${BGM_WEB_BASE}/character/${characterId}` : "";
-    const actorNames = actors.map((actor) => String(actor.name));
-    const actorHtml = actors
-      .map((actor) => {
-        const actorName = String(actor.name);
-        const actorId = Number(actor.id) || 0;
-        const actorUrl = actorId ? `${BGM_WEB_BASE}/person/${actorId}` : "";
-        return actorUrl
-          ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>`
-          : escapeHtml(actorName);
-      })
-      .join(" / ");
+    const actorGroupsHtml = actorGroups.length
+      ? actorGroups.map((group) => {
+          const actorNames = group.actors.map((actor) => String(actor.name));
+          const actorHtml = group.actors
+            .map((actor) => {
+              const actorName = String(actor.name);
+              const actorId = Number(actor.id) || 0;
+              const actorUrl = actorId ? `${BGM_WEB_BASE}/person/${actorId}` : "";
+              return actorUrl
+                ? `<a href="${actorUrl}" target="_blank" rel="noreferrer">${escapeHtml(actorName)}</a>`
+                : escapeHtml(actorName);
+            })
+            .join(" / ");
+          return `<div class="biligumi-character-cv" title="${escapeHtml(actorNames.join(" / "))}">${escapeHtml(group.label)} ${actorHtml}</div>`;
+        }).join("")
+      : `<div class="biligumi-character-cv">CV 未录入</div>`;
     return `
       <div class="biligumi-character-card" title="${escapeHtml(character.name)}">
         ${characterUrl ? `<a href="${characterUrl}" target="_blank" rel="noreferrer">` : "<div>"}
@@ -4041,7 +4068,7 @@
           ? `<a class="biligumi-character-name" href="${characterUrl}" target="_blank" rel="noreferrer">${escapeHtml(character.name)}</a>`
           : `<div class="biligumi-character-name">${escapeHtml(character.name)}</div>`}
         <div class="biligumi-character-relation">${escapeHtml(character.relation || "角色")}</div>
-        <div class="biligumi-character-cv" title="${escapeHtml(actorNames.join(" / ") || "未录入")}">CV ${actorHtml || "未录入"}</div>
+        ${actorGroupsHtml}
       </div>
     `;
   }
@@ -6030,14 +6057,86 @@
     }
   }
 
+  function parseCharacterActorRelations(doc) {
+    const relationsByCharacter = {};
+    doc.querySelectorAll("#browserItemList .item").forEach((item) => {
+      const characterAnchor = item.querySelector('h2.subtitle a[href*="/character/"]');
+      const characterMatch = String(characterAnchor && characterAnchor.getAttribute("href") || "").match(/\/character\/(\d+)/);
+      const characterId = Number(characterMatch && characterMatch[1]) || 0;
+      if (!characterId) return;
+      const relations = [];
+      item.querySelectorAll(".actorBadge.badge_actor").forEach((badge, order) => {
+        const actorAnchor = badge.querySelector('a.l[href*="/person/"]') || badge.querySelector('a[href*="/person/"]');
+        const actorMatch = String(actorAnchor && actorAnchor.getAttribute("href") || "").match(/\/person\/(\d+)/);
+        const actorId = Number(actorMatch && actorMatch[1]) || 0;
+        const name = String(actorAnchor && actorAnchor.textContent || "").trim();
+        if (!actorId || !name) return;
+        const relationNode = badge.querySelector(".tip_j");
+        const relation = String(
+          badge.getAttribute("att-rlt-type-name")
+          || badge.getAttribute("attr-rlt-type-name")
+          || relationNode && relationNode.textContent
+          || "CV",
+        ).trim();
+        relations.push({
+          actorId,
+          name,
+          relation,
+          primary: badge.getAttribute("attr-rlt-primary") === "1",
+          order,
+        });
+      });
+      if (relations.length) relationsByCharacter[characterId] = relations;
+    });
+    return relationsByCharacter;
+  }
+
+  function applyCharacterActorRelations(characters, relationsByCharacter) {
+    const source = Array.isArray(characters) ? characters : [];
+    const relationSource = relationsByCharacter && typeof relationsByCharacter === "object" ? relationsByCharacter : {};
+    return source.map((character) => {
+      const relations = relationSource[Number(character && character.id)] || [];
+      if (!Array.isArray(relations) || !relations.length) return character;
+      const relationByActorId = new Map(relations.map((entry) => [Number(entry.actorId), entry]));
+      const seenActorIds = new Set();
+      const actors = (Array.isArray(character.actors) ? character.actors : [])
+        .filter((actor) => actor && actor.name)
+        .map((actor) => {
+          const actorId = Number(actor.id) || 0;
+          const relation = relationByActorId.get(actorId);
+          if (!relation) return { ...actor, _biligumiOrder: Number.MAX_SAFE_INTEGER };
+          seenActorIds.add(actorId);
+          return {
+            ...actor,
+            _biligumiRelation: relation.relation,
+            _biligumiPrimary: relation.primary === true,
+            _biligumiOrder: Number(relation.order) || 0,
+          };
+        });
+      relations.forEach((relation) => {
+        const actorId = Number(relation.actorId) || 0;
+        if (!actorId || seenActorIds.has(actorId) || !relation.name) return;
+        actors.push({
+          id: actorId,
+          name: relation.name,
+          _biligumiRelation: relation.relation,
+          _biligumiPrimary: relation.primary === true,
+          _biligumiOrder: Number(relation.order) || 0,
+        });
+      });
+      actors.sort((left, right) => left._biligumiOrder - right._biligumiOrder);
+      return { ...character, actors };
+    });
+  }
+
   async function loadSubjectInfoSupplement(subjectId) {
-    if (!state.subjectInfoPanelEnabled || !subjectId) return { links: {}, rows: [] };
+    if (!state.subjectInfoPanelEnabled || !subjectId) return { links: {}, rows: [], actorRelations: {} };
     const key = String(subjectId);
     if (subjectInfoLinkCache.has(key)) return subjectInfoLinkCache.get(key);
     if (subjectInfoLinkRequests.has(key)) return subjectInfoLinkRequests.get(key);
     const promise = bgmWebRequest(`/subject/${encodeURIComponent(key)}`)
       .then(parseSubjectInfoSupplement)
-      .catch(() => ({ links: {}, rows: [] }))
+      .catch(() => ({ links: {}, rows: [], actorRelations: {} }))
       .then((supplement) => {
         subjectInfoLinkCache.set(key, supplement);
         return supplement;
@@ -6055,6 +6154,11 @@
         if (Number(state.subjectId) !== expectedSubjectId) return;
         state.subjectInfoLinks = supplement && supplement.links ? supplement.links : {};
         state.subjectInfoWebRows = supplement && Array.isArray(supplement.rows) ? supplement.rows : [];
+        const actorRelations = supplement && supplement.actorRelations ? supplement.actorRelations : {};
+        if (Object.keys(actorRelations).length) {
+          state.characters = applyCharacterActorRelations(state.characters, actorRelations);
+          syncCharacterStrip();
+        }
         syncSubjectInfoPanel();
       })
       .catch(() => {});
@@ -6072,6 +6176,7 @@
     return {
       links,
       rows: parseSubjectInfoWebRows(doc),
+      actorRelations: parseCharacterActorRelations(doc),
     };
   }
 
