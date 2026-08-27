@@ -37,10 +37,8 @@ for (const name of [
   );
 }
 
-assert.ok(userscriptSource.includes("// @connect      api.bangumi.pro"));
-assert.ok(userscriptSource.includes("// @connect      bgmapi.anibt.net"));
-assert.ok(manifest.host_permissions.includes("https://api.bangumi.pro/*"));
-assert.ok(manifest.host_permissions.includes("https://bgmapi.anibt.net/*"));
+assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
+assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
 assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 10000;"));
 assert.ok(userscriptSource.includes("timeout: BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
@@ -52,8 +50,7 @@ assert.equal(userscriptSource.includes("writeValue(STORAGE.apiRelay"), false, "r
 const requestSandbox = {
   API_BASE: "https://api.bgm.tv",
   BGM_API_RELAYS: Object.freeze({
-    "api.bangumi.pro": "https://api.bangumi.pro",
-    "bgmapi.anibt.net": "https://bgmapi.anibt.net",
+    "api.bgmapi.com": "https://api.bgmapi.com",
   }),
   state: { token: "secret-token" },
   pendingRequests: new Map(),
@@ -86,12 +83,12 @@ vm.runInContext([
 ].join("\n"), requestSandbox);
 
 (async () => {
-  requestSandbox.choice = "api.bangumi.pro";
+  requestSandbox.choice = "api.bgmapi.com";
   const result = await requestSandbox.api.bgmRequest("/v0/me", { auth: true, dedup: false });
   assert.equal(requestSandbox.calls[0].url, "https://api.bgm.tv/v0/me", "official API is always attempted first");
-  assert.equal(requestSandbox.calls[1].url, "https://api.bangumi.pro/v0/me", "relay is used only after explicit choice");
+  assert.equal(requestSandbox.calls[1].url, "https://api.bgmapi.com/v0/me", "relay is used only after explicit choice");
   assert.equal(requestSandbox.calls[1].options.authToken, "secret-token");
-  assert.equal(result.url, "https://api.bangumi.pro/v0/me");
+  assert.equal(result.url, "https://api.bgmapi.com/v0/me");
 
   requestSandbox.calls.length = 0;
   requestSandbox.choice = "official";
@@ -102,7 +99,7 @@ vm.runInContext([
   ]);
 
   assert.throws(
-    () => requestSandbox.api.buildBgmApiUrl("https://evil.example/v0/me", "https://api.bangumi.pro"),
+    () => requestSandbox.api.buildBgmApiUrl("https://evil.example/v0/me", "https://api.bgmapi.com"),
     /Blocked Bangumi API target/,
   );
 
@@ -113,10 +110,10 @@ vm.runInContext([
   assert.equal(requestSandbox.api.isRelayEligibleTransportError(transportError), true);
   assert.equal(requestSandbox.api.isRelayEligibleTransportError({ status: 503 }), false, "HTTP 5xx must not expose relay choice");
   assert.equal(requestSandbox.api.isRelayEligibleTransportError({ status: 401 }), false, "auth errors must not expose relay choice");
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://api.bangumi.pro/v0/me", "https://api.bangumi.pro/v0/me"), true);
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://evil.example/v0/me", "https://api.bangumi.pro/v0/me"), false);
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://api.bgmapi.com/v0/me", "https://api.bgmapi.com/v0/me"), true);
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://evil.example/v0/me", "https://api.bgmapi.com/v0/me"), false);
   assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bgm.tv/v0/me"), true, "official responses may omit finalUrl");
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bangumi.pro/v0/me"), false, "relay responses must fail closed when finalUrl is unavailable");
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bgmapi.com/v0/me"), false, "relay responses must fail closed when finalUrl is unavailable");
 
   const backgroundStart = backgroundSource.indexOf("  function normalizeHttpRequest(");
   const backgroundEnd = backgroundSource.indexOf("  function tryParseJson(", backgroundStart);
@@ -132,7 +129,7 @@ vm.runInContext([
   vm.runInContext(backgroundBlock + "\n;globalThis.api = { normalizeHttpRequest, classifyHttpTarget, filterRequestHeaders, isAllowedHttpSender };", bgSandbox);
 
   const normalized = bgSandbox.api.normalizeHttpRequest({
-    url: "https://api.bangumi.pro/v0/me",
+    url: "https://api.bgmapi.com/v0/me",
     method: "GET",
     headers: { Authorization: "Bearer secret", Cookie: "forbidden", Origin: "forbidden" },
   });
@@ -142,7 +139,7 @@ vm.runInContext([
   assert.equal(Object.prototype.hasOwnProperty.call(normalized.headers, "Cookie"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(normalized.headers, "Origin"), false);
   assert.equal(bgSandbox.api.classifyHttpTarget("https://evil.example/v0/me"), "");
-  assert.equal(bgSandbox.api.classifyHttpTarget("https://api.bangumi.pro/not-v0/me"), "");
+  assert.equal(bgSandbox.api.classifyHttpTarget("https://api.bgmapi.com/not-v0/me"), "");
   assert.equal(bgSandbox.api.isAllowedHttpSender({ frameId: 0, tab: { id: 1, url: "https://www.bilibili.com/video/BV1xx" } }), true);
   assert.equal(bgSandbox.api.isAllowedHttpSender({ frameId: 1, tab: { id: 1, url: "https://www.bilibili.com/video/BV1xx" } }), false);
 
@@ -162,8 +159,8 @@ vm.runInContext([
   const siblingChoice = concurrentSandbox.choose({ authenticated: true });
   assert.equal(concurrentState.apiRelayPrompt.authenticated, true, "an authenticated sibling must upgrade the shared warning");
   assert.equal(concurrentSandbox.mountCalls, 1, "the upgraded warning must be rendered before consent");
-  promptResolve("api.bangumi.pro");
-  assert.equal(await siblingChoice, "api.bangumi.pro", "concurrent failures in the same prompt wave share the explicit choice");
+  promptResolve("api.bgmapi.com");
+  assert.equal(await siblingChoice, "api.bgmapi.com", "concurrent failures in the same prompt wave share the explicit choice");
 
   console.log("Bangumi API relay tests passed");
 })().catch((error) => {

@@ -323,7 +323,7 @@
     try {
       const parsed = new URL(String(url || ""));
       if (parsed.protocol !== "https:" || parsed.port || parsed.username || parsed.password || parsed.hash) return "";
-      const apiHosts = new Set(["api.bgm.tv", "api.bangumi.pro", "bgmapi.anibt.net"]);
+      const apiHosts = new Set(["api.bgm.tv", "api.bgmapi.com"]);
       if (apiHosts.has(parsed.hostname) && parsed.pathname.startsWith("/v0/")) return "api";
       if (parsed.hostname === "bgm.tv" && /^\/(?:subject\/\d+|login)(?:\/)?$/.test(parsed.pathname)) return "web";
       return "";

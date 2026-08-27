@@ -8,8 +8,7 @@
 // @match        https://www.bilibili.com/video/*
 // @match        https://bgm.tv/subject/*
 // @connect      api.bgm.tv
-// @connect      api.bangumi.pro
-// @connect      bgmapi.anibt.net
+// @connect      api.bgmapi.com
 // @connect      bgm.tv
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
@@ -28,8 +27,7 @@
 
   const API_BASE = "https://api.bgm.tv";
   const BGM_API_RELAYS = Object.freeze({
-    "api.bangumi.pro": "https://api.bangumi.pro",
-    "bgmapi.anibt.net": "https://bgmapi.anibt.net",
+    "api.bgmapi.com": "https://api.bgmapi.com",
   });
   const BGM_WEB_BASE = "https://bgm.tv";
   const DELETE_BRIDGE_PARAM = "biligumi_delete_bridge";
@@ -9011,8 +9009,7 @@
       '<div class="biligumi-api-relay-actions">',
       '<button type="button" class="biligumi-button" data-action="dismiss-api-relay">稍后再说</button>',
       '<button type="button" class="biligumi-button primary" data-action="retry-official-api">重试官方 API</button>',
-      '<button type="button" class="biligumi-button danger" data-action="use-api-relay" data-relay="api.bangumi.pro" aria-describedby="biligumi-api-relay-warning">使用 api.bangumi.pro</button>',
-      '<button type="button" class="biligumi-button danger" data-action="use-api-relay" data-relay="bgmapi.anibt.net" aria-describedby="biligumi-api-relay-warning">使用 bgmapi.anibt.net</button>',
+      '<button type="button" class="biligumi-button danger" data-action="use-api-relay" data-relay="api.bgmapi.com" aria-describedby="biligumi-api-relay-warning">使用 api.bgmapi.com</button>',
       '</div>',
       '</div>',
     ].join("");

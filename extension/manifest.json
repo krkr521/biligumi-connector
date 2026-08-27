@@ -13,8 +13,7 @@
     "https://www.bilibili.com/video/*",
     "https://www.bilibili.com/bangumi/play/*",
     "https://api.bgm.tv/*",
-    "https://api.bangumi.pro/*",
-    "https://bgmapi.anibt.net/*",
+    "https://api.bgmapi.com/*",
     "https://bgm.tv/*"
   ],
   "background": {
