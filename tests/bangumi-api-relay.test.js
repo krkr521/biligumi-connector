@@ -43,10 +43,16 @@ assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
 assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 10000;"));
 assert.ok(userscriptSource.includes("timeout: BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
+assert.ok(userscriptSource.includes("官方 API 连接失败后自动使用 api.bgmapi.com"));
+assert.ok(userscriptSource.includes('confirmLabel: "启用自动回退"'), "enabling persistent relay fallback must require explicit danger confirmation");
+assert.ok(userscriptSource.includes("该站点不是 Bangumi 官方服务，可能读取或记录这些信息"));
+assert.ok(userscriptSource.includes("apiRelayAutoFallback: \"biligumi.apiRelayAutoFallback\""));
+assert.ok(userscriptSource.includes("readValue(STORAGE.apiRelayAutoFallback, \"0\") === \"1\""), "automatic relay fallback must be opt-in by default");
+assert.ok(userscriptSource.includes("writeValue(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? \"1\" : \"0\")"));
+assert.ok(extensionSource.includes("writeValueAsync(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? \"1\" : \"0\")"));
 assert.ok(userscriptSource.includes("Bangumi Access Token"));
 assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
-assert.equal(userscriptSource.includes("writeValue(STORAGE.apiRelay"), false, "relay choice must not be persisted");
 assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
 assert.ok(userscriptSource.includes("relayScope: options.relayScope || null"), "request fallback must receive the temporary load scope");
 
@@ -55,7 +61,7 @@ const requestSandbox = {
   BGM_API_RELAYS: Object.freeze({
     "api.bgmapi.com": "https://api.bgmapi.com",
   }),
-  state: { token: "secret-token" },
+  state: { token: "secret-token", apiRelayAutoFallbackEnabled: false },
   pendingRequests: new Map(),
   REQUEST_DEDUP_TTL: 500,
   URL,
@@ -92,6 +98,17 @@ vm.runInContext([
   assert.equal(requestSandbox.calls[1].url, "https://api.bgmapi.com/v0/me", "relay is used only after explicit choice");
   assert.equal(requestSandbox.calls[1].options.authToken, "secret-token");
   assert.equal(result.url, "https://api.bgmapi.com/v0/me");
+
+  requestSandbox.calls.length = 0;
+  requestSandbox.state.apiRelayAutoFallbackEnabled = true;
+  requestSandbox.choice = "cancel";
+  const automaticResult = await requestSandbox.api.bgmRequest("/v0/me", { auth: true, dedup: false });
+  assert.deepEqual(requestSandbox.calls.map((call) => call.url), [
+    "https://api.bgm.tv/v0/me",
+    "https://api.bgmapi.com/v0/me",
+  ], "opt-in automatic fallback must still try the official API first");
+  assert.equal(automaticResult.url, "https://api.bgmapi.com/v0/me");
+  requestSandbox.state.apiRelayAutoFallbackEnabled = false;
 
   requestSandbox.calls.length = 0;
   requestSandbox.choice = "official";
