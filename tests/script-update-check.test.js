@@ -31,7 +31,7 @@ assert.match(source, /^\/\/ @connect\s+raw\.githubusercontent\.com$/m);
 assert.match(source, /^\/\/ @connect\s+api\.gitcode\.com$/m);
 assert.match(source, /^\/\/ @connect\s+raw\.gitcode\.com$/m);
 assert.equal(constants.SCRIPT_VERSION, "0.7.15");
-assert.equal(constants.SCRIPT_UPDATE_TIMEOUT_MS, 10000);
+assert.equal(constants.SCRIPT_UPDATE_TIMEOUT_MS, 4000);
 assert.equal(constants.SCRIPT_UPDATE_CACHE_TTL_MS, 21600000);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES.length, 2);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES[0].id, "github");
@@ -103,6 +103,17 @@ assert.match(renderScriptUpdateBanner, /使用 GitCode 更新/);
 assert.match(renderScriptUpdateBanner, /data-action="dismiss-script-update"/);
 assert.match(renderScriptUpdateBanner, /本次更新不再提醒/);
 assert.match(renderScriptUpdateBanner, /isScriptUpdateNoticeVisible\(\)/);
+
+const renderBody = extractFunction(source, "render");
+assert.match(renderBody, /collapseStandalonePanel \? "" : renderScriptUpdateBanner\(\)/);
+assert.match(renderBody, /if \(state\.panelCollapsed\) \{[\s\S]*\$\{headerHtml\}\$\{renderInlineConfirm\(\)\}/);
+assert.ok(!renderBody.includes("${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}"), "collapsed primary panel must not render update actions");
+
+const isPanelSleeping = extractFunction(source, "isPanelSleeping");
+assert.match(isPanelSleeping, /state\.panelCollapsed/);
+assert.match(isPanelSleeping, /standaloneSearchExpanded/);
+const isScriptUpdateCheckActive = extractFunction(source, "isScriptUpdateCheckActive");
+assert.match(isScriptUpdateCheckActive, /state\.settingsOpen \|\| !isPanelSleeping\(\)/);
 const isScriptUpdateNoticeVisible = extractFunction(source, "isScriptUpdateNoticeVisible");
 assert.match(isScriptUpdateNoticeVisible, /scriptUpdateState\.status !== "available"/);
 assert.match(isScriptUpdateNoticeVisible, /STORAGE\.scriptUpdateDismissedVersion/);
@@ -125,7 +136,9 @@ assert.match(resolveScriptUpdateSource, /rawUrlPrefix/);
 assert.match(resolveScriptUpdateSource, /\^\[a-f0-9\]\{40\}\$/);
 
 const checkScriptUpdate = extractFunction(source, "checkScriptUpdate", { async: true });
+assert.match(checkScriptUpdate, /if \(!isScriptUpdateCheckActive\(\)\) return scriptUpdateState/);
 assert.match(checkScriptUpdate, /for \(const configuredSource of SCRIPT_UPDATE_SOURCES\)/);
+assert.match(checkScriptUpdate, /if \(!isScriptUpdateCheckActive\(\)\)/);
 assert.match(checkScriptUpdate, /resolveScriptUpdateSource\(configuredSource\)/);
 assert.match(checkScriptUpdate, /cacheScriptUpdateState\(scriptUpdateState\)/);
 assert.match(checkScriptUpdate, /render\(\)/);
@@ -142,6 +155,11 @@ assert.match(openLatestUserscript, /if \(scriptUpdateOpening\) return/);
 assert.match(openLatestUserscript, /resolvePreferredScriptUpdateSource\(preferredSourceId\)/);
 assert.match(openLatestUserscript, /GM_openInTab\(source\.url/);
 assert.ok(!openLatestUserscript.includes("window.open"));
+
+const init = extractFunction(source, "init");
+assert.match(init, /if \(isScriptUpdateCheckActive\(\)\) checkScriptUpdate\(\)/);
+const togglePanelCollapsed = extractFunction(source, "togglePanelCollapsed");
+assert.match(togglePanelCollapsed, /if \(isScriptUpdateCheckActive\(\)\) checkScriptUpdate\(\)/);
 
 const closeSettings = extractFunction(source, "closeSettings");
 assert.ok(!closeSettings.includes("scriptUpdateCheckSeq"), "closing settings must not cancel the page-level update check");

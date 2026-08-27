@@ -48,7 +48,7 @@
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
   const SCRIPT_VERSION = "0.7.15";
-  const SCRIPT_UPDATE_TIMEOUT_MS = 10000;
+  const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
     {
@@ -3055,7 +3055,7 @@
     refreshPageContext();
     state.subjectId = getCurrentBinding();
     injectWhenReady();
-    checkScriptUpdate().catch(() => {});
+    if (isScriptUpdateCheckActive()) checkScriptUpdate().catch(() => {});
     observeRouteChanges();
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
@@ -5468,10 +5468,24 @@
     input.value = tags.join(" ");
   }
 
+  function isPanelSleeping() {
+    if (shouldRenderFullPanel()) return state.panelCollapsed;
+    const nonMainKeyword = getNonMainPreviewKeyword();
+    return !nonMainKeyword
+      && !state.standaloneSearchExpanded
+      && !state.longVideoBindingPrompt
+      && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
+  }
+
+  function isScriptUpdateCheckActive() {
+    return state.settingsOpen || !isPanelSleeping();
+  }
+
   function togglePanelCollapsed() {
     state.panelCollapsed = !state.panelCollapsed;
     writeValue(STORAGE.panelCollapsed, state.panelCollapsed ? "1" : "0");
     render();
+    if (isScriptUpdateCheckActive()) checkScriptUpdate().catch(() => {});
   }
 
   function setScoreDetailMode(mode) {
@@ -5485,6 +5499,7 @@
   function toggleStandaloneSearchExpanded() {
     state.standaloneSearchExpanded = !state.standaloneSearchExpanded;
     render();
+    if (isScriptUpdateCheckActive()) checkScriptUpdate().catch(() => {});
   }
 
   async function cycleCollectionType() {
@@ -8579,6 +8594,7 @@
   }
 
   async function checkScriptUpdate(options = {}) {
+    if (!isScriptUpdateCheckActive()) return scriptUpdateState;
     if (scriptUpdateCheckPromise && !options.force) return scriptUpdateCheckPromise;
     if (!options.force && scriptUpdateState.source && scriptUpdateState.checkedAt && Date.now() - scriptUpdateState.checkedAt < SCRIPT_UPDATE_CACHE_TTL_MS) {
       syncSettingsUpdateUi();
@@ -8591,12 +8607,26 @@
 
     const task = (async () => {
       for (const configuredSource of SCRIPT_UPDATE_SOURCES) {
+        if (!isScriptUpdateCheckActive()) {
+          if (checkSeq === scriptUpdateCheckSeq) {
+            scriptUpdateState = previousState;
+            syncSettingsUpdateUi();
+            render();
+          }
+          return scriptUpdateState;
+        }
         try {
           const source = await resolveScriptUpdateSource(configuredSource);
           const scriptSource = await fetchScriptSource(source);
           const remoteVersion = parseUserscriptVersion(scriptSource);
           if (!remoteVersion) throw new Error("更新源未返回有效用户脚本");
           if (checkSeq !== scriptUpdateCheckSeq) return scriptUpdateState;
+          if (!isScriptUpdateCheckActive()) {
+            scriptUpdateState = previousState;
+            syncSettingsUpdateUi();
+            render();
+            return scriptUpdateState;
+          }
           scriptUpdateState = {
             status: compareScriptVersions(remoteVersion, SCRIPT_VERSION) > 0 ? "available" : "current",
             remoteVersion,
