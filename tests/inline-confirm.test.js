@@ -81,7 +81,7 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.equal(slotCount, 2, `${label} renderSearchOrSubject must mount the confirm row in both branches`);
   const renderBody = extractFunction(source, "render");
   assert.ok(
-    renderBody.includes("${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}") || renderBody.includes("${headerHtml}${renderInlineConfirm()}"),
+    renderBody.includes("${headerHtml}${renderInlineConfirm()}"),
     `${label} collapsed panel must still render the confirm row`,
   );
 }
