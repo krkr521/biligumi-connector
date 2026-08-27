@@ -4229,6 +4229,10 @@
     return isOfficialBangumiPage();
   }
 
+  function renderPanelNoticeSlot() {
+    return "";
+  }
+
   function renderSearchOrSubject() {
     if (!state.subjectId || !state.subject) {
       if (state.subjectId && !state.error) {
@@ -4236,6 +4240,7 @@
       }
       return `
         <div class="biligumi-search-pane">
+          ${renderPanelNoticeSlot()}
           <div class="biligumi-row">
             ${renderSearchForm({
               label: "绑定 Bangumi 条目",
@@ -4255,6 +4260,7 @@
     const scoreMode = normalizeScoreDetailMode(state.scoreDetailMode);
     return `
       <div class="biligumi-card-body ${scoreMode === "simple" ? "biligumi-score-simple" : ""}">
+        ${renderPanelNoticeSlot()}
         ${renderInlineConfirm()}
         ${renderCollectionSection()}
         <div class="biligumi-row biligumi-score-row ${scoreMode}">
@@ -4321,6 +4327,7 @@
     const body = state.standaloneSearchExpanded || nonMainKeyword || state.longVideoBindingPrompt || (state.inlineConfirm && state.inlineConfirm.context === "panel")
       ? `
         <div class="biligumi-search-pane">
+          ${renderPanelNoticeSlot()}
           ${searchForm}
           ${nonMainKeyword ? renderInlineAutoPreview(nonMainKeyword) : ""}
           ${renderLongVideoBindingPrompt()}

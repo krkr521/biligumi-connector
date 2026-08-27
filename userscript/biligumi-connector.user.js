@@ -3594,7 +3594,7 @@
       const nonMainKeyword = getNonMainPreviewKeyword();
       const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
-      panel.innerHTML = `${renderStandaloneSearchPanel(nonMainKeyword)}${collapseStandalonePanel ? "" : renderScriptUpdateBanner()}`;
+      panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3636,7 +3636,6 @@
 
     panel.innerHTML = `
       ${headerHtml}
-      ${renderScriptUpdateBanner()}
       ${renderPanelProgressSlot()}
       ${renderSearchOrSubject()}
       ${renderCollectionMappingHint()}
@@ -4366,6 +4365,10 @@
     return isOfficialBangumiPage();
   }
 
+  function renderPanelNoticeSlot() {
+    return renderScriptUpdateBanner();
+  }
+
   function renderSearchOrSubject() {
     if (!state.subjectId || !state.subject) {
       if (state.subjectId && !state.error) {
@@ -4373,6 +4376,7 @@
       }
       return `
         <div class="biligumi-search-pane">
+          ${renderPanelNoticeSlot()}
           <div class="biligumi-row">
             ${renderSearchForm({
               label: "绑定 Bangumi 条目",
@@ -4392,6 +4396,7 @@
     const scoreMode = normalizeScoreDetailMode(state.scoreDetailMode);
     return `
       <div class="biligumi-card-body ${scoreMode === "simple" ? "biligumi-score-simple" : ""}">
+        ${renderPanelNoticeSlot()}
         ${renderInlineConfirm()}
         ${renderCollectionSection()}
         <div class="biligumi-row biligumi-score-row ${scoreMode}">
@@ -4485,6 +4490,7 @@
     const body = state.standaloneSearchExpanded || nonMainKeyword || state.longVideoBindingPrompt || (state.inlineConfirm && state.inlineConfirm.context === "panel")
       ? `
         <div class="biligumi-search-pane">
+          ${renderPanelNoticeSlot()}
           ${searchForm}
           ${nonMainKeyword ? renderInlineAutoPreview(nonMainKeyword) : ""}
           ${renderLongVideoBindingPrompt()}
