@@ -67,6 +67,7 @@
   ];
   const STORAGE = {
     token: "biligumi.token",
+    apiRelayAutoFallback: "biligumi.apiRelayAutoFallback",
     bindings: "biligumi.bindings",
     bindingSubjects: "biligumi.bindingSubjects",
     collectionMappings: "biligumi.collectionMappings",
@@ -255,6 +256,7 @@
     scoreDetailMode: normalizeScoreDetailMode(readValue(STORAGE.scoreDetailMode, "simple")),
     panelCollapsed: readValue(STORAGE.panelCollapsed, "0") === "1",
     settingsOpen: false,
+    apiRelayAutoFallbackEnabled: readValue(STORAGE.apiRelayAutoFallback, "0") === "1",
     collectionEditorOpen: false,
     collectionEditorContext: null,
     collectionDeleteConfirmSubjectId: null,
@@ -4670,6 +4672,14 @@
               <div class="biligumi-settings-help" data-role="settings-token-help">${state.token ? `已保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位新值会自动替换。清除时需要点击按钮并确认。` : `尚未保存 Token；粘贴完整 ${BANGUMI_ACCESS_TOKEN_LENGTH} 位后自动保存。可在 next.bgm.tv/demo/access-token 生成。`}</div>
               <button type="button" class="biligumi-button biligumi-token-clear-button" data-action="clear-settings-token" data-role="settings-token-clear-button" ${state.token ? "" : "disabled"}>清除已保存的 Access Token</button>
             </div>
+            <div class="biligumi-settings-field">
+              <label class="biligumi-settings-check">
+                <input type="checkbox" data-role="settings-api-relay-auto-fallback" ${state.apiRelayAutoFallbackEnabled ? "checked" : ""}>
+                <span>官方 API 连接失败后自动使用 api.bgmapi.com，不再逐次弹窗。</span>
+              </label>
+              <div class="biligumi-settings-help">始终先尝试官方 api.bgm.tv；仅在连接失败或超时后自动回退。该选择保存在当前浏览器中，可随时关闭。</div>
+              <div class="biligumi-settings-help warning"><strong>危险：</strong>启用后，Bangumi Access Token、Authorization 请求头、收藏、评分和进度等 API 内容可能自动发送给第三方 api.bgmapi.com。它不是 Bangumi 官方服务，可能读取或记录这些信息。</div>
+            </div>
           </div>
           <div class="biligumi-settings-section">
             <h3 class="biligumi-settings-section-title">名单</h3>
@@ -6283,8 +6293,9 @@
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
+    const relayScope = createBgmApiRelayScope();
     try {
-      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
@@ -6294,11 +6305,11 @@
         return value;
       });
       const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
-        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
-        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
@@ -6328,8 +6339,9 @@
     const tokenSnapshot = state.token || "";
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     let loadId = 0;
+    const relayScope = createBgmApiRelayScope();
     try {
-      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
@@ -6339,11 +6351,11 @@
         return value;
       });
       const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
-        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
-        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
@@ -6369,9 +6381,9 @@
     }
   }
 
-  async function loadSubjectCharacters(subjectId) {
+  async function loadSubjectCharacters(subjectId, relayScope = null) {
     try {
-      const apiResponse = await bgmRequest(`/v0/subjects/${subjectId}/characters`, { dedup: true });
+      const apiResponse = await bgmRequest(`/v0/subjects/${subjectId}/characters`, { dedup: true, relayScope });
       const characters = Array.isArray(apiResponse) ? apiResponse : [];
       return { characters: sortCharactersLikeBangumi(characters), error: "" };
     } catch (error) {
@@ -6573,15 +6585,15 @@
     return { ...(collection || {}), ...pending };
   }
 
-  async function getCollectionReadPath(subjectId = state.subjectId, tokenSnapshot = state.token || "") {
-    const username = await getCurrentUsername(tokenSnapshot);
+  async function getCollectionReadPath(subjectId = state.subjectId, tokenSnapshot = state.token || "", relayScope = null) {
+    const username = await getCurrentUsername(tokenSnapshot, relayScope);
     return username ? `/v0/users/${encodeURIComponent(username)}/collections/${subjectId}` : "";
   }
 
-  async function getCurrentUsername(tokenSnapshot = state.token || "") {
+  async function getCurrentUsername(tokenSnapshot = state.token || "", relayScope = null) {
     if (!tokenSnapshot) return "";
     if (state.username && String(tokenSnapshot) === String(state.token || "")) return state.username;
-    const me = await bgmRequest("/v0/me", { auth: true, authToken: tokenSnapshot });
+    const me = await bgmRequest("/v0/me", { auth: true, authToken: tokenSnapshot, relayScope });
     if (String(state.token || "") !== String(tokenSnapshot || "")) return "";
     state.username = me && me.username ? String(me.username) : "";
     return state.username;
@@ -8683,6 +8695,7 @@
 
     const tokenInput = settings.querySelector("[data-role='settings-token']");
     const whitelistInput = settings.querySelector("[data-role='settings-whitelist']");
+    const apiRelayAutoFallbackInput = settings.querySelector("[data-role='settings-api-relay-auto-fallback']");
     const characterStripInput = settings.querySelector("[data-role='settings-character-strip']");
     const subjectInfoPanelInput = settings.querySelector("[data-role='settings-subject-info-panel']");
     const officialBangumiLayoutInput = settings.querySelector("[data-role='settings-official-bangumi-layout']");
@@ -8696,6 +8709,7 @@
     const hasValidReplacementToken = isValidAccessToken(replacementToken);
     const hasInvalidReplacementToken = Boolean(replacementToken) && !hasValidReplacementToken;
     const nextToken = hasValidReplacementToken ? replacementToken : state.token;
+    const nextApiRelayAutoFallbackEnabled = Boolean(apiRelayAutoFallbackInput && apiRelayAutoFallbackInput.checked);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -8736,6 +8750,7 @@
       state.autoWatchAuthBlocked = false;
     }
     state.token = nextToken;
+    state.apiRelayAutoFallbackEnabled = nextApiRelayAutoFallbackEnabled;
     state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
     state.characterStripEnabled = nextCharacterStripEnabled;
     state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
@@ -8755,6 +8770,7 @@
     state.opedSkipHotkey = nextOpedSkipHotkey;
 
     writeValue(STORAGE.token, state.token);
+    writeValue(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? "1" : "0");
     writeListValue(STORAGE.whitelist, state.whitelist);
     writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
     writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
@@ -8812,8 +8828,9 @@
   }
 
   async function resetSettingsToDefaults() {
-    if (!(await requestInlineConfirm({ context: "settings", danger: true, confirmLabel: "恢复默认", message: "将界面相关设置恢复为默认值？\nAccess Token 与白名单不会被清除。" }))) return;
+    if (!(await requestInlineConfirm({ context: "settings", danger: true, confirmLabel: "恢复默认", message: "将界面与自动回退设置恢复为默认值？\n自动回退会关闭；Access Token 与白名单不会被清除。" }))) return;
 
+    state.apiRelayAutoFallbackEnabled = false;
     state.characterStripEnabled = DEFAULT_CHARACTER_STRIP_ENABLED;
     state.subjectInfoPanelEnabled = DEFAULT_SUBJECT_INFO_PANEL_ENABLED;
     state.officialBangumiLayoutEnabled = DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED;
@@ -8828,6 +8845,7 @@
     }
     state.opedSkipHotkey = DEFAULT_OPED_SKIP_HOTKEY;
 
+    writeValue(STORAGE.apiRelayAutoFallback, "0");
     writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
     writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
     writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
@@ -9176,6 +9194,25 @@
       if (input) input.addEventListener("change", autoSave);
     });
 
+    const relayAutoFallbackInput = wrapper.querySelector("[data-role='settings-api-relay-auto-fallback']");
+    if (relayAutoFallbackInput) {
+      relayAutoFallbackInput.addEventListener("change", async () => {
+        if (relayAutoFallbackInput.checked && !state.apiRelayAutoFallbackEnabled) {
+          const confirmed = await requestInlineConfirm({
+            context: "settings",
+            danger: true,
+            confirmLabel: "启用自动回退",
+            message: "启用后，官方 API 连接失败或超时时，将自动把包括 Bangumi Access Token、Authorization 请求头、收藏、评分和进度在内的请求内容发送到第三方 api.bgmapi.com。\n该站点不是 Bangumi 官方服务，可能读取或记录这些信息。确定启用吗？",
+          });
+          if (!confirmed) {
+            relayAutoFallbackInput.checked = false;
+            return;
+          }
+        }
+        applySettingsFromDialog();
+      });
+    }
+
     const tokenInput = wrapper.querySelector("[data-role='settings-token']");
     if (tokenInput) {
       const handleTokenDraft = () => {
@@ -9400,13 +9437,28 @@
     render();
   }
 
-  function requestBgmApiFallbackChoice({ authenticated = false } = {}) {
+  function createBgmApiRelayScope() {
+    return { choice: "", promise: null };
+  }
+
+  function requestBgmApiFallbackChoice({ authenticated = false, relayScope = null } = {}) {
+    const scope = relayScope && typeof relayScope === "object" ? relayScope : null;
+    if (scope && scope.choice) return Promise.resolve(scope.choice);
+    if (scope && scope.promise) return scope.promise;
     if (state.apiRelayPrompt && state.apiRelayPrompt.promise) {
       if (authenticated && !state.apiRelayPrompt.authenticated) {
         state.apiRelayPrompt.authenticated = true;
         mountBgmApiRelayPrompt();
       }
-      return state.apiRelayPrompt.promise;
+      const sharedPromise = state.apiRelayPrompt.promise.then((choice) => {
+        if (scope) {
+          scope.choice = choice;
+          scope.promise = null;
+        }
+        return choice;
+      });
+      if (scope) scope.promise = sharedPromise;
+      return sharedPromise;
     }
     const returnFocus = document.activeElement;
     let resolveChoice = null;
@@ -9414,7 +9466,15 @@
     state.apiRelayPrompt = { authenticated: Boolean(authenticated), returnFocus, resolve: resolveChoice, promise };
     document.addEventListener("keydown", handleBgmApiRelayKeydown, true);
     mountBgmApiRelayPrompt();
-    return promise;
+    const scopedPromise = promise.then((choice) => {
+      if (scope) {
+        scope.choice = choice;
+        scope.promise = null;
+      }
+      return choice;
+    });
+    if (scope) scope.promise = scopedPromise;
+    return scopedPromise;
   }
 
   function renderBgmApiRelayPrompt() {
@@ -9428,7 +9488,7 @@
       '<div id="biligumi-api-relay-title" class="biligumi-api-relay-title">无法连接官方 Bangumi API</div>',
       '<div class="biligumi-api-relay-text">已多次尝试 api.bgm.tv，请求超时或无法到达。你可以重试官方接口，或手动选择一个第三方中继，仅重试当前这批失败的请求。</div>',
       '<div id="biligumi-api-relay-warning" class="biligumi-api-relay-warning">危险：切换中继后，Bangumi Access Token、Authorization 请求头、收藏和进度等 API 请求内容会经过第三方服务器。对方可能读取或记录这些信息；这不是 Bangumi 官方服务。' + escapeHtml(authDetail) + ' 请只在你信任该站点时继续。</div>',
-      '<div class="biligumi-api-relay-help">不会自动选择或记住中继。点击红色按钮即代表你明确同意仅为当前这批失败请求使用对应第三方地址。</div>',
+      '<div class="biligumi-api-relay-help">未启用设置中的自动回退时，不会自动选择或记住中继。点击红色按钮即代表你明确同意仅为当前这批失败请求使用对应第三方地址。</div>',
       '<div class="biligumi-api-relay-actions">',
       '<button type="button" class="biligumi-button" data-action="dismiss-api-relay">稍后再说</button>',
       '<button type="button" class="biligumi-button primary" data-action="retry-official-api">重试官方 API</button>',
@@ -9506,7 +9566,12 @@
     const requestOptions = { ...options, authToken };
     const promise = bgmRequestWithRetry(method, url, data, requestOptions).catch(async (error) => {
       if (!isRelayEligibleTransportError(error)) throw error;
-      const choice = await requestBgmApiFallbackChoice({ authenticated: Boolean(options.auth) });
+      const choice = state.apiRelayAutoFallbackEnabled
+        ? "api.bgmapi.com"
+        : await requestBgmApiFallbackChoice({
+          authenticated: Boolean(options.auth),
+          relayScope: options.relayScope || null,
+        });
       if (choice === "cancel") throw error;
       const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
       if (!retryBase) throw error;
