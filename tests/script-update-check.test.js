@@ -111,10 +111,8 @@ assert.match(renderScriptUpdateBanner, /data-action="dismiss-script-update"/);
 assert.match(renderScriptUpdateBanner, /本次更新不再提醒/);
 assert.match(renderScriptUpdateBanner, /isScriptUpdateNoticeVisible\(\)/);
 
-const renderBody = extractFunction(source, "render");
-assert.match(renderBody, /collapseStandalonePanel \? "" : renderScriptUpdateBanner\(\)/);
-assert.match(renderBody, /if \(state\.panelCollapsed\) \{[\s\S]*\$\{headerHtml\}\$\{renderInlineConfirm\(\)\}/);
-assert.ok(!renderBody.includes("${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}"), "collapsed primary panel must not render update actions");
+assert.match(renderPanel, /if \(state\.panelCollapsed\) \{[\s\S]*\$\{headerHtml\}\$\{renderInlineConfirm\(\)\}/);
+assert.ok(!renderPanel.includes("${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}"), "collapsed primary panel must not render update actions");
 
 const isPanelSleeping = extractFunction(source, "isPanelSleeping");
 assert.match(isPanelSleeping, /state\.panelCollapsed/);
