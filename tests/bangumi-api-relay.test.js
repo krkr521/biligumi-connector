@@ -18,8 +18,12 @@ const backgroundSource = fs.readFileSync(path.join(repoRoot, "extension", "backg
 const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "extension", "manifest.json"), "utf8"));
 
 for (const name of [
+  "createBgmApiRelayScope",
+  "getApiRelayAutoFallbackSetting",
   "requestBgmApiFallbackChoice",
   "renderBgmApiRelayPrompt",
+  "renderBgmApiRelayRetryNotice",
+  "dismissBgmApiRelayRetryNotice",
   "mountBgmApiRelayPrompt",
   "handleBgmApiRelayKeydown",
   "settleBgmApiRelayPrompt",
@@ -36,28 +40,97 @@ for (const name of [
     name + " must stay identical between userscript and extension",
   );
 }
+assert.equal(
+  extractFunction(extensionSource, "retryBgmApiRelayNotice", { async: true }),
+  extractFunction(userscriptSource, "retryBgmApiRelayNotice", { async: true }),
+  "retryBgmApiRelayNotice must stay identical between userscript and extension",
+);
 
-assert.ok(userscriptSource.includes("// @connect      api.bangumi.pro"));
-assert.ok(userscriptSource.includes("// @connect      bgmapi.anibt.net"));
-assert.ok(manifest.host_permissions.includes("https://api.bangumi.pro/*"));
-assert.ok(manifest.host_permissions.includes("https://bgmapi.anibt.net/*"));
-assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 10000;"));
-assert.ok(userscriptSource.includes("timeout: BGM_API_REQUEST_TIMEOUT_MS,"));
+assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
+assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
+assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 4000;"));
+assert.ok(userscriptSource.includes("const BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS = 2000;"));
+assert.ok(userscriptSource.includes("const REQUEST_MAX_RETRIES = 1;"));
+assert.ok(userscriptSource.includes("const REQUEST_RETRY_BASE_MS = 500;"));
+assert.ok(userscriptSource.includes("timeout: Number(options.requestTimeoutMs) > 0 ? Number(options.requestTimeoutMs) : BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
+assert.ok(userscriptSource.includes("官方 API 连接失败后自动使用 api.bgmapi.com"));
+assert.ok(userscriptSource.includes('confirmLabel: "启用自动回退"'), "enabling persistent relay fallback must require explicit danger confirmation");
+assert.ok(userscriptSource.includes("该站点不是 Bangumi 官方服务，可能读取或记录这些信息"));
+assert.ok(userscriptSource.includes("apiRelayAutoFallback: \"biligumi.apiRelayAutoFallback\""));
+assert.ok(userscriptSource.includes("readValue(STORAGE.apiRelayAutoFallback, \"0\") === \"1\""), "automatic relay fallback must be opt-in by default");
+assert.ok(userscriptSource.includes("writeValue(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? \"1\" : \"0\")"));
+assert.ok(extensionSource.includes("writeValueAsync(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? \"1\" : \"0\")"));
 assert.ok(userscriptSource.includes("Bangumi Access Token"));
 assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
-assert.equal(userscriptSource.includes("writeValue(STORAGE.apiRelay"), false, "relay choice must not be persisted");
+assert.match(userscriptSource, /#\$\{PANEL_ID\} #\$\{API_RELAY_ID\} \.biligumi-button \{[\s\S]*?min-height: 30px;[\s\S]*?padding: 4px 10px;[\s\S]*?border-radius: 6px;/, "relay actions must use the standard panel button shape");
+assert.equal(userscriptSource.includes("#${PANEL_ID} #${API_RELAY_ID} .biligumi-button {\n      min-height: 32px;"), false, "relay buttons must not retain the pill-button dimensions");
+assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderScriptUpdateBanner()}`;"), "userscript relay warnings must render inside the panel notice slot");
+assert.ok(extensionSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}`;"), "extension relay warnings must render inside the panel notice slot");
+assert.equal(userscriptSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "relay warning must not use a page-level fixed overlay");
+assert.equal(extensionSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "extension relay warning must not use a page-level fixed overlay");
+const renderRelayPrompt = extractFunction(userscriptSource, "renderBgmApiRelayPrompt");
+assert.match(renderRelayPrompt, /class=\"biligumi-api-relay-inline\"/, "relay warning must use the inline panel wrapper");
+assert.equal(renderRelayPrompt.includes("aria-modal=\"true\""), false, "inline relay warning must not claim modal semantics");
+assert.match(renderRelayPrompt, /role=\"alert\"/, "inline relay warning must announce itself accessibly");
+const mountRelayPrompt = extractFunction(userscriptSource, "mountBgmApiRelayPrompt");
+assert.equal(mountRelayPrompt.includes("document.body.appendChild"), false, "relay warning must not mount outside the plugin panel");
+assert.match(mountRelayPrompt, /render\(\)/, "mounting the relay warning must rerender the plugin panel");
+const requestRelayChoice = extractFunction(userscriptSource, "requestBgmApiFallbackChoice");
+assert.equal(requestRelayChoice.includes("state.panelCollapsed = false"), false, "inline relay warnings must not force a collapsed full panel open");
+assert.equal(requestRelayChoice.includes("state.standaloneSearchExpanded = true"), false, "inline relay warnings must not force a collapsed standalone panel open");
+assert.ok(requestRelayChoice.includes('settleBgmApiRelayPrompt("cancel", { preserveNotice: true })'), "a relay prompt created while the full panel is collapsed must settle as cancel immediately");
+const togglePanelCollapsed = extractFunction(userscriptSource, "togglePanelCollapsed");
+assert.ok(togglePanelCollapsed.includes('settleBgmApiRelayPrompt("cancel", { preserveNotice: true })'), "collapsing an active relay prompt must settle it as cancel");
+const settleRelayPrompt = extractFunction(userscriptSource, "settleBgmApiRelayPrompt");
+assert.ok(settleRelayPrompt.includes("state.apiRelayRetryNotice = {"), "collapse cancellation must retain a retry notice for the next expansion");
+const renderRelayRetryNotice = extractFunction(userscriptSource, "renderBgmApiRelayRetryNotice");
+assert.match(renderRelayRetryNotice, /retry-official-api-notice/);
+assert.match(renderRelayRetryNotice, /use-api-relay-notice/);
+assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
+assert.ok(userscriptSource.includes("relayScope: retryScope"), "request fallback must receive the temporary load scope");
+assert.ok(userscriptSource.includes("const maxRetries = Number.isInteger(options.maxRetries)"), "request retry policy must support the short automatic-fallback probe");
+assert.ok(userscriptSource.includes("Number(options.requestTimeoutMs) > 0"), "single requests must support a scoped timeout override");
+const userscriptRelayAutoSave = extractFunction(userscriptSource, "bindSettingsAutoSave");
+const extensionRelayAutoSave = extractFunction(extensionSource, "bindSettingsAutoSave");
+for (const [label, relayAutoSave] of [["userscript", userscriptRelayAutoSave], ["extension", extensionRelayAutoSave]]) {
+  assert.ok(relayAutoSave.includes("state.apiRelayAutoFallbackConfirmationPending = true"), label + " must enter a protected relay-confirmation state before awaiting consent");
+  assert.ok(relayAutoSave.includes("state.apiRelayAutoFallbackConfirmationPending = false"), label + " must leave the protected relay-confirmation state after consent settles");
+  assert.ok(relayAutoSave.includes("relayAutoFallbackInput.checked = false"), label + " must restore the checkbox after cancellation");
+}
+assert.ok(extensionRelayAutoSave.includes("await queueApplySettingsFromDialog()"), "extension must serialize the post-confirmation setting write");
+
+const relaySettingSandbox = {
+  state: {
+    apiRelayAutoFallbackEnabled: false,
+    apiRelayAutoFallbackConfirmationPending: true,
+  },
+  Boolean,
+};
+vm.createContext(relaySettingSandbox);
+vm.runInContext(
+  extractFunction(userscriptSource, "getApiRelayAutoFallbackSetting") + "\n;globalThis.readRelaySetting = getApiRelayAutoFallbackSetting;",
+  relaySettingSandbox,
+);
+const checkedRelayInput = { checked: true };
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), false, "an unconfirmed checked box must not authorize automatic relay fallback during a concurrent save");
+relaySettingSandbox.state.apiRelayAutoFallbackConfirmationPending = false;
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), true, "the checked box may be persisted only after confirmation finishes");
+relaySettingSandbox.state.apiRelayAutoFallbackEnabled = true;
+relaySettingSandbox.state.apiRelayAutoFallbackConfirmationPending = true;
+checkedRelayInput.checked = false;
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), true, "a concurrent save must preserve the last confirmed value while confirmation is pending");
 
 const requestSandbox = {
   API_BASE: "https://api.bgm.tv",
   BGM_API_RELAYS: Object.freeze({
-    "api.bangumi.pro": "https://api.bangumi.pro",
-    "bgmapi.anibt.net": "https://bgmapi.anibt.net",
+    "api.bgmapi.com": "https://api.bgmapi.com",
   }),
-  state: { token: "secret-token" },
+  state: { token: "secret-token", apiRelayAutoFallbackEnabled: false },
   pendingRequests: new Map(),
   REQUEST_DEDUP_TTL: 500,
+  BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS: 2000,
   URL,
   window: { setTimeout(callback) { callback(); } },
   calls: [],
@@ -86,12 +159,35 @@ vm.runInContext([
 ].join("\n"), requestSandbox);
 
 (async () => {
-  requestSandbox.choice = "api.bangumi.pro";
+  requestSandbox.choice = "api.bgmapi.com";
   const result = await requestSandbox.api.bgmRequest("/v0/me", { auth: true, dedup: false });
   assert.equal(requestSandbox.calls[0].url, "https://api.bgm.tv/v0/me", "official API is always attempted first");
-  assert.equal(requestSandbox.calls[1].url, "https://api.bangumi.pro/v0/me", "relay is used only after explicit choice");
+  assert.equal(requestSandbox.calls[1].url, "https://api.bgmapi.com/v0/me", "relay is used only after explicit choice");
   assert.equal(requestSandbox.calls[1].options.authToken, "secret-token");
-  assert.equal(result.url, "https://api.bangumi.pro/v0/me");
+  assert.equal(result.url, "https://api.bgmapi.com/v0/me");
+
+  requestSandbox.calls.length = 0;
+  requestSandbox.state.apiRelayAutoFallbackEnabled = true;
+  requestSandbox.choice = "cancel";
+  const automaticResult = await requestSandbox.api.bgmRequest("/v0/me", { auth: true, dedup: false });
+  assert.deepEqual(requestSandbox.calls.map((call) => call.url), [
+    "https://api.bgm.tv/v0/me",
+    "https://api.bgmapi.com/v0/me",
+  ], "opt-in automatic fallback must still try the official API first");
+  assert.equal(automaticResult.url, "https://api.bgmapi.com/v0/me");
+  assert.equal(requestSandbox.calls[0].options.maxRetries, 0, "automatic fallback must not retry the official probe");
+  assert.equal(requestSandbox.calls[0].options.requestTimeoutMs, 2000, "automatic fallback must use the short official probe timeout");
+  assert.equal(requestSandbox.calls[1].options.maxRetries, undefined, "relay request must use the normal request policy");
+  assert.equal(requestSandbox.calls[1].options.requestTimeoutMs, undefined, "relay request must keep the normal timeout");
+  requestSandbox.state.apiRelayAutoFallbackEnabled = false;
+
+  requestSandbox.calls.length = 0;
+  const forcedRelayScope = { choice: "api.bgmapi.com", promise: null };
+  const forcedRelayResult = await requestSandbox.api.bgmRequest("/v0/subjects/1", { auth: true, dedup: false, relayScope: forcedRelayScope });
+  assert.deepEqual(requestSandbox.calls.map((call) => call.url), [
+    "https://api.bgmapi.com/v0/subjects/1",
+  ], "an expanded retry notice relay choice must apply directly to the whole retry scope");
+  assert.equal(forcedRelayResult.url, "https://api.bgmapi.com/v0/subjects/1");
 
   requestSandbox.calls.length = 0;
   requestSandbox.choice = "official";
@@ -102,7 +198,7 @@ vm.runInContext([
   ]);
 
   assert.throws(
-    () => requestSandbox.api.buildBgmApiUrl("https://evil.example/v0/me", "https://api.bangumi.pro"),
+    () => requestSandbox.api.buildBgmApiUrl("https://evil.example/v0/me", "https://api.bgmapi.com"),
     /Blocked Bangumi API target/,
   );
 
@@ -113,10 +209,10 @@ vm.runInContext([
   assert.equal(requestSandbox.api.isRelayEligibleTransportError(transportError), true);
   assert.equal(requestSandbox.api.isRelayEligibleTransportError({ status: 503 }), false, "HTTP 5xx must not expose relay choice");
   assert.equal(requestSandbox.api.isRelayEligibleTransportError({ status: 401 }), false, "auth errors must not expose relay choice");
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://api.bangumi.pro/v0/me", "https://api.bangumi.pro/v0/me"), true);
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://evil.example/v0/me", "https://api.bangumi.pro/v0/me"), false);
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://api.bgmapi.com/v0/me", "https://api.bgmapi.com/v0/me"), true);
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("https://evil.example/v0/me", "https://api.bgmapi.com/v0/me"), false);
   assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bgm.tv/v0/me"), true, "official responses may omit finalUrl");
-  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bangumi.pro/v0/me"), false, "relay responses must fail closed when finalUrl is unavailable");
+  assert.equal(requestSandbox.api.isExpectedBgmApiFinalUrl("", "https://api.bgmapi.com/v0/me"), false, "relay responses must fail closed when finalUrl is unavailable");
 
   const backgroundStart = backgroundSource.indexOf("  function normalizeHttpRequest(");
   const backgroundEnd = backgroundSource.indexOf("  function tryParseJson(", backgroundStart);
@@ -132,7 +228,7 @@ vm.runInContext([
   vm.runInContext(backgroundBlock + "\n;globalThis.api = { normalizeHttpRequest, classifyHttpTarget, filterRequestHeaders, isAllowedHttpSender };", bgSandbox);
 
   const normalized = bgSandbox.api.normalizeHttpRequest({
-    url: "https://api.bangumi.pro/v0/me",
+    url: "https://api.bgmapi.com/v0/me",
     method: "GET",
     headers: { Authorization: "Bearer secret", Cookie: "forbidden", Origin: "forbidden" },
   });
@@ -142,7 +238,7 @@ vm.runInContext([
   assert.equal(Object.prototype.hasOwnProperty.call(normalized.headers, "Cookie"), false);
   assert.equal(Object.prototype.hasOwnProperty.call(normalized.headers, "Origin"), false);
   assert.equal(bgSandbox.api.classifyHttpTarget("https://evil.example/v0/me"), "");
-  assert.equal(bgSandbox.api.classifyHttpTarget("https://api.bangumi.pro/not-v0/me"), "");
+  assert.equal(bgSandbox.api.classifyHttpTarget("https://api.bgmapi.com/not-v0/me"), "");
   assert.equal(bgSandbox.api.isAllowedHttpSender({ frameId: 0, tab: { id: 1, url: "https://www.bilibili.com/video/BV1xx" } }), true);
   assert.equal(bgSandbox.api.isAllowedHttpSender({ frameId: 1, tab: { id: 1, url: "https://www.bilibili.com/video/BV1xx" } }), false);
 
@@ -162,8 +258,29 @@ vm.runInContext([
   const siblingChoice = concurrentSandbox.choose({ authenticated: true });
   assert.equal(concurrentState.apiRelayPrompt.authenticated, true, "an authenticated sibling must upgrade the shared warning");
   assert.equal(concurrentSandbox.mountCalls, 1, "the upgraded warning must be rendered before consent");
-  promptResolve("api.bangumi.pro");
-  assert.equal(await siblingChoice, "api.bangumi.pro", "concurrent failures in the same prompt wave share the explicit choice");
+  promptResolve("api.bgmapi.com");
+  assert.equal(await siblingChoice, "api.bgmapi.com", "concurrent failures in the same prompt wave share the explicit choice");
+
+  const scopeSandbox = { state: { apiRelayPrompt: null }, Boolean, Promise };
+  vm.createContext(scopeSandbox);
+  vm.runInContext([
+    extractFunction(userscriptSource, "createBgmApiRelayScope"),
+    extractFunction(userscriptSource, "requestBgmApiFallbackChoice"),
+    "globalThis.api = { createBgmApiRelayScope, requestBgmApiFallbackChoice };",
+  ].join("\n"), scopeSandbox);
+  const loadScope = scopeSandbox.api.createBgmApiRelayScope();
+  loadScope.choice = "api.bgmapi.com";
+  assert.equal(
+    await scopeSandbox.api.requestBgmApiFallbackChoice({ authenticated: true, relayScope: loadScope }),
+    "api.bgmapi.com",
+    "later requests in one load batch must reuse the explicit choice without mounting a second dialog",
+  );
+  loadScope.choice = "official";
+  assert.equal(
+    await scopeSandbox.api.requestBgmApiFallbackChoice({ relayScope: loadScope }),
+    "official",
+    "retry-official choice must also be reused for the rest of one load batch",
+  );
 
   console.log("Bangumi API relay tests passed");
 })().catch((error) => {

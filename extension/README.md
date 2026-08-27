@@ -49,12 +49,13 @@
 - 主面板「我的完成度」右侧可按视频切换「自动 / 暂停」进度追踪（不在设置里）。
 - 当前条目的 OP/ED 跳过开关（按番剧保存）和全局默认秒数；悬停播放器「跳OP/ED」按钮可用滑条为当前番剧设置专属时长。
 - 页面面板里只提示浏览器级/PiP 快捷键入口；实际键位请到扩展快捷键页查看或修改。
+- 设置中的「官方 API 连接失败后自动使用 api.bgmapi.com」默认关闭；启用后仍先探测官方 api.bgm.tv，但探测超时缩短为约 2 秒且不额外重试，连接失败或超时后自动回退并跳过确认弹窗。
 
 扩展详情页的“扩展程序选项”只提供插件版说明和快捷键入口提示。数据保存在 `chrome.storage.local`，与油猴脚本管理器存储相互独立。
 
 ## 限制
 
-<span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bangumi.pro</code> 或 <code>bgmapi.anibt.net</code> 后，当前失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它们不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
+<span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bgmapi.com</code> 或启用自动回退后，失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
 - Manifest commands 能否在浏览器完全非焦点时触发，取决于 Chrome/Edge、操作系统和快捷键是否被系统占用。
 - 插件版由 userscript 主体迁移而来，后续如果 userscript 更新，需要同步重新生成或移植 `extension/content.js`。
 - 如果目标标签页还没有加载 content script，或 Bilibili 页面结构阻止脚本访问播放器，命令可能不会生效。

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Biligumi Connector",
-  "version": "0.3.16",
+  "version": "0.3.15",
   "description": "Embed Bangumi collection, rating, episode progress and OP/ED skip controls into Bilibili watch pages.",
   "permissions": [
     "storage",
@@ -13,8 +13,7 @@
     "https://www.bilibili.com/video/*",
     "https://www.bilibili.com/bangumi/play/*",
     "https://api.bgm.tv/*",
-    "https://api.bangumi.pro/*",
-    "https://bgmapi.anibt.net/*",
+    "https://api.bgmapi.com/*",
     "https://bgm.tv/*"
   ],
   "background": {
