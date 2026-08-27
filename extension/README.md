@@ -54,7 +54,7 @@
 
 ## 限制
 
-<span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bangumi.pro</code> 或 <code>bgmapi.anibt.net</code> 后，当前失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它们不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
+<span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bgmapi.com</code> 后，当前失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它们不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
 - Manifest commands 能否在浏览器完全非焦点时触发，取决于 Chrome/Edge、操作系统和快捷键是否被系统占用。
 - 插件版由 userscript 主体迁移而来，后续如果 userscript 更新，需要同步重新生成或移植 `extension/content.js`。
 - 如果目标标签页还没有加载 content script，或 Bilibili 页面结构阻止脚本访问播放器，命令可能不会生效。

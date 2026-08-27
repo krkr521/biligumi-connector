@@ -72,7 +72,7 @@ Access Token 可以在 Bangumi 官方页面生成：
 ## 已知限制
 
 - 需要自行提供 Bangumi Access Token；多数番剧第一次使用仍需要手动确认绑定。
-<span style="color:#bd2441"><strong>危险：</strong>如果在官方 API 无法连接时手动选择 <code>api.bangumi.pro</code> 或 <code>bgmapi.anibt.net</code>，Bangumi Access Token、<code>Authorization</code> 请求头、收藏/评分/进度等请求内容会经过第三方服务器。第三方可能读取或记录这些信息；它们不是 Bangumi 官方服务。仅在信任对应站点时使用，并在怀疑泄露后立即吊销 Token。</span>
+<span style="color:#bd2441"><strong>危险：</strong>如果在官方 API 无法连接时手动选择 <code>api.bgmapi.com</code>，Bangumi Access Token、<code>Authorization</code> 请求头、收藏/评分/进度等请求内容会经过第三方服务器。第三方可能读取或记录这些信息；它们不是 Bangumi 官方服务。仅在信任对应站点时使用，并在怀疑泄露后立即吊销 Token。</span>
 - Bilibili 页面结构变动可能影响面板位置、弹幕按钮或官方番剧页兼容。
 - 标题解析和候选推荐不能保证完全准确；多季度合集只需在每个季度/分割范围的起点确认一次绑定，无法识别的自由格式标题仍需手动解绑或调整。
 - 长视频默认会弹出多集合一确认；勾选「遇到长视频时自动识别」后将不再询问并直接按多集处理。它假设正片各集连续排列。若 UP 在集间插入额外片段、Bangumi 时长资料不准确或首集起点未校准，推测结果可能偏移。只要 Bangumi 存在缺失的单集时长，或累计时间线比视频总长多出超过 5 分钟，就只显示推测，不自动更新进度。
