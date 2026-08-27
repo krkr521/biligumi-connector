@@ -9529,8 +9529,6 @@
     let resolveChoice = null;
     const promise = new Promise((resolve) => { resolveChoice = resolve; });
     state.apiRelayPrompt = { authenticated: Boolean(authenticated), returnFocus, resolve: resolveChoice, promise };
-    if (shouldRenderFullPanel()) state.panelCollapsed = false;
-    else state.standaloneSearchExpanded = true;
     document.addEventListener("keydown", handleBgmApiRelayKeydown, true);
     mountBgmApiRelayPrompt();
     const scopedPromise = promise.then((choice) => {

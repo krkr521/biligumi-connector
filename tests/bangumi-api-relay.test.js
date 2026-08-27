@@ -68,8 +68,8 @@ const mountRelayPrompt = extractFunction(userscriptSource, "mountBgmApiRelayProm
 assert.equal(mountRelayPrompt.includes("document.body.appendChild"), false, "relay warning must not mount outside the plugin panel");
 assert.match(mountRelayPrompt, /render\(\)/, "mounting the relay warning must rerender the plugin panel");
 const requestRelayChoice = extractFunction(userscriptSource, "requestBgmApiFallbackChoice");
-assert.match(requestRelayChoice, /state\.panelCollapsed = false/, "full panels must open to show the inline relay warning");
-assert.match(requestRelayChoice, /state\.standaloneSearchExpanded = true/, "standalone panels must open to show the inline relay warning");
+assert.equal(requestRelayChoice.includes("state.panelCollapsed = false"), false, "inline relay warnings must not force a collapsed full panel open");
+assert.equal(requestRelayChoice.includes("state.standaloneSearchExpanded = true"), false, "inline relay warnings must not force a collapsed standalone panel open");
 assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
 assert.ok(userscriptSource.includes("relayScope: options.relayScope || null"), "request fallback must receive the temporary load scope");
 assert.ok(userscriptSource.includes("const maxRetries = Number.isInteger(options.maxRetries)"), "request retry policy must support the short automatic-fallback probe");
