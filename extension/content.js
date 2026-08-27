@@ -381,13 +381,17 @@
       margin-top: 12px;
     }
     #${API_RELAY_ID} .biligumi-button {
-      min-height: 30px;
-      padding: 4px 10px;
+      min-height: 32px;
+      padding: 5px 12px;
       border: 1px solid var(--bgm-border);
-      border-radius: 6px;
+      border-radius: 999px;
       background: #fff;
       color: var(--bgm-ink);
       font: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      line-height: 1.4;
+      white-space: nowrap;
       cursor: pointer;
       transition: background .16s, border-color .16s, color .16s;
     }

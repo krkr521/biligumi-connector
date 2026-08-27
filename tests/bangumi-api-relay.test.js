@@ -56,6 +56,7 @@ assert.ok(extensionSource.includes("writeValueAsync(STORAGE.apiRelayAutoFallback
 assert.ok(userscriptSource.includes("Bangumi Access Token"));
 assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
+assert.match(userscriptSource, /#\$\{API_RELAY_ID\} \.biligumi-button \{[\s\S]*?min-height: 32px;[\s\S]*?padding: 5px 12px;[\s\S]*?border-radius: 999px;[\s\S]*?font-weight: 600;/, "relay actions must share one pill-shaped button style");
 assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderScriptUpdateBanner()}`;"), "userscript relay warning must render inside the panel notice slot");
 assert.ok(extensionSource.includes("return renderBgmApiRelayPrompt();"), "extension relay warning must render inside the panel notice slot");
 assert.equal(userscriptSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "relay warning must not use a page-level fixed overlay");
