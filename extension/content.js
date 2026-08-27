@@ -380,49 +380,46 @@
       gap: 7px;
       margin-top: 12px;
     }
-    #${API_RELAY_ID} .biligumi-button {
-      min-height: 32px;
-      padding: 5px 12px;
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button {
+      min-height: 30px;
+      padding: 4px 10px;
       border: 1px solid var(--bgm-border);
-      border-radius: 999px;
+      border-radius: 6px;
       background: #fff;
       color: var(--bgm-ink);
       font: inherit;
-      font-size: 13px;
-      font-weight: 600;
-      line-height: 1.4;
       white-space: nowrap;
       cursor: pointer;
       transition: background .16s, border-color .16s, color .16s;
     }
-    #${API_RELAY_ID} .biligumi-button:hover {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button:hover {
       border-color: var(--bgm-pink);
       background: #fff7f9;
       color: var(--bgm-pink);
     }
-    #${API_RELAY_ID} .biligumi-button.primary {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button.primary {
       border-color: var(--bgm-pink);
       background: var(--bgm-pink);
       color: #fff;
       font-weight: 600;
     }
-    #${API_RELAY_ID} .biligumi-button.primary:hover {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button.primary:hover {
       border-color: #c25f75;
       background: #c25f75;
       color: #fff;
     }
-    #${API_RELAY_ID} .biligumi-button.danger {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button.danger {
       border-color: #d96363;
       background: #d96363;
       color: #fff;
       font-weight: 600;
     }
-    #${API_RELAY_ID} .biligumi-button.danger:hover {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button.danger:hover {
       border-color: #c94e4e;
       background: #c94e4e;
       color: #fff;
     }
-    #${API_RELAY_ID} .biligumi-button:disabled {
+    #${PANEL_ID} #${API_RELAY_ID} .biligumi-button:disabled {
       cursor: not-allowed;
       opacity: .55;
     }
