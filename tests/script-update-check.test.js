@@ -95,7 +95,7 @@ assert.equal(renderPanel.includes("renderScriptUpdateBanner()"), false, "the upd
 assert.ok(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;'), "collapsed bound panel must render only its header and pending inline confirmation");
 
 const renderPanelNoticeSlot = extractFunction(source, "renderPanelNoticeSlot");
-assert.match(renderPanelNoticeSlot, /return renderScriptUpdateBanner\(\)/, "userscript panel notice slot must render the update warning");
+assert.match(renderPanelNoticeSlot, /renderScriptUpdateBanner\(\)/, "userscript panel notice slot must render the update warning");
 const renderSearchOrSubject = extractFunction(source, "renderSearchOrSubject");
 assert.match(renderSearchOrSubject, /biligumi-search-pane[\s\S]*?renderPanelNoticeSlot\(\)/, "unbound full panels must place the update warning inside their content pane");
 assert.match(renderSearchOrSubject, /biligumi-card-body[\s\S]*?renderPanelNoticeSlot\(\)/, "bound full panels must place the update warning inside their card body");
