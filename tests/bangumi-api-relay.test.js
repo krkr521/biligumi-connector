@@ -40,7 +40,9 @@ for (const name of [
 
 assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
 assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
-assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 10000;"));
+assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 4000;"));
+assert.ok(userscriptSource.includes("const REQUEST_MAX_RETRIES = 1;"));
+assert.ok(userscriptSource.includes("const REQUEST_RETRY_BASE_MS = 500;"));
 assert.ok(userscriptSource.includes("timeout: BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
 assert.ok(userscriptSource.includes("官方 API 连接失败后自动使用 api.bgmapi.com"));
