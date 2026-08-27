@@ -157,9 +157,10 @@
   let bindingsUpdateQueue = Promise.resolve();
   const COLLECTION_COMMENT_MAX_LENGTH = 380;
   const REQUEST_DEDUP_TTL = 500;
-  const REQUEST_MAX_RETRIES = 3;
-  const REQUEST_RETRY_BASE_MS = 800;
-  const BGM_API_REQUEST_TIMEOUT_MS = 10000;
+  const REQUEST_MAX_RETRIES = 1;
+  const REQUEST_RETRY_BASE_MS = 500;
+  const BGM_API_REQUEST_TIMEOUT_MS = 4000;
+  const BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS = 2000;
   const AUTO_WATCH_LARGE_FORWARD_JUMP_SECONDS = 5 * 60;
   const AUTO_WATCH_TIMEUPDATE_MIN_INTERVAL_MS = 1000;
   const AUTO_WATCH_FAILURE_COOLDOWN_BASE_MS = 5000;
@@ -4525,7 +4526,7 @@
                 <input type="checkbox" data-role="settings-api-relay-auto-fallback" ${state.apiRelayAutoFallbackEnabled ? "checked" : ""}>
                 <span>官方 API 连接失败后自动使用 api.bgmapi.com，不再逐次弹窗。</span>
               </label>
-              <div class="biligumi-settings-help">始终先尝试官方 api.bgm.tv；仅在连接失败或超时后自动回退。该选择保存在当前浏览器中，可随时关闭。</div>
+              <div class="biligumi-settings-help">始终先快速尝试官方 api.bgm.tv；启用后官方探测约 2 秒且不额外重试，仅在连接失败或超时后自动回退。该选择保存在当前浏览器中，可随时关闭。</div>
               <div class="biligumi-settings-help warning"><strong>危险：</strong>启用后，Bangumi Access Token、Authorization 请求头、收藏、评分和进度等 API 内容可能自动发送给第三方 api.bgmapi.com。它不是 Bangumi 官方服务，可能读取或记录这些信息。</div>
             </div>
           </div>
@@ -9092,7 +9093,10 @@
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
     const requestOptions = { ...options, authToken };
-    const promise = bgmRequestWithRetry(method, url, data, requestOptions).catch(async (error) => {
+    const officialRequestOptions = state.apiRelayAutoFallbackEnabled
+      ? { ...requestOptions, maxRetries: 0, requestTimeoutMs: BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS }
+      : requestOptions;
+    const promise = bgmRequestWithRetry(method, url, data, officialRequestOptions).catch(async (error) => {
       if (!isRelayEligibleTransportError(error)) throw error;
       const choice = state.apiRelayAutoFallbackEnabled
         ? "api.bgmapi.com"
@@ -9167,12 +9171,13 @@
 
   async function bgmRequestWithRetry(method, url, data, options) {
     let lastError = null;
-    for (let attempt = 0; attempt <= REQUEST_MAX_RETRIES; attempt += 1) {
+    const maxRetries = Number.isInteger(options.maxRetries) ? Math.max(0, options.maxRetries) : REQUEST_MAX_RETRIES;
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
       try {
         return await bgmRequestOnce(method, url, data, options);
       } catch (error) {
         lastError = error;
-        if (!isRetryableApiError(error) || attempt >= REQUEST_MAX_RETRIES) throw error;
+        if (!isRetryableApiError(error) || attempt >= maxRetries) throw error;
         await sleep(REQUEST_RETRY_BASE_MS * Math.pow(2, attempt));
       }
     }
@@ -9194,7 +9199,7 @@
         headers,
         data,
         responseType: "json",
-        timeout: BGM_API_REQUEST_TIMEOUT_MS,
+        timeout: Number(options.requestTimeoutMs) > 0 ? Number(options.requestTimeoutMs) : BGM_API_REQUEST_TIMEOUT_MS,
         onload: (response) => {
           if (!isExpectedBgmApiFinalUrl(response.finalUrl, url)) {
             reject(new Error("Bangumi API 请求发生了跨站重定向，已拒绝响应；Token 可能已被第三方转发，请立即吊销并重新生成。"));

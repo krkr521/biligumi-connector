@@ -90,6 +90,11 @@ assert.match(renderSettingsDialog, /data-role="settings-update-gitcode"/);
 assert.match(renderSettingsDialog, /data-role="settings-update-status"/);
 assert.match(renderSettingsDialog, /aria-live="polite"/);
 
+const renderPanel = extractFunction(source, "render");
+assert.ok(renderPanel.includes('collapseStandalonePanel ? "" : renderScriptUpdateBanner()'), "collapsed standalone panel must hide the update banner");
+assert.ok(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;'), "collapsed bound panel must render only its header and pending inline confirmation");
+assert.equal(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}`;'), false, "collapsed bound panel must not render the update banner");
+
 const renderScriptUpdateBanner = extractFunction(source, "renderScriptUpdateBanner");
 assert.match(source, /#\$\{PANEL_ID\} \.biligumi-update-banner \.biligumi-update-banner-actions \.biligumi-button \{[\s\S]*?border-radius: 6px;/);
 assert.match(renderScriptUpdateBanner, /data-action="open-script-update"/);

@@ -40,8 +40,11 @@ for (const name of [
 
 assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
 assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
-assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 10000;"));
-assert.ok(userscriptSource.includes("timeout: BGM_API_REQUEST_TIMEOUT_MS,"));
+assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 4000;"));
+assert.ok(userscriptSource.includes("const BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS = 2000;"));
+assert.ok(userscriptSource.includes("const REQUEST_MAX_RETRIES = 1;"));
+assert.ok(userscriptSource.includes("const REQUEST_RETRY_BASE_MS = 500;"));
+assert.ok(userscriptSource.includes("timeout: Number(options.requestTimeoutMs) > 0 ? Number(options.requestTimeoutMs) : BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
 assert.ok(userscriptSource.includes("官方 API 连接失败后自动使用 api.bgmapi.com"));
 assert.ok(userscriptSource.includes('confirmLabel: "启用自动回退"'), "enabling persistent relay fallback must require explicit danger confirmation");
@@ -55,6 +58,8 @@ assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
 assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
 assert.ok(userscriptSource.includes("relayScope: options.relayScope || null"), "request fallback must receive the temporary load scope");
+assert.ok(userscriptSource.includes("const maxRetries = Number.isInteger(options.maxRetries)"), "request retry policy must support the short automatic-fallback probe");
+assert.ok(userscriptSource.includes("Number(options.requestTimeoutMs) > 0"), "single requests must support a scoped timeout override");
 
 const requestSandbox = {
   API_BASE: "https://api.bgm.tv",
@@ -64,6 +69,7 @@ const requestSandbox = {
   state: { token: "secret-token", apiRelayAutoFallbackEnabled: false },
   pendingRequests: new Map(),
   REQUEST_DEDUP_TTL: 500,
+  BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS: 2000,
   URL,
   window: { setTimeout(callback) { callback(); } },
   calls: [],
@@ -108,6 +114,10 @@ vm.runInContext([
     "https://api.bgmapi.com/v0/me",
   ], "opt-in automatic fallback must still try the official API first");
   assert.equal(automaticResult.url, "https://api.bgmapi.com/v0/me");
+  assert.equal(requestSandbox.calls[0].options.maxRetries, 0, "automatic fallback must not retry the official probe");
+  assert.equal(requestSandbox.calls[0].options.requestTimeoutMs, 2000, "automatic fallback must use the short official probe timeout");
+  assert.equal(requestSandbox.calls[1].options.maxRetries, undefined, "relay request must use the normal request policy");
+  assert.equal(requestSandbox.calls[1].options.requestTimeoutMs, undefined, "relay request must keep the normal timeout");
   requestSandbox.state.apiRelayAutoFallbackEnabled = false;
 
   requestSandbox.calls.length = 0;
