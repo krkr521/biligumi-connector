@@ -11,6 +11,7 @@
 // @connect      bgm.tv
 // @connect      raw.githubusercontent.com
 // @connect      api.gitcode.com
+// @connect      raw.gitcode.com
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
@@ -43,6 +44,7 @@
   const episodeTooltipPointer = { x: 0, y: 0 };
   const SCRIPT_VERSION = "0.7.15";
   const SCRIPT_UPDATE_TIMEOUT_MS = 10000;
+  const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
     {
       id: "github",
@@ -53,8 +55,9 @@
     {
       id: "gitcode",
       label: "GitCode",
-      url: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/raw/userscript/biligumi-connector.user.js?ref=master",
-      checkUrl: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/raw/userscript/biligumi-connector.user.js?ref=master",
+      branchUrl: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/branches/master",
+      rawUrlPrefix: "https://raw.gitcode.com/krkr521/biligumi-connector/raw/",
+      rawUrlSuffix: "/userscript/biligumi-connector.user.js",
     },
   ];
   const STORAGE = {
@@ -83,6 +86,8 @@
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
     animeMovieClassifications: "biligumi.animeMovieClassifications.v2",
     disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
+    scriptUpdateCache: "biligumi.scriptUpdateCache",
+    scriptUpdateDismissedVersion: "biligumi.scriptUpdateDismissedVersion",
     deleteBridge: "biligumi.deleteBridge",
   };
 
@@ -1102,6 +1107,46 @@
       border-color: #f3c4cd;
       background: #fff0f2;
       color: #bd2441;
+    }
+    .biligumi-update-banner {
+      margin: 10px 0 0;
+      padding: 10px;
+      border: 1px solid #efc4cc;
+      border-radius: 8px;
+      background: #fff7f9;
+      color: #6f3b4a;
+    }
+    .biligumi-update-banner-title {
+      color: #c25f75;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .biligumi-update-banner-copy {
+      margin-top: 3px;
+      color: #7b5964;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .biligumi-update-banner-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    .biligumi-update-banner-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 9px;
+      font-size: 12px;
+    }
+    .biligumi-update-banner-actions .biligumi-button.dismiss {
+      border-color: transparent;
+      background: transparent;
+      color: #7b8794;
+    }
+    .biligumi-update-banner-actions .biligumi-button.dismiss:hover {
+      border-color: #dfe3e8;
+      background: #fff;
+      color: var(--bgm-blue);
     }
     .biligumi-foot {
       display: flex;
@@ -2862,7 +2907,7 @@
   let scriptUpdateCheckSeq = 0;
   let scriptUpdateCheckPromise = null;
   let scriptUpdateOpening = false;
-  let scriptUpdateState = { status: "idle", remoteVersion: "", source: null };
+  let scriptUpdateState = readCachedScriptUpdateState();
   let longVideoBindWaitSeq = 0;
   let longVideoBindWaitTimer = 0;
   let episodeContextRefreshSeq = 0;
@@ -2882,6 +2927,7 @@
     refreshPageContext();
     state.subjectId = getCurrentBinding();
     injectWhenReady();
+    checkScriptUpdate().catch(() => {});
     observeRouteChanges();
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
@@ -3418,7 +3464,7 @@
       const nonMainKeyword = getNonMainPreviewKeyword();
       const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
-      panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
+      panel.innerHTML = `${renderStandaloneSearchPanel(nonMainKeyword)}${renderScriptUpdateBanner()}`;
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3448,7 +3494,7 @@
     `;
 
     if (state.panelCollapsed) {
-      panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;
+      panel.innerHTML = `${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}`;
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3460,6 +3506,7 @@
 
     panel.innerHTML = `
       ${headerHtml}
+      ${renderScriptUpdateBanner()}
       ${renderPanelProgressSlot()}
       ${renderSearchOrSubject()}
       ${renderCollectionMappingHint()}
@@ -4263,6 +4310,32 @@
     return `<div class="biligumi-notice">检测到混合合集，但当前分P「${escapeHtml(layout.part.title)}」无法识别为正片，已停止继承整 BV 绑定和自动进度。</div>`;
   }
 
+  function isScriptUpdateNoticeVisible() {
+    if (scriptUpdateState.status !== "available" || !scriptUpdateState.remoteVersion) return false;
+    return String(readValue(STORAGE.scriptUpdateDismissedVersion, "")) !== String(scriptUpdateState.remoteVersion);
+  }
+
+  function renderScriptUpdateBanner() {
+    if (!isScriptUpdateNoticeVisible()) return "";
+    const sourceSuffix = scriptUpdateState.source && scriptUpdateState.source.id === "gitcode" ? " · GitCode 备用源" : "";
+    return `
+      <div class="biligumi-update-banner" role="status" aria-label="Biligumi Connector 有可用更新">
+        <div class="biligumi-update-banner-title">发现新版本 v${escapeHtml(scriptUpdateState.remoteVersion)}</div>
+        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。打开用户脚本后，由 Tampermonkey 确认更新。</div>
+        <div class="biligumi-update-banner-actions">
+          <button type="button" class="biligumi-button primary" data-action="open-script-update">立即更新</button>
+          <button type="button" class="biligumi-button dismiss" data-action="dismiss-script-update">本次更新不再提醒</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function dismissScriptUpdateNotice() {
+    if (!scriptUpdateState.remoteVersion) return;
+    writeValue(STORAGE.scriptUpdateDismissedVersion, scriptUpdateState.remoteVersion);
+    render();
+  }
+
   function renderStandaloneSearchPanel(nonMainKeyword = "") {
     const title = nonMainKeyword || "Bangumi";
     const searchForm = state.standaloneSearchExpanded
@@ -4568,7 +4641,7 @@
             <div class="biligumi-update-status" data-role="settings-update-status" role="status" aria-live="polite">打开设置后自动检查更新。</div>
           </div>
           <div class="biligumi-update-buttons">
-            <button type="button" class="biligumi-button" data-action="open-script-update" data-role="settings-update-now" title="打开最新版用户脚本，由 Tampermonkey 确认安装或更新">立即更新</button>
+            <button type="button" class="biligumi-button" data-action="open-script-update" data-role="settings-update-now" title="打开最新版用户脚本，由 Tampermonkey 确认安装或更新" disabled>立即更新</button>
             <button type="button" class="biligumi-button" data-action="settings-reset">恢复默认</button>
           </div>
         </div>
@@ -5088,7 +5161,8 @@
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
     if (action === "check-script-update") checkScriptUpdate({ force: true }).catch(() => {});
-    if (action === "open-script-update") openLatestUserscript().catch(() => {});
+    if (action === "open-script-update") openLatestUserscript().catch(showError);
+    if (action === "dismiss-script-update") dismissScriptUpdateNotice();
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
     if (action === "clear-settings-token") clearSavedAccessToken().catch(showError);
     if (action === "open-whitelist-space") openWhitelistSpace(target);
@@ -8261,19 +8335,67 @@
     return 0;
   }
 
-  function buildScriptUpdateCheckUrl(source) {
-    const separator = source.checkUrl.includes("?") ? "&" : "?";
-    return `${source.checkUrl}${separator}_biligumi_update=${Date.now()}`;
+  function normalizeScriptUpdateSource(source) {
+    if (!source || !source.url) return null;
+    const sourceId = String(source.id || source.sourceId || "");
+    const url = String(source.url || "");
+    const github = SCRIPT_UPDATE_SOURCES.find((item) => item.id === "github");
+    if (sourceId === "github" && github && url === github.url) return { ...github };
+
+    const gitcode = SCRIPT_UPDATE_SOURCES.find((item) => item.id === "gitcode");
+    if (sourceId !== "gitcode" || !gitcode || !url.startsWith(gitcode.rawUrlPrefix) || !url.endsWith(gitcode.rawUrlSuffix)) return null;
+    const commit = url.slice(gitcode.rawUrlPrefix.length, url.length - gitcode.rawUrlSuffix.length);
+    if (!/^[a-f0-9]{40}$/i.test(commit) || String(source.checkUrl || url) !== url) return null;
+    return { ...gitcode, url, checkUrl: url, commit };
   }
 
-  function fetchScriptSource(source) {
+  function readCachedScriptUpdateState() {
+    const cached = readJsonValue(STORAGE.scriptUpdateCache, null);
+    if (!cached || !cached.remoteVersion || !cached.url) return { status: "idle", remoteVersion: "", source: null };
+    const checkedAt = Number(cached.checkedAt) || 0;
+    const cacheAge = Date.now() - checkedAt;
+    const source = normalizeScriptUpdateSource({
+      id: cached.sourceId,
+      url: cached.url,
+      checkUrl: cached.checkUrl || cached.url,
+    });
+    if (!source || checkedAt <= 0 || cacheAge < 0 || cacheAge > SCRIPT_UPDATE_CACHE_TTL_MS) {
+      return { status: "idle", remoteVersion: "", source: null };
+    }
+    return {
+      status: compareScriptVersions(cached.remoteVersion, SCRIPT_VERSION) > 0 ? "available" : "current",
+      remoteVersion: String(cached.remoteVersion),
+      source,
+      checkedAt,
+    };
+  }
+
+  function cacheScriptUpdateState(updateState) {
+    if (!updateState || !updateState.source || !updateState.remoteVersion) return;
+    writeJsonValue(STORAGE.scriptUpdateCache, {
+      remoteVersion: updateState.remoteVersion,
+      sourceId: updateState.source.id,
+      sourceLabel: updateState.source.label,
+      url: updateState.source.url,
+      checkUrl: updateState.source.checkUrl || updateState.source.url,
+      checkedAt: Date.now(),
+    });
+  }
+
+  function buildScriptUpdateCheckUrl(source) {
+    const checkUrl = source.checkUrl || source.url;
+    const separator = checkUrl.includes("?") ? "&" : "?";
+    return `${checkUrl}${separator}_biligumi_update=${Date.now()}`;
+  }
+
+  function requestScriptUpdateText(url, options = {}) {
     return new Promise((resolve, reject) => {
       GM_xmlhttpRequest({
         method: "GET",
-        url: buildScriptUpdateCheckUrl(source),
+        url,
         timeout: SCRIPT_UPDATE_TIMEOUT_MS,
         responseType: "text",
-        headers: { Accept: "text/plain,*/*" },
+        headers: options.headers || { Accept: "text/plain,*/*" },
         onload(response) {
           const status = Number(response && response.status);
           const text = String(response && response.responseText || "");
@@ -8293,15 +8415,35 @@
     });
   }
 
+  async function resolveScriptUpdateSource(source) {
+    if (source.id !== "gitcode") return source;
+    const branchText = await requestScriptUpdateText(`${source.branchUrl}?_biligumi_update=${Date.now()}`, { headers: { Accept: "application/json" } });
+    const branch = JSON.parse(branchText);
+    const commit = String(branch && branch.commit && branch.commit.id || "").trim();
+    if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error("GitCode 未返回有效提交版本");
+    const url = `${source.rawUrlPrefix}${commit}${source.rawUrlSuffix}`;
+    return { ...source, url, checkUrl: url, commit };
+  }
+
+  function fetchScriptSource(source) {
+    return requestScriptUpdateText(buildScriptUpdateCheckUrl(source));
+  }
+
   async function checkScriptUpdate(options = {}) {
     if (scriptUpdateCheckPromise && !options.force) return scriptUpdateCheckPromise;
+    if (!options.force && scriptUpdateState.source && scriptUpdateState.checkedAt && Date.now() - scriptUpdateState.checkedAt < SCRIPT_UPDATE_CACHE_TTL_MS) {
+      syncSettingsUpdateUi();
+      return scriptUpdateState;
+    }
     const checkSeq = ++scriptUpdateCheckSeq;
+    const previousState = scriptUpdateState;
     scriptUpdateState = { status: "checking", remoteVersion: "", source: null };
     syncSettingsUpdateUi();
 
     const task = (async () => {
-      for (const source of SCRIPT_UPDATE_SOURCES) {
+      for (const configuredSource of SCRIPT_UPDATE_SOURCES) {
         try {
+          const source = await resolveScriptUpdateSource(configuredSource);
           const scriptSource = await fetchScriptSource(source);
           const remoteVersion = parseUserscriptVersion(scriptSource);
           if (!remoteVersion) throw new Error("更新源未返回有效用户脚本");
@@ -8310,16 +8452,22 @@
             status: compareScriptVersions(remoteVersion, SCRIPT_VERSION) > 0 ? "available" : "current",
             remoteVersion,
             source,
+            checkedAt: Date.now(),
           };
+          cacheScriptUpdateState(scriptUpdateState);
           syncSettingsUpdateUi();
+          render();
           return scriptUpdateState;
         } catch (_) {
           // Try the next source. GitHub is preferred; GitCode is the fallback.
         }
       }
       if (checkSeq === scriptUpdateCheckSeq) {
-        scriptUpdateState = { status: "error", remoteVersion: "", source: null };
+        scriptUpdateState = previousState && previousState.source
+          ? previousState
+          : { status: "error", remoteVersion: "", source: null };
         syncSettingsUpdateUi();
+        render();
       }
       return scriptUpdateState;
     })();
@@ -8365,10 +8513,11 @@
 
     const hasUpdate = scriptUpdateState.status === "available";
     updateButton.classList.toggle("primary", hasUpdate);
-    updateButton.disabled = scriptUpdateOpening;
+    updateButton.disabled = scriptUpdateOpening || scriptUpdateState.status === "checking" || scriptUpdateState.status === "error";
+    updateButton.textContent = hasUpdate ? "立即更新" : "重新安装";
     updateButton.setAttribute("aria-label", hasUpdate
       ? `打开 v${scriptUpdateState.remoteVersion} 用户脚本，由 Tampermonkey 确认更新`
-      : "打开最新版用户脚本，由 Tampermonkey 确认安装或更新");
+      : "打开当前版本用户脚本，由 Tampermonkey 确认重新安装");
   }
 
   async function openLatestUserscript() {
@@ -8378,18 +8527,14 @@
     try {
       let result = scriptUpdateState;
       if (!result.source) result = await checkScriptUpdate();
-      const source = result && result.source;
-      if (!source) throw new Error("GitHub 与 GitCode 暂时都无法连接，请稍后再试。");
+      const source = normalizeScriptUpdateSource(result && result.source);
+      if (!source) throw new Error("更新地址未通过安全校验，请重新检查更新后再试。");
       GM_openInTab(source.url, { active: true, insert: true, setParent: true });
-    } catch (error) {
-      if (scriptUpdateState.status !== "error") {
-        scriptUpdateState = { status: "error", remoteVersion: "", source: null };
-      }
-      syncSettingsUpdateUi();
-      throw error;
     } finally {
-      scriptUpdateOpening = false;
-      syncSettingsUpdateUi();
+      window.setTimeout(() => {
+        scriptUpdateOpening = false;
+        syncSettingsUpdateUi();
+      }, 1200);
     }
   }
 
@@ -8405,8 +8550,6 @@
 
   function closeSettings() {
     settleInlineConfirm(false);
-    scriptUpdateCheckSeq += 1;
-    scriptUpdateCheckPromise = null;
     state.settingsOpen = false;
     removeModal();
     render();
@@ -8586,6 +8729,7 @@
     if (!state.settingsOpen) return;
     removeModal();
     mountModal("settings-cancel", renderSettingsDialog());
+    syncSettingsUpdateUi();
   }
 
   function renderSettingsInlineConfirm() {
