@@ -18,6 +18,7 @@ const backgroundSource = fs.readFileSync(path.join(repoRoot, "extension", "backg
 const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "extension", "manifest.json"), "utf8"));
 
 for (const name of [
+  "createBgmApiRelayScope",
   "requestBgmApiFallbackChoice",
   "renderBgmApiRelayPrompt",
   "mountBgmApiRelayPrompt",
@@ -46,6 +47,8 @@ assert.ok(userscriptSource.includes("Bangumi Access Token"));
 assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
 assert.equal(userscriptSource.includes("writeValue(STORAGE.apiRelay"), false, "relay choice must not be persisted");
+assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
+assert.ok(userscriptSource.includes("relayScope: options.relayScope || null"), "request fallback must receive the temporary load scope");
 
 const requestSandbox = {
   API_BASE: "https://api.bgm.tv",
@@ -161,6 +164,27 @@ vm.runInContext([
   assert.equal(concurrentSandbox.mountCalls, 1, "the upgraded warning must be rendered before consent");
   promptResolve("api.bgmapi.com");
   assert.equal(await siblingChoice, "api.bgmapi.com", "concurrent failures in the same prompt wave share the explicit choice");
+
+  const scopeSandbox = { state: { apiRelayPrompt: null }, Boolean, Promise };
+  vm.createContext(scopeSandbox);
+  vm.runInContext([
+    extractFunction(userscriptSource, "createBgmApiRelayScope"),
+    extractFunction(userscriptSource, "requestBgmApiFallbackChoice"),
+    "globalThis.api = { createBgmApiRelayScope, requestBgmApiFallbackChoice };",
+  ].join("\n"), scopeSandbox);
+  const loadScope = scopeSandbox.api.createBgmApiRelayScope();
+  loadScope.choice = "api.bgmapi.com";
+  assert.equal(
+    await scopeSandbox.api.requestBgmApiFallbackChoice({ authenticated: true, relayScope: loadScope }),
+    "api.bgmapi.com",
+    "later requests in one load batch must reuse the explicit choice without mounting a second dialog",
+  );
+  loadScope.choice = "official";
+  assert.equal(
+    await scopeSandbox.api.requestBgmApiFallbackChoice({ relayScope: loadScope }),
+    "official",
+    "retry-official choice must also be reused for the rest of one load batch",
+  );
 
   console.log("Bangumi API relay tests passed");
 })().catch((error) => {

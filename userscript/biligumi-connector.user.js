@@ -6114,8 +6114,9 @@
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
+    const relayScope = createBgmApiRelayScope();
     try {
-      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
@@ -6125,11 +6126,11 @@
         return value;
       });
       const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
-        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
-        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
@@ -6159,8 +6160,9 @@
     const tokenSnapshot = state.token || "";
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     let loadId = 0;
+    const relayScope = createBgmApiRelayScope();
     try {
-      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot) : "";
+      const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
@@ -6170,11 +6172,11 @@
         return value;
       });
       const [subject, episodes, charactersResult, collection, episodeCollections] = await Promise.all([
-        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`), "已读取条目信息"),
-        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200 }), "已读取章节列表"),
-        trackProgress(loadSubjectCharacters(subjectId), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200 }), "已读取观看进度") : Promise.resolve(null),
+        trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
+        trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
+        trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
@@ -6200,9 +6202,9 @@
     }
   }
 
-  async function loadSubjectCharacters(subjectId) {
+  async function loadSubjectCharacters(subjectId, relayScope = null) {
     try {
-      const apiResponse = await bgmRequest(`/v0/subjects/${subjectId}/characters`, { dedup: true });
+      const apiResponse = await bgmRequest(`/v0/subjects/${subjectId}/characters`, { dedup: true, relayScope });
       const characters = Array.isArray(apiResponse) ? apiResponse : [];
       return { characters: sortCharactersLikeBangumi(characters), error: "" };
     } catch (error) {
@@ -6404,15 +6406,15 @@
     return { ...(collection || {}), ...pending };
   }
 
-  async function getCollectionReadPath(subjectId = state.subjectId, tokenSnapshot = state.token || "") {
-    const username = await getCurrentUsername(tokenSnapshot);
+  async function getCollectionReadPath(subjectId = state.subjectId, tokenSnapshot = state.token || "", relayScope = null) {
+    const username = await getCurrentUsername(tokenSnapshot, relayScope);
     return username ? `/v0/users/${encodeURIComponent(username)}/collections/${subjectId}` : "";
   }
 
-  async function getCurrentUsername(tokenSnapshot = state.token || "") {
+  async function getCurrentUsername(tokenSnapshot = state.token || "", relayScope = null) {
     if (!tokenSnapshot) return "";
     if (state.username && String(tokenSnapshot) === String(state.token || "")) return state.username;
-    const me = await bgmRequest("/v0/me", { auth: true, authToken: tokenSnapshot });
+    const me = await bgmRequest("/v0/me", { auth: true, authToken: tokenSnapshot, relayScope });
     if (String(state.token || "") !== String(tokenSnapshot || "")) return "";
     state.username = me && me.username ? String(me.username) : "";
     return state.username;
@@ -8977,13 +8979,28 @@
     render();
   }
 
-  function requestBgmApiFallbackChoice({ authenticated = false } = {}) {
+  function createBgmApiRelayScope() {
+    return { choice: "", promise: null };
+  }
+
+  function requestBgmApiFallbackChoice({ authenticated = false, relayScope = null } = {}) {
+    const scope = relayScope && typeof relayScope === "object" ? relayScope : null;
+    if (scope && scope.choice) return Promise.resolve(scope.choice);
+    if (scope && scope.promise) return scope.promise;
     if (state.apiRelayPrompt && state.apiRelayPrompt.promise) {
       if (authenticated && !state.apiRelayPrompt.authenticated) {
         state.apiRelayPrompt.authenticated = true;
         mountBgmApiRelayPrompt();
       }
-      return state.apiRelayPrompt.promise;
+      const sharedPromise = state.apiRelayPrompt.promise.then((choice) => {
+        if (scope) {
+          scope.choice = choice;
+          scope.promise = null;
+        }
+        return choice;
+      });
+      if (scope) scope.promise = sharedPromise;
+      return sharedPromise;
     }
     const returnFocus = document.activeElement;
     let resolveChoice = null;
@@ -8991,7 +9008,15 @@
     state.apiRelayPrompt = { authenticated: Boolean(authenticated), returnFocus, resolve: resolveChoice, promise };
     document.addEventListener("keydown", handleBgmApiRelayKeydown, true);
     mountBgmApiRelayPrompt();
-    return promise;
+    const scopedPromise = promise.then((choice) => {
+      if (scope) {
+        scope.choice = choice;
+        scope.promise = null;
+      }
+      return choice;
+    });
+    if (scope) scope.promise = scopedPromise;
+    return scopedPromise;
   }
 
   function renderBgmApiRelayPrompt() {
@@ -9083,7 +9108,10 @@
     const requestOptions = { ...options, authToken };
     const promise = bgmRequestWithRetry(method, url, data, requestOptions).catch(async (error) => {
       if (!isRelayEligibleTransportError(error)) throw error;
-      const choice = await requestBgmApiFallbackChoice({ authenticated: Boolean(options.auth) });
+      const choice = await requestBgmApiFallbackChoice({
+        authenticated: Boolean(options.auth),
+        relayScope: options.relayScope || null,
+      });
       if (choice === "cancel") throw error;
       const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
       if (!retryBase) throw error;
