@@ -1246,9 +1246,10 @@
       gap: 7px;
       margin-top: 8px;
     }
-    .biligumi-update-banner-actions .biligumi-button {
+    #${PANEL_ID} .biligumi-update-banner .biligumi-update-banner-actions .biligumi-button {
       min-height: 28px;
       padding: 3px 9px;
+      border-radius: 6px;
       font-size: 12px;
     }
     .biligumi-update-banner-actions .biligumi-button.dismiss {

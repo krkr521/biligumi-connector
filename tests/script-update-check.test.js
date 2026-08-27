@@ -89,6 +89,7 @@ assert.match(renderSettingsDialog, /data-role="settings-update-status"/);
 assert.match(renderSettingsDialog, /aria-live="polite"/);
 
 const renderScriptUpdateBanner = extractFunction(source, "renderScriptUpdateBanner");
+assert.match(source, /#\$\{PANEL_ID\} \.biligumi-update-banner \.biligumi-update-banner-actions \.biligumi-button \{[\s\S]*?border-radius: 6px;/);
 assert.match(renderScriptUpdateBanner, /data-action="open-script-update"/);
 assert.match(renderScriptUpdateBanner, /data-action="dismiss-script-update"/);
 assert.match(renderScriptUpdateBanner, /本次更新不再提醒/);
