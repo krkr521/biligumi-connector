@@ -2504,10 +2504,21 @@
       }
       #${SETTINGS_ID} .biligumi-update-buttons {
         display: grid;
-        grid-template-columns: 1fr 1fr;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
       }
       #${SETTINGS_ID} .biligumi-update-buttons .biligumi-button {
         width: 100%;
+        padding-inline: 6px;
+      }
+      #${PANEL_ID} .biligumi-update-banner-actions {
+        display: grid;
+        grid-template-columns: 1fr 1.45fr;
+      }
+      #${PANEL_ID} .biligumi-update-banner-actions .biligumi-button {
+        width: 100%;
+      }
+      #${PANEL_ID} .biligumi-update-banner-actions .biligumi-button.dismiss {
+        grid-column: 1 / -1;
       }
     }
     #${PANEL_ID} .biligumi-collapsed-note {
@@ -4324,6 +4335,7 @@
         <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。打开用户脚本后，由 Tampermonkey 确认更新。</div>
         <div class="biligumi-update-banner-actions">
           <button type="button" class="biligumi-button primary" data-action="open-script-update">立即更新</button>
+          ${scriptUpdateState.source && scriptUpdateState.source.id === "gitcode" ? "" : `<button type="button" class="biligumi-button" data-action="open-script-update-gitcode">使用 GitCode 更新</button>`}
           <button type="button" class="biligumi-button dismiss" data-action="dismiss-script-update">本次更新不再提醒</button>
         </div>
       </div>
@@ -4642,6 +4654,7 @@
           </div>
           <div class="biligumi-update-buttons">
             <button type="button" class="biligumi-button" data-action="open-script-update" data-role="settings-update-now" title="打开最新版用户脚本，由 Tampermonkey 确认安装或更新" disabled>立即更新</button>
+            <button type="button" class="biligumi-button" data-action="open-script-update-gitcode" data-role="settings-update-gitcode" title="跳过 GitHub，使用 GitCode 备用源更新">GitCode 备用</button>
             <button type="button" class="biligumi-button" data-action="settings-reset">恢复默认</button>
           </div>
         </div>
@@ -5162,6 +5175,7 @@
     if (action === "settings-cancel") closeSettings();
     if (action === "check-script-update") checkScriptUpdate({ force: true }).catch(() => {});
     if (action === "open-script-update") openLatestUserscript().catch(showError);
+    if (action === "open-script-update-gitcode") openLatestUserscript("gitcode").catch(showError);
     if (action === "dismiss-script-update") dismissScriptUpdateNotice();
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
     if (action === "clear-settings-token") clearSavedAccessToken().catch(showError);
@@ -8484,7 +8498,8 @@
     if (!isSettingsDialogOpen(root)) return;
     const status = root.querySelector("[data-role='settings-update-status']");
     const updateButton = root.querySelector("[data-role='settings-update-now']");
-    if (!status || !updateButton) return;
+    const gitcodeButton = root.querySelector("[data-role='settings-update-gitcode']");
+    if (!status || !updateButton || !gitcodeButton) return;
 
     status.classList.remove("available", "warning");
     status.replaceChildren();
@@ -8514,21 +8529,41 @@
     const hasUpdate = scriptUpdateState.status === "available";
     updateButton.classList.toggle("primary", hasUpdate);
     updateButton.disabled = scriptUpdateOpening || scriptUpdateState.status === "checking" || scriptUpdateState.status === "error";
+    gitcodeButton.disabled = scriptUpdateOpening;
+    gitcodeButton.hidden = Boolean(scriptUpdateState.source && scriptUpdateState.source.id === "gitcode");
     updateButton.textContent = hasUpdate ? "立即更新" : "重新安装";
     updateButton.setAttribute("aria-label", hasUpdate
       ? `打开 v${scriptUpdateState.remoteVersion} 用户脚本，由 Tampermonkey 确认更新`
       : "打开当前版本用户脚本，由 Tampermonkey 确认重新安装");
   }
 
-  async function openLatestUserscript() {
+  async function resolvePreferredScriptUpdateSource(preferredSourceId = "") {
+    if (preferredSourceId === "gitcode") {
+      const configuredSource = SCRIPT_UPDATE_SOURCES.find((item) => item.id === "gitcode");
+      if (!configuredSource) throw new Error("未配置 GitCode 备用更新源。");
+      const source = await resolveScriptUpdateSource(configuredSource);
+      const scriptSource = await fetchScriptSource(source);
+      const remoteVersion = parseUserscriptVersion(scriptSource);
+      if (!remoteVersion) throw new Error("GitCode 未返回有效用户脚本。");
+      if (scriptUpdateState.remoteVersion && compareScriptVersions(remoteVersion, scriptUpdateState.remoteVersion) < 0) {
+        throw new Error(`GitCode 尚未同步 v${scriptUpdateState.remoteVersion}，当前备用源为 v${remoteVersion}。`);
+      }
+      return source;
+    }
+
+    let result = scriptUpdateState;
+    if (!result.source) result = await checkScriptUpdate();
+    const source = normalizeScriptUpdateSource(result && result.source);
+    if (!source) throw new Error("更新地址未通过安全校验，请重新检查更新后再试。");
+    return source;
+  }
+
+  async function openLatestUserscript(preferredSourceId = "") {
     if (scriptUpdateOpening) return;
     scriptUpdateOpening = true;
     syncSettingsUpdateUi();
     try {
-      let result = scriptUpdateState;
-      if (!result.source) result = await checkScriptUpdate();
-      const source = normalizeScriptUpdateSource(result && result.source);
-      if (!source) throw new Error("更新地址未通过安全校验，请重新检查更新后再试。");
+      const source = await resolvePreferredScriptUpdateSource(preferredSourceId);
       GM_openInTab(source.url, { active: true, insert: true, setParent: true });
     } finally {
       window.setTimeout(() => {

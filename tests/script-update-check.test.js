@@ -85,11 +85,15 @@ assert.equal(cacheSandbox.updateCache.readCachedScriptUpdateState().status, "idl
 
 const renderSettingsDialog = extractFunction(source, "renderSettingsDialog");
 assert.match(renderSettingsDialog, /data-action="open-script-update"/);
+assert.match(renderSettingsDialog, /data-action="open-script-update-gitcode"/);
+assert.match(renderSettingsDialog, /data-role="settings-update-gitcode"/);
 assert.match(renderSettingsDialog, /data-role="settings-update-status"/);
 assert.match(renderSettingsDialog, /aria-live="polite"/);
 
 const renderScriptUpdateBanner = extractFunction(source, "renderScriptUpdateBanner");
 assert.match(renderScriptUpdateBanner, /data-action="open-script-update"/);
+assert.match(renderScriptUpdateBanner, /data-action="open-script-update-gitcode"/);
+assert.match(renderScriptUpdateBanner, /使用 GitCode 更新/);
 assert.match(renderScriptUpdateBanner, /data-action="dismiss-script-update"/);
 assert.match(renderScriptUpdateBanner, /本次更新不再提醒/);
 assert.match(renderScriptUpdateBanner, /isScriptUpdateNoticeVisible\(\)/);
@@ -104,6 +108,8 @@ assert.match(dismissScriptUpdateNotice, /scriptUpdateState\.remoteVersion/);
 const handlePanelClick = extractFunction(source, "handlePanelClick");
 assert.match(handlePanelClick, /action === "check-script-update"/);
 assert.match(handlePanelClick, /action === "open-script-update"/);
+assert.match(handlePanelClick, /action === "open-script-update-gitcode"/);
+assert.match(handlePanelClick, /openLatestUserscript\("gitcode"\)/);
 assert.match(handlePanelClick, /action === "dismiss-script-update"/);
 
 const resolveScriptUpdateSource = extractFunction(source, "resolveScriptUpdateSource", { async: true });
@@ -119,9 +125,15 @@ assert.match(checkScriptUpdate, /cacheScriptUpdateState\(scriptUpdateState\)/);
 assert.match(checkScriptUpdate, /render\(\)/);
 assert.ok(!checkScriptUpdate.includes("remountSettingsDialog"));
 
+const resolvePreferredScriptUpdateSource = extractFunction(source, "resolvePreferredScriptUpdateSource", { async: true });
+assert.match(resolvePreferredScriptUpdateSource, /preferredSourceId === "gitcode"/);
+assert.match(resolvePreferredScriptUpdateSource, /resolveScriptUpdateSource\(configuredSource\)/);
+assert.match(resolvePreferredScriptUpdateSource, /fetchScriptSource\(source\)/);
+assert.match(resolvePreferredScriptUpdateSource, /GitCode 尚未同步/);
+
 const openLatestUserscript = extractFunction(source, "openLatestUserscript", { async: true });
 assert.match(openLatestUserscript, /if \(scriptUpdateOpening\) return/);
-assert.match(openLatestUserscript, /normalizeScriptUpdateSource/);
+assert.match(openLatestUserscript, /resolvePreferredScriptUpdateSource\(preferredSourceId\)/);
 assert.match(openLatestUserscript, /GM_openInTab\(source\.url/);
 assert.ok(!openLatestUserscript.includes("window.open"));
 
