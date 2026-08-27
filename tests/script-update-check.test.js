@@ -91,9 +91,16 @@ assert.match(renderSettingsDialog, /data-role="settings-update-status"/);
 assert.match(renderSettingsDialog, /aria-live="polite"/);
 
 const renderPanel = extractFunction(source, "render");
-assert.ok(renderPanel.includes('collapseStandalonePanel ? "" : renderScriptUpdateBanner()'), "collapsed standalone panel must hide the update banner");
+assert.equal(renderPanel.includes("renderScriptUpdateBanner()"), false, "the update banner must not be rendered as a top-level panel layer");
 assert.ok(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;'), "collapsed bound panel must render only its header and pending inline confirmation");
-assert.equal(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}`;'), false, "collapsed bound panel must not render the update banner");
+
+const renderPanelNoticeSlot = extractFunction(source, "renderPanelNoticeSlot");
+assert.match(renderPanelNoticeSlot, /return renderScriptUpdateBanner\(\)/, "userscript panel notice slot must render the update warning");
+const renderSearchOrSubject = extractFunction(source, "renderSearchOrSubject");
+assert.match(renderSearchOrSubject, /biligumi-search-pane[\s\S]*?renderPanelNoticeSlot\(\)/, "unbound full panels must place the update warning inside their content pane");
+assert.match(renderSearchOrSubject, /biligumi-card-body[\s\S]*?renderPanelNoticeSlot\(\)/, "bound full panels must place the update warning inside their card body");
+const renderStandaloneSearchPanel = extractFunction(source, "renderStandaloneSearchPanel");
+assert.match(renderStandaloneSearchPanel, /biligumi-search-pane[\s\S]*?renderPanelNoticeSlot\(\)/, "standalone panels must place the update warning inside their expandable content pane");
 
 const renderScriptUpdateBanner = extractFunction(source, "renderScriptUpdateBanner");
 assert.match(source, /#\$\{PANEL_ID\} \.biligumi-update-banner \.biligumi-update-banner-actions \.biligumi-button \{[\s\S]*?border-radius: 6px;/);
