@@ -30,7 +30,7 @@ runInSandbox(pureFunctions + "\n;globalThis.updatePure = { parseUserscriptVersio
 assert.match(source, /^\/\/ @connect\s+raw\.githubusercontent\.com$/m);
 assert.match(source, /^\/\/ @connect\s+api\.gitcode\.com$/m);
 assert.match(source, /^\/\/ @connect\s+raw\.gitcode\.com$/m);
-assert.equal(constants.SCRIPT_VERSION, "0.7.15");
+assert.equal(constants.SCRIPT_VERSION, "0.7.17");
 assert.equal(constants.SCRIPT_UPDATE_TIMEOUT_MS, 4000);
 assert.equal(constants.SCRIPT_UPDATE_CACHE_TTL_MS, 21600000);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES.length, 2);
@@ -74,13 +74,13 @@ assert.equal(cacheSandbox.updateCache.normalizeScriptUpdateSource({ id: "github"
 assert.equal(cacheSandbox.updateCache.normalizeScriptUpdateSource({ id: "github", url: "https://evil.example/update.user.js" }), null);
 assert.equal(cacheSandbox.updateCache.normalizeScriptUpdateSource({ id: "gitcode", url: validGitcodeUrl, checkUrl: validGitcodeUrl }).url, validGitcodeUrl);
 assert.equal(cacheSandbox.updateCache.normalizeScriptUpdateSource({ id: "gitcode", url: gitcodeSource.rawUrlPrefix + "main" + gitcodeSource.rawUrlSuffix }), null);
-cacheSandbox.cached = { remoteVersion: "0.7.16", sourceId: "github", url: githubSource.url, checkedAt: cacheNow - 1000 };
+cacheSandbox.cached = { remoteVersion: "0.7.18", sourceId: "github", url: githubSource.url, checkedAt: cacheNow - 1000 };
 assert.equal(cacheSandbox.updateCache.readCachedScriptUpdateState().status, "available");
-cacheSandbox.cached = { remoteVersion: "0.7.16", sourceId: "github", url: "https://evil.example/update.user.js", checkedAt: cacheNow - 1000 };
+cacheSandbox.cached = { remoteVersion: "0.7.18", sourceId: "github", url: "https://evil.example/update.user.js", checkedAt: cacheNow - 1000 };
 assert.equal(cacheSandbox.updateCache.readCachedScriptUpdateState().status, "idle");
-cacheSandbox.cached = { remoteVersion: "0.7.16", sourceId: "github", url: githubSource.url, checkedAt: cacheNow + 1000 };
+cacheSandbox.cached = { remoteVersion: "0.7.18", sourceId: "github", url: githubSource.url, checkedAt: cacheNow + 1000 };
 assert.equal(cacheSandbox.updateCache.readCachedScriptUpdateState().status, "idle");
-cacheSandbox.cached = { remoteVersion: "0.7.16", sourceId: "github", url: githubSource.url, checkedAt: cacheNow - constants.SCRIPT_UPDATE_CACHE_TTL_MS - 1 };
+cacheSandbox.cached = { remoteVersion: "0.7.18", sourceId: "github", url: githubSource.url, checkedAt: cacheNow - constants.SCRIPT_UPDATE_CACHE_TTL_MS - 1 };
 assert.equal(cacheSandbox.updateCache.readCachedScriptUpdateState().status, "idle");
 
 const renderSettingsDialog = extractFunction(source, "renderSettingsDialog");

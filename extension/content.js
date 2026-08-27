@@ -53,7 +53,7 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.15";
+  const SCRIPT_VERSION = "0.3.17";
   const STORAGE = {
     token: "biligumi.token",
     apiRelayAutoFallback: "biligumi.apiRelayAutoFallback",
