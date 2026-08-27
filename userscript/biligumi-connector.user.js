@@ -3593,7 +3593,7 @@
       const nonMainKeyword = getNonMainPreviewKeyword();
       const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
-      panel.innerHTML = `${renderStandaloneSearchPanel(nonMainKeyword)}${renderScriptUpdateBanner()}`;
+      panel.innerHTML = `${renderStandaloneSearchPanel(nonMainKeyword)}${collapseStandalonePanel ? "" : renderScriptUpdateBanner()}`;
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3623,7 +3623,7 @@
     `;
 
     if (state.panelCollapsed) {
-      panel.innerHTML = `${headerHtml}${renderScriptUpdateBanner()}${renderInlineConfirm()}`;
+      panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
