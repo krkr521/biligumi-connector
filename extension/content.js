@@ -53,7 +53,9 @@
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.17";
+  const SCRIPT_VERSION = "0.3.18";
+  const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
+  const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
     token: "biligumi.token",
     apiRelayAutoFallback: "biligumi.apiRelayAutoFallback",
@@ -81,6 +83,7 @@
     longVideoEpisodeModes: "biligumi.longVideoEpisodeModes",
     animeMovieClassifications: "biligumi.animeMovieClassifications.v2",
     disabledAutoProgressVideos: "biligumi.disabledAutoProgressVideos",
+    extensionUpdateDismissedVersion: "biligumi.extensionUpdateDismissedVersion",
     deleteBridge: "biligumi.deleteBridge",
   };
 
@@ -1209,6 +1212,47 @@
       border-color: #f3c4cd;
       background: #fff0f2;
       color: #bd2441;
+    }
+    .biligumi-update-banner {
+      margin: 10px 0 0;
+      padding: 10px;
+      border: 1px solid #efc4cc;
+      border-radius: 8px;
+      background: #fff7f9;
+      color: #6f3b4a;
+    }
+    .biligumi-update-banner-title {
+      color: #c25f75;
+      font-size: 13px;
+      font-weight: 700;
+    }
+    .biligumi-update-banner-copy {
+      margin-top: 3px;
+      color: #7b5964;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .biligumi-update-banner-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 8px;
+    }
+    #${PANEL_ID} .biligumi-update-banner .biligumi-update-banner-actions .biligumi-button {
+      min-height: 28px;
+      padding: 3px 9px;
+      border-radius: 6px;
+      font-size: 12px;
+    }
+    .biligumi-update-banner-actions .biligumi-button.dismiss {
+      border-color: transparent;
+      background: transparent;
+      color: #7b8794;
+    }
+    .biligumi-update-banner-actions .biligumi-button.dismiss:hover {
+      border-color: #dfe3e8;
+      background: #fff;
+      color: var(--bgm-blue);
     }
     .biligumi-foot {
       display: flex;
@@ -2358,6 +2402,54 @@
       gap: 8px;
       padding: 0 12px 12px;
     }
+    #${SETTINGS_ID} .biligumi-update-actions {
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #eceff2;
+      background: linear-gradient(#fbfbfb, #f7f7f7);
+    }
+    #${SETTINGS_ID} .biligumi-update-meta {
+      min-width: 0;
+      color: #4f6072;
+    }
+    #${SETTINGS_ID} .biligumi-update-version {
+      font-size: 13px;
+      font-weight: 700;
+    }
+    #${SETTINGS_ID} .biligumi-update-status {
+      margin-top: 3px;
+      color: #7b8794;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    #${SETTINGS_ID} .biligumi-update-status.available {
+      color: #c25f75;
+      font-weight: 600;
+    }
+    #${SETTINGS_ID} .biligumi-update-status.warning {
+      color: #d03030;
+    }
+    #${SETTINGS_ID} .biligumi-update-buttons {
+      display: flex;
+      flex: 0 0 auto;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+    #${SETTINGS_ID} .biligumi-update-status button {
+      margin-left: 5px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #2f8cff;
+      cursor: pointer;
+      font: inherit;
+      font-weight: 600;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
     #${SETTINGS_ID} .biligumi-collection-dialog .biligumi-settings-actions {
       justify-content: flex-start;
       align-items: center;
@@ -2503,6 +2595,17 @@
     @media (max-width: 620px) {
       #${SETTINGS_ID} .biligumi-settings-body {
         column-count: 1;
+      }
+      #${SETTINGS_ID} .biligumi-update-actions {
+        align-items: stretch;
+        flex-direction: column;
+      }
+      #${SETTINGS_ID} .biligumi-update-buttons {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      #${SETTINGS_ID} .biligumi-update-buttons .biligumi-button {
+        width: 100%;
       }
     }
     #${PANEL_ID} .biligumi-collapsed-note {
@@ -2899,6 +3002,17 @@
   `);
 
   let routeRefreshSeq = 0;
+  let extensionUpdateCheckSeq = 0;
+  let extensionUpdateCheckPromise = null;
+  let extensionUpdateChecking = false;
+  let extensionUpdateOpening = false;
+  let extensionUpdateState = {
+    status: "idle",
+    currentVersion: SCRIPT_VERSION,
+    remoteVersion: "",
+    source: null,
+    checkedAt: 0,
+  };
   let longVideoBindWaitSeq = 0;
   let longVideoBindWaitTimer = 0;
   let episodeContextRefreshSeq = 0;
@@ -2919,6 +3033,7 @@
     refreshPageContext();
     state.subjectId = getCurrentBinding();
     injectWhenReady();
+    if (isExtensionUpdateCheckActive()) checkExtensionUpdate().catch(() => {});
     observeRouteChanges();
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
@@ -4231,7 +4346,33 @@
   }
 
   function renderPanelNoticeSlot() {
-    return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}`;
+    return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;
+  }
+
+  function isExtensionUpdateNoticeVisible() {
+    if (extensionUpdateState.status !== "available" || !extensionUpdateState.remoteVersion) return false;
+    return String(readValue(STORAGE.extensionUpdateDismissedVersion, "")) !== String(extensionUpdateState.remoteVersion);
+  }
+
+  function renderExtensionUpdateBanner() {
+    if (!isExtensionUpdateNoticeVisible()) return "";
+    const sourceSuffix = extensionUpdateState.source && extensionUpdateState.source.id === "gitcode" ? " · GitCode 备用源" : "";
+    return `
+      <div class="biligumi-update-banner" role="status" aria-label="Biligumi Connector 插件有可用更新">
+        <div class="biligumi-update-banner-title">发现插件新版本 v${escapeHtml(extensionUpdateState.remoteVersion)}</div>
+        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。下载后覆盖原扩展目录，并在扩展管理页重新加载。</div>
+        <div class="biligumi-update-banner-actions">
+          <button type="button" class="biligumi-button primary" data-action="open-extension-update">打开下载页</button>
+          <button type="button" class="biligumi-button dismiss" data-action="dismiss-extension-update">本次更新不再提醒</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function dismissExtensionUpdateNotice() {
+    if (!extensionUpdateState.remoteVersion) return;
+    writeValue(STORAGE.extensionUpdateDismissedVersion, extensionUpdateState.remoteVersion);
+    render();
   }
 
   function renderSearchOrSubject() {
@@ -4616,8 +4757,16 @@
             </div>
           </div>
         </div>
-        <div class="biligumi-settings-actions">
-          <button class="biligumi-button" data-action="settings-reset">恢复默认</button>
+        <div class="biligumi-settings-actions biligumi-update-actions">
+          <div class="biligumi-update-meta">
+            <div class="biligumi-update-version">插件版本 v${SCRIPT_VERSION}</div>
+            <div class="biligumi-update-status" data-role="settings-extension-update-status" role="status" aria-live="polite">打开设置后自动检查更新。</div>
+          </div>
+          <div class="biligumi-update-buttons">
+            <button type="button" class="biligumi-button" data-action="check-extension-update" data-role="settings-extension-update-check">重新检查</button>
+            <button type="button" class="biligumi-button" data-action="open-extension-update" data-role="settings-extension-update-open" disabled>打开下载页</button>
+            <button class="biligumi-button" data-action="settings-reset">恢复默认</button>
+          </div>
         </div>
       </div>
     `;
@@ -5143,6 +5292,9 @@
     }
     if (action === "settings") openSettings();
     if (action === "settings-cancel") closeSettings();
+    if (action === "check-extension-update") checkExtensionUpdate({ force: true }).catch(() => {});
+    if (action === "open-extension-update") openExtensionUpdatePage().catch(showError);
+    if (action === "dismiss-extension-update") dismissExtensionUpdateNotice();
     if (action === "settings-reset") resetSettingsToDefaults().catch(showError);
     if (action === "clear-settings-token") queueClearSavedAccessToken();
     if (action === "open-whitelist-space") openWhitelistSpace(target);
@@ -5299,11 +5451,21 @@
     input.value = tags.join(" ");
   }
 
+  function isPanelSleeping() {
+    if (shouldRenderFullPanel()) return state.panelCollapsed;
+    const nonMainKeyword = getNonMainPreviewKeyword();
+    return !nonMainKeyword
+      && !state.standaloneSearchExpanded
+      && !state.longVideoBindingPrompt
+      && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
+  }
+
   function togglePanelCollapsed() {
     state.panelCollapsed = !state.panelCollapsed;
     writeValue(STORAGE.panelCollapsed, state.panelCollapsed ? "1" : "0");
     if (state.panelCollapsed && state.apiRelayPrompt) settleBgmApiRelayPrompt("cancel", { preserveNotice: true });
     else render();
+    if (isExtensionUpdateCheckActive()) checkExtensionUpdate().catch(() => {});
   }
 
   function setScoreDetailMode(mode) {
@@ -5317,6 +5479,7 @@
   function toggleStandaloneSearchExpanded() {
     state.standaloneSearchExpanded = !state.standaloneSearchExpanded;
     render();
+    if (isExtensionUpdateCheckActive()) checkExtensionUpdate().catch(() => {});
   }
 
   async function cycleCollectionType() {
@@ -8203,11 +8366,190 @@
     }
   }
 
+  function isExtensionUpdateCheckActive() {
+    return state.settingsOpen || !isPanelSleeping();
+  }
+
+  function normalizeExtensionUpdateResult(value) {
+    const input = value && typeof value === "object" ? value : {};
+    const status = ["current", "available", "error"].includes(input.status) ? input.status : "error";
+    const remoteVersion = String(input.remoteVersion || "");
+    const sourceId = String(input.source && input.source.id || "");
+    const source = ["github", "gitcode"].includes(sourceId)
+      ? { id: sourceId, label: sourceId === "gitcode" ? "GitCode" : "GitHub" }
+      : null;
+    if ((status === "current" || status === "available") && (!isValidExtensionVersion(remoteVersion) || !source)) {
+      return { status: "error", currentVersion: SCRIPT_VERSION, remoteVersion: "", source: null, checkedAt: Date.now() };
+    }
+    return {
+      status,
+      currentVersion: SCRIPT_VERSION,
+      remoteVersion,
+      source,
+      checkedAt: Number(input.checkedAt) || Date.now(),
+    };
+  }
+
+  function isValidExtensionVersion(value) {
+    const parts = String(value || "").split(".");
+    return parts.length >= 1
+      && parts.length <= 4
+      && parts.every((part) => /^(?:0|[1-9]\d*)$/.test(part) && Number(part) <= 65535);
+  }
+
+  function requestExtensionUpdateCheck(force = false) {
+    return new Promise((resolve, reject) => {
+      if (!isExtensionRuntimeAvailable()) {
+        reject(new Error("扩展上下文已失效，请刷新页面后重试。"));
+        return;
+      }
+      chrome.runtime.sendMessage({ type: EXTENSION_UPDATE_CHECK_MESSAGE, force: Boolean(force) }, (result) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!result || !result.ok) {
+          reject(new Error(String(result && result.error || "检查插件更新失败")));
+          return;
+        }
+        resolve(normalizeExtensionUpdateResult(result.update));
+      });
+    });
+  }
+
+  async function checkExtensionUpdate(options = {}) {
+    if (!isExtensionUpdateCheckActive()) return extensionUpdateState;
+    if (extensionUpdateCheckPromise && !options.force) return extensionUpdateCheckPromise;
+    const checkSeq = ++extensionUpdateCheckSeq;
+    const previousState = extensionUpdateState;
+    const canPreservePrevious = ["current", "available"].includes(previousState.status);
+    extensionUpdateChecking = true;
+    if (!canPreservePrevious) {
+      extensionUpdateState = {
+        status: "checking",
+        currentVersion: SCRIPT_VERSION,
+        remoteVersion: "",
+        source: null,
+        checkedAt: 0,
+      };
+    }
+    syncSettingsExtensionUpdateUi();
+
+    const task = (async () => {
+      try {
+        const result = await requestExtensionUpdateCheck(Boolean(options.force));
+        if (checkSeq !== extensionUpdateCheckSeq) return extensionUpdateState;
+        extensionUpdateState = result;
+      } catch (_error) {
+        if (checkSeq === extensionUpdateCheckSeq) {
+          extensionUpdateState = canPreservePrevious
+            ? previousState
+            : {
+              status: "error",
+              currentVersion: SCRIPT_VERSION,
+              remoteVersion: "",
+              source: null,
+              checkedAt: Date.now(),
+            };
+        }
+      } finally {
+        if (checkSeq === extensionUpdateCheckSeq) {
+          extensionUpdateChecking = false;
+          syncSettingsExtensionUpdateUi();
+          render();
+        }
+      }
+      return extensionUpdateState;
+    })();
+
+    extensionUpdateCheckPromise = task;
+    try {
+      return await task;
+    } finally {
+      if (extensionUpdateCheckPromise === task) extensionUpdateCheckPromise = null;
+    }
+  }
+
+  function syncSettingsExtensionUpdateUi(root = document.getElementById(SETTINGS_ID)) {
+    if (!isSettingsDialogOpen(root)) return;
+    const status = root.querySelector("[data-role='settings-extension-update-status']");
+    const checkButton = root.querySelector("[data-role='settings-extension-update-check']");
+    const openButton = root.querySelector("[data-role='settings-extension-update-open']");
+    if (!status || !checkButton || !openButton) return;
+
+    status.classList.remove("available", "warning");
+    status.replaceChildren();
+    status.setAttribute("aria-busy", extensionUpdateChecking ? "true" : "false");
+    const sourceSuffix = extensionUpdateState.source && extensionUpdateState.source.id === "gitcode" ? "（来自 GitCode）" : "";
+    let message = "打开设置后自动检查更新。";
+    if (extensionUpdateState.status === "checking") message = "正在检查插件更新…";
+    if (extensionUpdateState.status === "current") message = `已是最新版本${sourceSuffix}`;
+    if (extensionUpdateState.status === "available") {
+      message = `发现新版本 v${extensionUpdateState.remoteVersion}${sourceSuffix}`;
+      status.classList.add("available");
+    }
+    if (extensionUpdateState.status === "error") {
+      message = "暂时无法检查插件更新。";
+      status.classList.add("warning");
+    }
+    if (extensionUpdateChecking && extensionUpdateState.status !== "checking") {
+      message = `正在重新检查…${message}`;
+    }
+    status.append(document.createTextNode(message));
+    if (extensionUpdateState.status === "error") {
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.dataset.action = "check-extension-update";
+      retry.textContent = "重试";
+      retry.setAttribute("aria-label", "重新检查插件更新");
+      status.appendChild(retry);
+    }
+
+    const hasUpdate = extensionUpdateState.status === "available";
+    checkButton.disabled = extensionUpdateChecking;
+    checkButton.textContent = extensionUpdateChecking ? "检查中…" : "重新检查";
+    openButton.classList.toggle("primary", hasUpdate);
+    openButton.disabled = extensionUpdateOpening || extensionUpdateChecking;
+    openButton.textContent = hasUpdate ? "下载新版" : "打开项目页";
+  }
+
+  function openExtensionUpdatePage() {
+    if (extensionUpdateOpening) return Promise.resolve();
+    extensionUpdateOpening = true;
+    syncSettingsExtensionUpdateUi();
+    return new Promise((resolve, reject) => {
+      if (!isExtensionRuntimeAvailable()) {
+        extensionUpdateOpening = false;
+        syncSettingsExtensionUpdateUi();
+        reject(new Error("扩展上下文已失效，请刷新页面后重试。"));
+        return;
+      }
+      chrome.runtime.sendMessage({
+        type: EXTENSION_UPDATE_OPEN_MESSAGE,
+        sourceId: extensionUpdateState.source && extensionUpdateState.source.id || "github",
+      }, (result) => {
+        extensionUpdateOpening = false;
+        syncSettingsExtensionUpdateUi();
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (!result || !result.ok) {
+          reject(new Error(String(result && result.error || "无法打开插件下载页")));
+          return;
+        }
+        resolve();
+      });
+    });
+  }
+
   function openSettings() {
     state.settingsOpen = true;
     state.collectionEditorOpen = false;
     state.error = "";
     mountModal("settings-cancel", renderSettingsDialog());
+    syncSettingsExtensionUpdateUi();
+    checkExtensionUpdate().catch(() => {});
     render();
   }
 
@@ -8410,6 +8752,7 @@
     if (!state.settingsOpen) return;
     removeModal();
     mountModal("settings-cancel", renderSettingsDialog());
+    syncSettingsExtensionUpdateUi();
   }
 
   function renderSettingsInlineConfirm() {

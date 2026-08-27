@@ -12,6 +12,7 @@
 - 使用 background service worker 代理 Bangumi API / Bangumi 网页请求，替代 `GM_xmlhttpRequest`。
 - 默认命令快捷键为 `Alt+Shift+Right`。
 - 后台 service worker 会记录最近活跃的 Bilibili 视频标签页和最近进入 PiP 的标签页。命令触发时优先当前 Bilibili 标签页，其次 PiP/最近记录的 Bilibili 标签页。
+- 面板处于活动状态或打开设置、扩展选项页时会自动检查插件更新。GitHub 为首选源，连接失败后使用 GitCode 提交固定清单作为备用；只读取 `manifest.json` 并比较版本，不下载或执行远程代码。
 
 ## 安装
 
@@ -51,13 +52,25 @@
 - 页面面板里只提示浏览器级/PiP 快捷键入口；实际键位请到扩展快捷键页查看或修改。
 - 设置中的「官方 API 连接失败后自动使用 api.bgmapi.com」默认关闭；启用后仍先探测官方 api.bgm.tv，但探测超时缩短为约 2 秒且不额外重试，连接失败或超时后自动回退并跳过确认弹窗。
 
-扩展详情页的“扩展程序选项”只提供插件版说明和快捷键入口提示。数据保存在 `chrome.storage.local`，与油猴脚本管理器存储相互独立。
+扩展详情页的“扩展程序选项”提供插件版说明、快捷键状态和更新检查入口。数据保存在 `chrome.storage.local`，与油猴脚本管理器存储相互独立。
+
+## 更新
+
+插件版当前通过“加载已解压的扩展程序”安装，因此浏览器不会自动替换本地扩展文件。发现新版本后：
+
+1. 在面板设置或扩展选项页点击“下载新版”。
+2. 从项目页下载新版，覆盖原来的扩展目录。
+3. 打开 `chrome://extensions/` 或 `edge://extensions/`，点击 Biligumi Connector 的“重新加载”。
+4. 刷新已经打开的 Bilibili 页面。
+
+请覆盖原目录，不要把新版加载为另一个扩展；这样可以保留原扩展 ID 及 `chrome.storage.local` 中的设置。将来改为浏览器商店分发后，可以再接入浏览器原生的自动安装更新。
 
 ## 限制
 
 <span style="color:#bd2441"><strong>危险：</strong>手动选择 <code>api.bgmapi.com</code> 或启用自动回退后，失败请求的 Bangumi Access Token、<code>Authorization</code> 请求头和 API 内容会经过第三方服务器；它不是 Bangumi 官方服务，可能读取或记录这些信息。</span>
 - Manifest commands 能否在浏览器完全非焦点时触发，取决于 Chrome/Edge、操作系统和快捷键是否被系统占用。
 - 插件版由 userscript 主体迁移而来，后续如果 userscript 更新，需要同步重新生成或移植 `extension/content.js`。
+- 当前更新功能只自动检测版本；已解压扩展需要人工覆盖文件并重新加载。
 - 如果目标标签页还没有加载 content script，或 Bilibili 页面结构阻止脚本访问播放器，命令可能不会生效。
 - 删除 Bangumi 收藏时会在后台打开 `bgm.tv` 第一方标签页完成登录态与账号校验；仅在未登录、需要手动操作时切到前台，登录并删除成功后自动关闭。扩展不会读取、复制或记录登录 Cookie。
 - 画中画追踪依赖页面触发 `enterpictureinpicture` / `leavepictureinpicture` 事件；service worker 被回收后会从 `chrome.storage.session` 恢复最近记录，旧版浏览器会回退到 `chrome.storage.local` 的运行时记录。

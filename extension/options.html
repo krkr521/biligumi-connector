@@ -57,6 +57,38 @@
     code {
       font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
     }
+
+    .update-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+      margin-top: 10px;
+    }
+
+    button {
+      min-height: 34px;
+      padding: 6px 12px;
+      border: 1px solid color-mix(in srgb, CanvasText 24%, transparent);
+      border-radius: 8px;
+      background: ButtonFace;
+      color: ButtonText;
+      cursor: pointer;
+    }
+
+    button:disabled {
+      cursor: default;
+      opacity: .56;
+    }
+
+    #update-status.available {
+      color: #c25f75;
+      font-weight: 650;
+    }
+
+    #update-status.error {
+      color: #d03030;
+    }
   </style>
 </head>
 <body>
@@ -70,6 +102,15 @@
       <h2>浏览器快捷键</h2>
       <p class="hint">默认快捷键：<strong>Alt+Shift+Right</strong>。当前浏览器分配：<strong id="shortcut">读取中...</strong>。</p>
       <p class="hint">Chrome 打开 <code>chrome://extensions/shortcuts</code> 修改；Edge 打开 <code>edge://extensions/shortcuts</code> 修改。</p>
+    </section>
+    <section>
+      <h2>插件更新</h2>
+      <p id="update-status" class="hint" role="status" aria-live="polite">正在检查更新...</p>
+      <div class="update-row">
+        <button id="check-update" type="button">重新检查</button>
+        <button id="open-update" type="button" disabled>打开项目页</button>
+      </div>
+      <p class="hint">已解压扩展不能自行替换代码。发现新版后，请从项目页下载，覆盖原扩展目录，再到扩展管理页点击“重新加载”。</p>
     </section>
     <section>
       <h2>安装后检查</h2>

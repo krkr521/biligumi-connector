@@ -9,7 +9,28 @@
   const MSG_FOCUS_DELETE_BRIDGE = "biligumi-focus-delete-bridge";
   const MSG_CLOSE_DELETE_BRIDGE = "biligumi-close-delete-bridge";
   const MSG_READ_PAGE_STATE = "biligumi-read-page-state-v1";
+  const MSG_CHECK_EXTENSION_UPDATE = "biligumi-check-extension-update";
+  const MSG_OPEN_EXTENSION_UPDATE = "biligumi-open-extension-update";
   const RUNTIME_STATE_KEY = "__biligumiOpedRuntimeState";
+  const EXTENSION_UPDATE_CACHE_KEY = "biligumi.extensionUpdateCache";
+  const EXTENSION_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const EXTENSION_UPDATE_TIMEOUT_MS = 4000;
+  const EXTENSION_UPDATE_MAX_RESPONSE_BYTES = 64 * 1024;
+  const EXTENSION_UPDATE_SOURCES = Object.freeze([
+    Object.freeze({
+      id: "github",
+      label: "GitHub",
+      manifestUrl: "https://raw.githubusercontent.com/krkr521/biligumi-connector/master/extension/manifest.json",
+      pageUrl: "https://github.com/krkr521/biligumi-connector",
+    }),
+    Object.freeze({
+      id: "gitcode",
+      label: "GitCode",
+      branchUrl: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/branches/master",
+      rawUrl: "https://api.gitcode.com/api/v5/repos/krkr521/biligumi-connector/raw/extension/manifest.json",
+      pageUrl: "https://gitcode.com/krkr521/biligumi-connector",
+    }),
+  ]);
   const BILIBILI_URL_PATTERNS = [
     "https://www.bilibili.com/video/*",
     "https://www.bilibili.com/bangumi/play/*",
@@ -43,6 +64,30 @@
     if (message && message.type === MSG_READ_PAGE_STATE) {
       readBilibiliPublicPageState(sender).then(
         (state) => sendResponse({ ok: true, state }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
+    if (message && message.type === MSG_CHECK_EXTENSION_UPDATE) {
+      if (!isAllowedExtensionUpdateSender(sender)) {
+        sendResponse({ ok: false, error: "Blocked extension update sender" });
+        return false;
+      }
+      checkExtensionUpdate(Boolean(message.force)).then(
+        (update) => sendResponse({ ok: true, update }),
+        (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
+      );
+      return true;
+    }
+
+    if (message && message.type === MSG_OPEN_EXTENSION_UPDATE) {
+      if (!isAllowedExtensionUpdateSender(sender)) {
+        sendResponse({ ok: false, error: "Blocked extension update sender" });
+        return false;
+      }
+      openExtensionUpdatePage(message.sourceId).then(
+        () => sendResponse({ ok: true }),
         (error) => sendResponse({ ok: false, error: String(error && error.message || error) }),
       );
       return true;
@@ -239,6 +284,203 @@
     } catch (_error) {
       return false;
     }
+  }
+
+  function isAllowedExtensionUpdateSender(sender) {
+    if (!sender || sender.id !== chrome.runtime.id) return false;
+    const senderUrl = String(sender.url || "");
+    if (senderUrl === chrome.runtime.getURL("options.html")) {
+      return sender.frameId === undefined || sender.frameId === 0;
+    }
+    return Boolean(sender.frameId === 0
+      && sender.tab
+      && Number.isInteger(sender.tab.id)
+      && isBilibiliVideoUrl(senderUrl || sender.tab.url));
+  }
+
+  function isValidExtensionVersion(value) {
+    const parts = String(value || "").split(".");
+    return parts.length >= 1
+      && parts.length <= 4
+      && parts.every((part) => /^(?:0|[1-9]\d*)$/.test(part) && Number(part) <= 65535);
+  }
+
+  function compareExtensionVersions(left, right) {
+    const a = String(left || "").split(".").map(Number);
+    const b = String(right || "").split(".").map(Number);
+    const length = Math.max(a.length, b.length);
+    for (let index = 0; index < length; index += 1) {
+      const difference = (a[index] || 0) - (b[index] || 0);
+      if (difference) return difference > 0 ? 1 : -1;
+    }
+    return 0;
+  }
+
+  function parseExtensionUpdateManifest(source) {
+    const manifest = JSON.parse(String(source || ""));
+    const version = String(manifest && manifest.version || "").trim();
+    if (
+      !manifest
+      || manifest.manifest_version !== 3
+      || manifest.name !== "Biligumi Connector"
+      || !isValidExtensionVersion(version)
+    ) {
+      throw new Error("Update source returned an invalid extension manifest");
+    }
+    return { version };
+  }
+
+  function normalizeExtensionUpdateCache(value, currentVersion) {
+    if (!value || typeof value !== "object") return null;
+    const checkedAt = Number(value.checkedAt) || 0;
+    const age = Date.now() - checkedAt;
+    const remoteVersion = String(value.remoteVersion || "");
+    const source = EXTENSION_UPDATE_SOURCES.find((item) => item.id === value.sourceId);
+    if (
+      !source
+      || !isValidExtensionVersion(remoteVersion)
+      || checkedAt <= 0
+      || age < 0
+      || age > EXTENSION_UPDATE_CACHE_TTL_MS
+    ) return null;
+    return {
+      status: compareExtensionVersions(remoteVersion, currentVersion) > 0 ? "available" : "current",
+      currentVersion,
+      remoteVersion,
+      source: { id: source.id, label: source.label },
+      checkedAt,
+    };
+  }
+
+  async function checkExtensionUpdate(force = false) {
+    const currentVersion = String(chrome.runtime.getManifest().version || "");
+    if (!force) {
+      const cached = normalizeExtensionUpdateCache(await getExtensionUpdateCache(), currentVersion);
+      if (cached) return cached;
+    }
+
+    for (const configuredSource of EXTENSION_UPDATE_SOURCES) {
+      try {
+        const source = await resolveExtensionUpdateSource(configuredSource);
+        const manifestText = await fetchExtensionUpdateText(source.manifestUrl);
+        const remote = parseExtensionUpdateManifest(manifestText);
+        const result = {
+          status: compareExtensionVersions(remote.version, currentVersion) > 0 ? "available" : "current",
+          currentVersion,
+          remoteVersion: remote.version,
+          source: { id: source.id, label: source.label },
+          checkedAt: Date.now(),
+        };
+        await setExtensionUpdateCache({
+          remoteVersion: result.remoteVersion,
+          sourceId: result.source.id,
+          checkedAt: result.checkedAt,
+        });
+        return result;
+      } catch (_error) {
+        // GitHub is preferred; resolve and check the GitCode commit-specific fallback next.
+      }
+    }
+
+    return {
+      status: "error",
+      currentVersion,
+      remoteVersion: "",
+      source: null,
+      checkedAt: Date.now(),
+    };
+  }
+
+  async function resolveExtensionUpdateSource(source) {
+    if (source.id !== "gitcode") return source;
+    const branchText = await fetchExtensionUpdateText(source.branchUrl, "application/json");
+    const branch = JSON.parse(branchText);
+    const commit = String(branch && branch.commit && (branch.commit.id || branch.commit.sha) || "").trim();
+    if (!/^[a-f0-9]{40}$/i.test(commit)) throw new Error("GitCode returned an invalid commit");
+    return {
+      ...source,
+      manifestUrl: `${source.rawUrl}?ref=${commit}`,
+    };
+  }
+
+  async function fetchExtensionUpdateText(url, accept = "application/json,text/plain,*/*") {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), EXTENSION_UPDATE_TIMEOUT_MS);
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: accept },
+        credentials: "omit",
+        redirect: "error",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(`Update source response failed (${response.status})`);
+      const text = await readBoundedExtensionUpdateText(response);
+      if (!text) throw new Error(`Update source response failed (${response.status})`);
+      return text;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function readBoundedExtensionUpdateText(response) {
+    const declaredLength = Number(response.headers && response.headers.get("content-length"));
+    if (Number.isFinite(declaredLength) && declaredLength > EXTENSION_UPDATE_MAX_RESPONSE_BYTES) {
+      throw new Error("Update source response is too large");
+    }
+
+    if (!response.body || typeof response.body.getReader !== "function") {
+      const text = await response.text();
+      if (new TextEncoder().encode(text).byteLength > EXTENSION_UPDATE_MAX_RESPONSE_BYTES) {
+        throw new Error("Update source response is too large");
+      }
+      return text;
+    }
+
+    const reader = response.body.getReader();
+    const chunks = [];
+    let length = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > EXTENSION_UPDATE_MAX_RESPONSE_BYTES) {
+        await reader.cancel().catch(() => {});
+        throw new Error("Update source response is too large");
+      }
+      chunks.push(value);
+    }
+
+    const bytes = new Uint8Array(length);
+    let offset = 0;
+    for (const chunk of chunks) {
+      bytes.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return new TextDecoder().decode(bytes);
+  }
+
+  async function openExtensionUpdatePage(sourceId) {
+    const source = EXTENSION_UPDATE_SOURCES.find((item) => item.id === String(sourceId || ""))
+      || EXTENSION_UPDATE_SOURCES[0];
+    await tabsCreate({ url: source.pageUrl, active: true });
+  }
+
+  function getExtensionUpdateCache() {
+    return new Promise((resolve) => {
+      chrome.storage.local.get(EXTENSION_UPDATE_CACHE_KEY, (items) => {
+        resolve(items && items[EXTENSION_UPDATE_CACHE_KEY] && typeof items[EXTENSION_UPDATE_CACHE_KEY] === "object"
+          ? items[EXTENSION_UPDATE_CACHE_KEY]
+          : null);
+      });
+    });
+  }
+
+  function setExtensionUpdateCache(value) {
+    return new Promise((resolve) => {
+      chrome.storage.local.set({ [EXTENSION_UPDATE_CACHE_KEY]: value }, resolve);
+    });
   }
 
   function isDeleteBridgeTabUrl(url) {
