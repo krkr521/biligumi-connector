@@ -19,8 +19,11 @@ const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, "extension", "ma
 
 for (const name of [
   "createBgmApiRelayScope",
+  "getApiRelayAutoFallbackSetting",
   "requestBgmApiFallbackChoice",
   "renderBgmApiRelayPrompt",
+  "renderBgmApiRelayRetryNotice",
+  "dismissBgmApiRelayRetryNotice",
   "mountBgmApiRelayPrompt",
   "handleBgmApiRelayKeydown",
   "settleBgmApiRelayPrompt",
@@ -37,6 +40,11 @@ for (const name of [
     name + " must stay identical between userscript and extension",
   );
 }
+assert.equal(
+  extractFunction(extensionSource, "retryBgmApiRelayNotice", { async: true }),
+  extractFunction(userscriptSource, "retryBgmApiRelayNotice", { async: true }),
+  "retryBgmApiRelayNotice must stay identical between userscript and extension",
+);
 
 assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
 assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
@@ -58,8 +66,8 @@ assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
 assert.match(userscriptSource, /#\$\{PANEL_ID\} #\$\{API_RELAY_ID\} \.biligumi-button \{[\s\S]*?min-height: 30px;[\s\S]*?padding: 4px 10px;[\s\S]*?border-radius: 6px;/, "relay actions must use the standard panel button shape");
 assert.equal(userscriptSource.includes("#${PANEL_ID} #${API_RELAY_ID} .biligumi-button {\n      min-height: 32px;"), false, "relay buttons must not retain the pill-button dimensions");
-assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderScriptUpdateBanner()}`;"), "userscript relay warning must render inside the panel notice slot");
-assert.ok(extensionSource.includes("return renderBgmApiRelayPrompt();"), "extension relay warning must render inside the panel notice slot");
+assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderScriptUpdateBanner()}`;"), "userscript relay warnings must render inside the panel notice slot");
+assert.ok(extensionSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}`;"), "extension relay warnings must render inside the panel notice slot");
 assert.equal(userscriptSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "relay warning must not use a page-level fixed overlay");
 assert.equal(extensionSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "extension relay warning must not use a page-level fixed overlay");
 const renderRelayPrompt = extractFunction(userscriptSource, "renderBgmApiRelayPrompt");
@@ -72,10 +80,47 @@ assert.match(mountRelayPrompt, /render\(\)/, "mounting the relay warning must re
 const requestRelayChoice = extractFunction(userscriptSource, "requestBgmApiFallbackChoice");
 assert.equal(requestRelayChoice.includes("state.panelCollapsed = false"), false, "inline relay warnings must not force a collapsed full panel open");
 assert.equal(requestRelayChoice.includes("state.standaloneSearchExpanded = true"), false, "inline relay warnings must not force a collapsed standalone panel open");
+assert.ok(requestRelayChoice.includes('settleBgmApiRelayPrompt("cancel", { preserveNotice: true })'), "a relay prompt created while the full panel is collapsed must settle as cancel immediately");
+const togglePanelCollapsed = extractFunction(userscriptSource, "togglePanelCollapsed");
+assert.ok(togglePanelCollapsed.includes('settleBgmApiRelayPrompt("cancel", { preserveNotice: true })'), "collapsing an active relay prompt must settle it as cancel");
+const settleRelayPrompt = extractFunction(userscriptSource, "settleBgmApiRelayPrompt");
+assert.ok(settleRelayPrompt.includes("state.apiRelayRetryNotice = {"), "collapse cancellation must retain a retry notice for the next expansion");
+const renderRelayRetryNotice = extractFunction(userscriptSource, "renderBgmApiRelayRetryNotice");
+assert.match(renderRelayRetryNotice, /retry-official-api-notice/);
+assert.match(renderRelayRetryNotice, /use-api-relay-notice/);
 assert.ok(userscriptSource.includes("const relayScope = createBgmApiRelayScope();"), "subject loads must share one temporary relay choice");
-assert.ok(userscriptSource.includes("relayScope: options.relayScope || null"), "request fallback must receive the temporary load scope");
+assert.ok(userscriptSource.includes("relayScope: retryScope"), "request fallback must receive the temporary load scope");
 assert.ok(userscriptSource.includes("const maxRetries = Number.isInteger(options.maxRetries)"), "request retry policy must support the short automatic-fallback probe");
 assert.ok(userscriptSource.includes("Number(options.requestTimeoutMs) > 0"), "single requests must support a scoped timeout override");
+const userscriptRelayAutoSave = extractFunction(userscriptSource, "bindSettingsAutoSave");
+const extensionRelayAutoSave = extractFunction(extensionSource, "bindSettingsAutoSave");
+for (const [label, relayAutoSave] of [["userscript", userscriptRelayAutoSave], ["extension", extensionRelayAutoSave]]) {
+  assert.ok(relayAutoSave.includes("state.apiRelayAutoFallbackConfirmationPending = true"), label + " must enter a protected relay-confirmation state before awaiting consent");
+  assert.ok(relayAutoSave.includes("state.apiRelayAutoFallbackConfirmationPending = false"), label + " must leave the protected relay-confirmation state after consent settles");
+  assert.ok(relayAutoSave.includes("relayAutoFallbackInput.checked = false"), label + " must restore the checkbox after cancellation");
+}
+assert.ok(extensionRelayAutoSave.includes("await queueApplySettingsFromDialog()"), "extension must serialize the post-confirmation setting write");
+
+const relaySettingSandbox = {
+  state: {
+    apiRelayAutoFallbackEnabled: false,
+    apiRelayAutoFallbackConfirmationPending: true,
+  },
+  Boolean,
+};
+vm.createContext(relaySettingSandbox);
+vm.runInContext(
+  extractFunction(userscriptSource, "getApiRelayAutoFallbackSetting") + "\n;globalThis.readRelaySetting = getApiRelayAutoFallbackSetting;",
+  relaySettingSandbox,
+);
+const checkedRelayInput = { checked: true };
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), false, "an unconfirmed checked box must not authorize automatic relay fallback during a concurrent save");
+relaySettingSandbox.state.apiRelayAutoFallbackConfirmationPending = false;
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), true, "the checked box may be persisted only after confirmation finishes");
+relaySettingSandbox.state.apiRelayAutoFallbackEnabled = true;
+relaySettingSandbox.state.apiRelayAutoFallbackConfirmationPending = true;
+checkedRelayInput.checked = false;
+assert.equal(relaySettingSandbox.readRelaySetting(checkedRelayInput), true, "a concurrent save must preserve the last confirmed value while confirmation is pending");
 
 const requestSandbox = {
   API_BASE: "https://api.bgm.tv",
@@ -135,6 +180,14 @@ vm.runInContext([
   assert.equal(requestSandbox.calls[1].options.maxRetries, undefined, "relay request must use the normal request policy");
   assert.equal(requestSandbox.calls[1].options.requestTimeoutMs, undefined, "relay request must keep the normal timeout");
   requestSandbox.state.apiRelayAutoFallbackEnabled = false;
+
+  requestSandbox.calls.length = 0;
+  const forcedRelayScope = { choice: "api.bgmapi.com", promise: null };
+  const forcedRelayResult = await requestSandbox.api.bgmRequest("/v0/subjects/1", { auth: true, dedup: false, relayScope: forcedRelayScope });
+  assert.deepEqual(requestSandbox.calls.map((call) => call.url), [
+    "https://api.bgmapi.com/v0/subjects/1",
+  ], "an expanded retry notice relay choice must apply directly to the whole retry scope");
+  assert.equal(forcedRelayResult.url, "https://api.bgmapi.com/v0/subjects/1");
 
   requestSandbox.calls.length = 0;
   requestSandbox.choice = "official";

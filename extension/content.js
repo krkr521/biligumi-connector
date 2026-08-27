@@ -247,6 +247,7 @@
     panelCollapsed: readValue(STORAGE.panelCollapsed, "0") === "1",
     settingsOpen: false,
     apiRelayAutoFallbackEnabled: readValue(STORAGE.apiRelayAutoFallback, "0") === "1",
+    apiRelayAutoFallbackConfirmationPending: false,
     collectionEditorOpen: false,
     collectionEditorContext: null,
     collectionDeleteConfirmSubjectId: null,
@@ -278,6 +279,8 @@
     longVideoBindingPrompt: null,
     inlineConfirm: null,
     apiRelayPrompt: null,
+    apiRelayRetryNotice: null,
+    apiRelayRetryChoice: "",
     longVideoIdentifyDismissedKey: "",
     nonMainResults: [],
     nonMainKeyword: "",
@@ -2985,6 +2988,8 @@
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
     state.collectionDeleteConfirmSubjectId = null;
+    state.apiRelayRetryNotice = null;
+    state.apiRelayRetryChoice = "";
     removeModal();
     if (typeof removeBgmApiRelayPrompt === "function") removeBgmApiRelayPrompt(true);
     settleInlineConfirm(false);
@@ -3026,6 +3031,8 @@
     state.episodes = [];
     state.episodeCollections = [];
     state.collectionDeleteConfirmSubjectId = null;
+    state.apiRelayRetryNotice = null;
+    state.apiRelayRetryChoice = "";
     if (typeof removeBgmApiRelayPrompt === "function") removeBgmApiRelayPrompt(true);
     state.busy = false;
     state.message = state.bindingGuardMessage || "";
@@ -4224,7 +4231,7 @@
   }
 
   function renderPanelNoticeSlot() {
-    return renderBgmApiRelayPrompt();
+    return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}`;
   }
 
   function renderSearchOrSubject() {
@@ -5154,6 +5161,9 @@
     if (action === "dismiss-api-relay") settleBgmApiRelayPrompt("cancel");
     if (action === "retry-official-api") settleBgmApiRelayPrompt("official");
     if (action === "use-api-relay") settleBgmApiRelayPrompt(target.dataset.relay || "cancel");
+    if (action === "dismiss-api-relay-retry") dismissBgmApiRelayRetryNotice();
+    if (action === "retry-official-api-notice") retryBgmApiRelayNotice("official").catch(showError);
+    if (action === "use-api-relay-notice") retryBgmApiRelayNotice(target.dataset.relay || "cancel").catch(showError);
     if (action === "confirm-long-video-bind") resolveLongVideoBindingPrompt(true).catch(showError);
     if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
     if (action === "retry-long-video-bind-wait") retryLongVideoBindingWait();
@@ -5292,7 +5302,8 @@
   function togglePanelCollapsed() {
     state.panelCollapsed = !state.panelCollapsed;
     writeValue(STORAGE.panelCollapsed, state.panelCollapsed ? "1" : "0");
-    render();
+    if (state.panelCollapsed && state.apiRelayPrompt) settleBgmApiRelayPrompt("cancel", { preserveNotice: true });
+    else render();
   }
 
   function setScoreDetailMode(mode) {
@@ -8216,6 +8227,11 @@
     render();
   }
 
+  function getApiRelayAutoFallbackSetting(input) {
+    if (state.apiRelayAutoFallbackConfirmationPending) return state.apiRelayAutoFallbackEnabled;
+    return Boolean(input && input.checked);
+  }
+
   async function applySettingsFromDialog() {
     const settings = document.getElementById(SETTINGS_ID);
     if (!isSettingsDialogOpen(settings)) return false;
@@ -8235,7 +8251,7 @@
     const hasValidReplacementToken = isValidAccessToken(replacementToken);
     const hasInvalidReplacementToken = Boolean(replacementToken) && !hasValidReplacementToken;
     const nextToken = hasValidReplacementToken ? replacementToken : state.token;
-    const nextApiRelayAutoFallbackEnabled = Boolean(apiRelayAutoFallbackInput && apiRelayAutoFallbackInput.checked);
+    const nextApiRelayAutoFallbackEnabled = getApiRelayAutoFallbackSetting(apiRelayAutoFallbackInput);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
     const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
@@ -8728,18 +8744,25 @@
     if (relayAutoFallbackInput) {
       relayAutoFallbackInput.addEventListener("change", async () => {
         if (relayAutoFallbackInput.checked && !state.apiRelayAutoFallbackEnabled) {
-          const confirmed = await requestInlineConfirm({
-            context: "settings",
-            danger: true,
-            confirmLabel: "启用自动回退",
-            message: "启用后，官方 API 连接失败或超时时，将自动把包括 Bangumi Access Token、Authorization 请求头、收藏、评分和进度在内的请求内容发送到第三方 api.bgmapi.com。\n该站点不是 Bangumi 官方服务，可能读取或记录这些信息。确定启用吗？",
-          });
+          state.apiRelayAutoFallbackConfirmationPending = true;
+          let confirmed = false;
+          try {
+            confirmed = await requestInlineConfirm({
+              context: "settings",
+              danger: true,
+              confirmLabel: "启用自动回退",
+              message: "启用后，官方 API 连接失败或超时时，将自动把包括 Bangumi Access Token、Authorization 请求头、收藏、评分和进度在内的请求内容发送到第三方 api.bgmapi.com。\n该站点不是 Bangumi 官方服务，可能读取或记录这些信息。确定启用吗？",
+            });
+          } finally {
+            state.apiRelayAutoFallbackConfirmationPending = false;
+          }
           if (!confirmed) {
             relayAutoFallbackInput.checked = false;
+            await queueApplySettingsFromDialog();
             return;
           }
         }
-        queueApplySettingsFromDialog();
+        await queueApplySettingsFromDialog();
       });
     }
 
@@ -8944,8 +8967,9 @@
 
   function stabilizePanelReserve(panel, measured) {
     const loading = panel && panel.classList.contains("biligumi-panel-loading");
+    const collapsed = panel && panel.classList.contains("biligumi-panel-collapsed");
     const last = Number(window.__biligumiStableReserve) || 0;
-    if (loading) {
+    if (loading && !collapsed) {
       const peak = Math.max(measured, last);
       window.__biligumiStableReserve = peak;
       return peak;
@@ -8968,7 +8992,9 @@
   }
 
   function createBgmApiRelayScope() {
-    return { choice: "", promise: null };
+    const choice = state.apiRelayRetryChoice || "";
+    state.apiRelayRetryChoice = "";
+    return { choice, promise: null };
   }
 
   function requestBgmApiFallbackChoice({ authenticated = false, relayScope = null } = {}) {
@@ -8995,7 +9021,11 @@
     const promise = new Promise((resolve) => { resolveChoice = resolve; });
     state.apiRelayPrompt = { authenticated: Boolean(authenticated), returnFocus, resolve: resolveChoice, promise };
     document.addEventListener("keydown", handleBgmApiRelayKeydown, true);
-    mountBgmApiRelayPrompt();
+    if (state.panelCollapsed && shouldRenderFullPanel()) {
+      settleBgmApiRelayPrompt("cancel", { preserveNotice: true });
+    } else {
+      mountBgmApiRelayPrompt();
+    }
     const scopedPromise = promise.then((choice) => {
       if (scope) {
         scope.choice = choice;
@@ -9029,6 +9059,59 @@
     ].join("");
   }
 
+  function renderBgmApiRelayRetryNotice() {
+    const notice = state.apiRelayRetryNotice;
+    if (!notice || state.apiRelayPrompt) return "";
+    const authDetail = notice.authenticated
+      ? "中继请求会把 Authorization 请求头中的 Bangumi Access Token 发往第三方。"
+      : "本次请求可能不需要认证，但后续带 Token 的请求仍有相同风险。";
+    return [
+      '<div id="' + API_RELAY_ID + '" class="biligumi-api-relay-inline"><div class="biligumi-api-relay-card" data-action="noop" role="alert" aria-labelledby="biligumi-api-relay-title" aria-describedby="biligumi-api-relay-warning">',
+      '<div id="biligumi-api-relay-title" class="biligumi-api-relay-title">官方 Bangumi API 连接失败</div>',
+      '<div class="biligumi-api-relay-text">面板折叠时已取消上一批等待中的请求。你可以重新尝试官方接口，或明确选择第三方中继重新加载当前面板数据。</div>',
+      '<div id="biligumi-api-relay-warning" class="biligumi-api-relay-warning">危险：第三方服务器可能读取或记录 Token、Authorization 请求头、收藏、评分和进度等请求内容。' + escapeHtml(authDetail) + ' 请只在你信任该站点时继续。</div>',
+      '<div class="biligumi-api-relay-actions">',
+      '<button type="button" class="biligumi-button" data-action="dismiss-api-relay-retry">不再提示</button>',
+      '<button type="button" class="biligumi-button primary" data-action="retry-official-api-notice">重试官方 API</button>',
+      '<button type="button" class="biligumi-button danger" data-action="use-api-relay-notice" data-relay="api.bgmapi.com" aria-describedby="biligumi-api-relay-warning">使用 api.bgmapi.com</button>',
+      '</div>',
+      '</div>',
+      '</div>',
+    ].join("");
+  }
+
+  function dismissBgmApiRelayRetryNotice() {
+    state.apiRelayRetryNotice = null;
+    state.apiRelayRetryChoice = "";
+    render();
+  }
+
+  async function retryBgmApiRelayNotice(choice) {
+    const notice = state.apiRelayRetryNotice;
+    const allowed = choice === "official" || Object.prototype.hasOwnProperty.call(BGM_API_RELAYS, choice);
+    if (!notice || !allowed) return;
+    state.apiRelayRetryNotice = null;
+    state.apiRelayRetryChoice = choice;
+    render();
+    try {
+      if (notice.mode === "subject" && state.subjectId) {
+        await loadSubjectBundle();
+        return;
+      }
+      if (notice.mode === "preview") {
+        retryNonMainPreviewSearch();
+        return;
+      }
+      if (notice.mode === "search") {
+        await searchSubjects();
+        return;
+      }
+      if (state.subjectId) await loadSubjectBundle();
+    } finally {
+      state.apiRelayRetryChoice = "";
+    }
+  }
+
   function mountBgmApiRelayPrompt() {
     if (!state.apiRelayPrompt) return;
     render();
@@ -9045,15 +9128,21 @@
     settleBgmApiRelayPrompt("cancel");
   }
 
-  function settleBgmApiRelayPrompt(choice) {
+  function settleBgmApiRelayPrompt(choice, options = {}) {
     const pending = state.apiRelayPrompt;
     if (!pending) return;
     const allowed = choice === "official" || Object.prototype.hasOwnProperty.call(BGM_API_RELAYS, choice);
+    if (options.preserveNotice) {
+      state.apiRelayRetryNotice = {
+        authenticated: Boolean(pending.authenticated),
+        mode: state.subjectId ? "subject" : (state.nonMainBusy || state.nonMainKeyword ? "preview" : "search"),
+      };
+    }
     state.apiRelayPrompt = null;
     document.removeEventListener("keydown", handleBgmApiRelayKeydown, true);
     removeBgmApiRelayPrompt(false);
-    if (pending.returnFocus && pending.returnFocus.isConnected && pending.returnFocus.focus) pending.returnFocus.focus();
     render();
+    if (pending.returnFocus && pending.returnFocus.isConnected && pending.returnFocus.focus) pending.returnFocus.focus();
     pending.resolve(allowed ? choice : "cancel");
   }
 
@@ -9079,16 +9168,20 @@
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
     const requestOptions = { ...options, authToken };
+    const retryScope = options.relayScope && typeof options.relayScope === "object" ? options.relayScope : null;
+    const forcedRetryChoice = retryScope && retryScope.choice || "";
     const officialRequestOptions = state.apiRelayAutoFallbackEnabled
       ? { ...requestOptions, maxRetries: 0, requestTimeoutMs: BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS }
       : requestOptions;
-    const promise = bgmRequestWithRetry(method, url, data, officialRequestOptions).catch(async (error) => {
-      if (!isRelayEligibleTransportError(error)) throw error;
+    const promise = (forcedRetryChoice && forcedRetryChoice !== "official"
+      ? bgmRequestOnce(method, buildBgmApiUrl(path, BGM_API_RELAYS[forcedRetryChoice]), data, requestOptions)
+      : bgmRequestWithRetry(method, url, data, officialRequestOptions)).catch(async (error) => {
+      if (!isRelayEligibleTransportError(error) || forcedRetryChoice) throw error;
       const choice = state.apiRelayAutoFallbackEnabled
         ? "api.bgmapi.com"
         : await requestBgmApiFallbackChoice({
           authenticated: Boolean(options.auth),
-          relayScope: options.relayScope || null,
+          relayScope: retryScope,
         });
       if (choice === "cancel") throw error;
       const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
