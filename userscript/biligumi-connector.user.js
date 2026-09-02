@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.17
+// @version      0.7.18
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -45,9 +45,10 @@
   const SETTINGS_ID = "biligumi-connector-settings";
   const API_RELAY_ID = "biligumi-connector-api-relay";
   const EPISODE_TOOLTIP_ID = "biligumi-episode-tooltip";
+  const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.17";
+  const SCRIPT_VERSION = "0.7.18";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
@@ -3087,7 +3088,7 @@
   function mutationTouchesOfficialBangumiEpisodeList(mutation) {
     const target = mutation && mutation.target;
     const targetElement = target && (target.nodeType === 1 ? target : target.parentElement);
-    const selector = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='SectionSelector_SectionSelector']";
+    const selector = OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR;
     if (targetElement && targetElement.closest && targetElement.closest(selector)) return true;
     return Array.from(mutation && mutation.addedNodes || []).some((node) => (
       node && node.nodeType === 1 && (
@@ -3459,7 +3460,13 @@
     const inner = rightColumn && rightColumn.querySelector(".right-container-inner");
     const upPanel = inner && inner.querySelector(".up-panel-container, .up-info-container");
     const officialAnchor = rightColumn && findOfficialBangumiLayoutAnchor(rightColumn);
-    const layoutAnchor = upPanel && isVisible(upPanel) ? upPanel : officialAnchor;
+    const layoutAnchor = upPanel && isVisible(upPanel)
+      ? upPanel
+      : (officialAnchor || (
+        rightColumn && !isOfficialBangumiPage()
+          ? findPanelInsertReference(rightColumn)
+          : null
+      ));
     if (panel) {
       panel.classList.toggle("biligumi-panel-under-bili-overlay", Boolean(rightColumn && hasOverlappingBiliMusicOverlay(rightColumn)));
     }
@@ -3518,8 +3525,17 @@
 
   function findOfficialBangumiLayoutAnchor(rightColumn) {
     if (!state.officialBangumiLayoutEnabled || !isOfficialBangumiPage()) return null;
-    const modules = Array.from(rightColumn.querySelectorAll("#eplist_module, [class*='eplist_ep_list_wrapper']"))
+    const selectorModules = Array.from(rightColumn.querySelectorAll(OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR))
+      .map((node) => getDirectChild(rightColumn, node) || node)
       .filter(isVisible);
+    const semanticModule = getVisibleChildren(rightColumn).find((node) => {
+      const text = (node.textContent || "").replace(/\s+/g, "");
+      return /^(?:正片|选集|剧集)(?:[（(]|$)/.test(text);
+    });
+    const modules = Array.from(new Set([
+      ...selectorModules,
+      ...(semanticModule ? [semanticModule] : []),
+    ]));
     const mainList = modules.find((node) => {
       const text = (node.textContent || "").replace(/\s+/g, "");
       return text.includes("正片") || text.includes("选集") || text.includes("剧集");
