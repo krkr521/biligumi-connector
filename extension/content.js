@@ -54,7 +54,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.19";
+  const SCRIPT_VERSION = "0.3.20";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -3451,10 +3451,26 @@
     }
     if (!panel || !rightColumn || !layoutAnchor || !isVisible(layoutAnchor)) {
       if (panel) {
+        const fixedRect = rightColumn && typeof rightColumn.getBoundingClientRect === "function"
+          ? rightColumn.getBoundingClientRect()
+          : null;
         panel.style.position = "fixed";
-        panel.style.top = "";
-        panel.style.left = "";
-        panel.style.right = "";
+        panel.style.margin = "0";
+        panel.style.top = "96px";
+        if (
+          fixedRect
+          && Number.isFinite(fixedRect.left)
+          && Number.isFinite(fixedRect.width)
+          && fixedRect.width > 240
+        ) {
+          panel.style.left = `${Math.round(fixedRect.left)}px`;
+          panel.style.right = "auto";
+          panel.style.width = `${Math.round(fixedRect.width)}px`;
+        } else {
+          panel.style.left = "auto";
+          panel.style.right = "16px";
+          panel.style.width = "min(350px, calc(100vw - 32px))";
+        }
       }
       clearReservedLayoutSpace();
       return;

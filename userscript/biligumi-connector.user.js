@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.18
+// @version      0.7.19
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -48,7 +48,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.18";
+  const SCRIPT_VERSION = "0.7.19";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
@@ -3472,10 +3472,26 @@
     }
     if (!panel || !rightColumn || !layoutAnchor || !isVisible(layoutAnchor)) {
       if (panel) {
+        const fixedRect = rightColumn && typeof rightColumn.getBoundingClientRect === "function"
+          ? rightColumn.getBoundingClientRect()
+          : null;
         panel.style.position = "fixed";
-        panel.style.top = "";
-        panel.style.left = "";
-        panel.style.right = "";
+        panel.style.margin = "0";
+        panel.style.top = "96px";
+        if (
+          fixedRect
+          && Number.isFinite(fixedRect.left)
+          && Number.isFinite(fixedRect.width)
+          && fixedRect.width > 240
+        ) {
+          panel.style.left = `${Math.round(fixedRect.left)}px`;
+          panel.style.right = "auto";
+          panel.style.width = `${Math.round(fixedRect.width)}px`;
+        } else {
+          panel.style.left = "auto";
+          panel.style.right = "16px";
+          panel.style.width = "min(350px, calc(100vw - 32px))";
+        }
       }
       clearReservedLayoutSpace();
       return;

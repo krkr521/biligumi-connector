@@ -27,7 +27,7 @@ function loadAnchorFinder(filePath) {
   return sandbox;
 }
 
-function exerciseFallbackLayout(filePath, officialPage) {
+function exerciseFallbackLayout(filePath, officialPage, rightColumnAvailable = true) {
   const source = readSource(filePath);
   const functionSource = extractFunction(source, "layoutPanelWithoutOwningBiliDom");
   const panel = {
@@ -49,7 +49,7 @@ function exerciseFallbackLayout(filePath, officialPage) {
     PANEL_ID: "biligumi-connector-panel",
     document: { getElementById: () => panel },
     window: { scrollX: 0, scrollY: 0, pageXOffset: 0, pageYOffset: 0 },
-    findRightColumn: () => rightColumn,
+    findRightColumn: () => (rightColumnAvailable ? rightColumn : null),
     findOfficialBangumiLayoutAnchor: () => null,
     findPanelInsertReference: () => {
       fallbackCalls += 1;
@@ -104,6 +104,10 @@ for (const [label, filePath] of [["userscript", USERSCRIPT_PATH], ["extension", 
   const officialOptOut = exerciseFallbackLayout(filePath, true);
   assert.equal(officialOptOut.fallbackCalls, 0, `${label}: official layout opt-out must skip the generic fallback`);
   assert.equal(officialOptOut.panel.style.position, "fixed", `${label}: opt-out keeps the legacy non-reserving layout`);
+  assert.equal(officialOptOut.panel.style.top, "96px", `${label}: opt-out keeps the panel visible below the site header`);
+  assert.equal(officialOptOut.panel.style.left, "100px", `${label}: opt-out aligns the fixed panel to the right column`);
+  assert.equal(officialOptOut.panel.style.right, "auto", `${label}: aligned fixed layout must not keep a stale right offset`);
+  assert.equal(officialOptOut.panel.style.width, "350px", `${label}: opt-out keeps the right-column panel width`);
   assert.equal(officialOptOut.reservedTarget, null, `${label}: opt-out must not move Bilibili's official modules`);
   assert.equal(officialOptOut.cleared, true, `${label}: opt-out clears any earlier reserved space`);
 
@@ -112,6 +116,13 @@ for (const [label, filePath] of [["userscript", USERSCRIPT_PATH], ["extension", 
   assert.equal(ordinaryFallback.panel.style.position, "absolute", `${label}: ordinary fallback remains positioned`);
   assert.equal(ordinaryFallback.panel.style.top, "512px", `${label}: ordinary fallback is placed below its anchor`);
   assert.equal(ordinaryFallback.reservedTarget, ordinaryFallback.fallback, `${label}: ordinary fallback reserves space`);
+
+  const missingColumnFallback = exerciseFallbackLayout(filePath, false, false);
+  assert.equal(missingColumnFallback.panel.style.position, "fixed", `${label}: missing right column uses a fixed fallback`);
+  assert.equal(missingColumnFallback.panel.style.top, "96px", `${label}: missing right column fallback stays on-screen`);
+  assert.equal(missingColumnFallback.panel.style.left, "auto", `${label}: missing right column fallback clears stale left offsets`);
+  assert.equal(missingColumnFallback.panel.style.right, "16px", `${label}: missing right column fallback uses a safe viewport inset`);
+  assert.equal(missingColumnFallback.panel.style.width, "min(350px, calc(100vw - 32px))", `${label}: missing right column fallback fits narrow viewports`);
 }
 
 assert.equal(

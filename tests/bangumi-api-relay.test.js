@@ -68,8 +68,13 @@ assert.match(userscriptSource, /#\$\{PANEL_ID\} #\$\{API_RELAY_ID\} \.biligumi-b
 assert.equal(userscriptSource.includes("#${PANEL_ID} #${API_RELAY_ID} .biligumi-button {\n      min-height: 32px;"), false, "relay buttons must not retain the pill-button dimensions");
 assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderScriptUpdateBanner()}`;"), "userscript relay warnings must render inside the panel notice slot");
 assert.ok(extensionSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;"), "extension relay warnings must render inside the panel notice slot");
-assert.equal(userscriptSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "relay warning must not use a page-level fixed overlay");
-assert.equal(extensionSource.includes("position: fixed;\n      inset: 0;\n      z-index: 2147483647;"), false, "extension relay warning must not use a page-level fixed overlay");
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  const relayRootStyle = source.match(/#\$\{API_RELAY_ID\}\s*\{[\s\S]*?\}/);
+  assert.ok(relayRootStyle, label + " relay root style must exist");
+  assert.match(relayRootStyle[0], /position:\s*relative;/, label + " relay warning must stay in panel flow");
+  assert.doesNotMatch(relayRootStyle[0], /position:\s*fixed;/, label + " relay warning must not use a page-level fixed overlay");
+  assert.doesNotMatch(relayRootStyle[0], /inset:\s*0;/, label + " relay warning must not cover the page");
+}
 const renderRelayPrompt = extractFunction(userscriptSource, "renderBgmApiRelayPrompt");
 assert.match(renderRelayPrompt, /class=\"biligumi-api-relay-inline\"/, "relay warning must use the inline panel wrapper");
 assert.equal(renderRelayPrompt.includes("aria-modal=\"true\""), false, "inline relay warning must not claim modal semantics");
