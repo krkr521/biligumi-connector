@@ -17,7 +17,6 @@ function loadAnchorFinder(filePath) {
   const functionSource = extractFunction(source, "findOfficialBangumiLayoutAnchor");
   const sandbox = {
     ...constants,
-    state: { officialBangumiLayoutEnabled: true },
     isOfficialBangumiPage: () => true,
     isVisible: (node) => Boolean(node && node.visible !== false),
     getDirectChild: (_host, node) => node.directChild || node,
@@ -68,6 +67,11 @@ function exerciseFallbackLayout(filePath, officialPage, rightColumnAvailable = t
 }
 
 for (const [label, filePath] of [["userscript", USERSCRIPT_PATH], ["extension", EXTENSION_PATH]]) {
+  const source = readSource(filePath);
+  assert.doesNotMatch(source, /officialBangumiLayoutEnabled/, `${label}: official layout must not have a runtime opt-out`);
+  assert.doesNotMatch(source, /biligumi\.officialBangumiLayout/, `${label}: obsolete official layout preference must not be read or written`);
+  assert.doesNotMatch(source, /settings-official-bangumi-layout/, `${label}: settings must not expose an official layout toggle`);
+
   const sandbox = loadAnchorFinder(filePath);
   const paginatedRoot = { textContent: "", visible: true };
   const nestedPanel = { textContent: "正片 (2/13)", visible: true, directChild: paginatedRoot };
@@ -101,15 +105,15 @@ for (const [label, filePath] of [["userscript", USERSCRIPT_PATH], ["extension", 
     `${label}: a renamed episode module must still be found by its leading section label`,
   );
 
-  const officialOptOut = exerciseFallbackLayout(filePath, true);
-  assert.equal(officialOptOut.fallbackCalls, 0, `${label}: official layout opt-out must skip the generic fallback`);
-  assert.equal(officialOptOut.panel.style.position, "fixed", `${label}: opt-out keeps the legacy non-reserving layout`);
-  assert.equal(officialOptOut.panel.style.top, "96px", `${label}: opt-out keeps the panel visible below the site header`);
-  assert.equal(officialOptOut.panel.style.left, "100px", `${label}: opt-out aligns the fixed panel to the right column`);
-  assert.equal(officialOptOut.panel.style.right, "auto", `${label}: aligned fixed layout must not keep a stale right offset`);
-  assert.equal(officialOptOut.panel.style.width, "350px", `${label}: opt-out keeps the right-column panel width`);
-  assert.equal(officialOptOut.reservedTarget, null, `${label}: opt-out must not move Bilibili's official modules`);
-  assert.equal(officialOptOut.cleared, true, `${label}: opt-out clears any earlier reserved space`);
+  const officialMissingAnchor = exerciseFallbackLayout(filePath, true);
+  assert.equal(officialMissingAnchor.fallbackCalls, 0, `${label}: official pages must not borrow an ordinary-page anchor`);
+  assert.equal(officialMissingAnchor.panel.style.position, "fixed", `${label}: an official page without a recognized anchor uses the safe fallback`);
+  assert.equal(officialMissingAnchor.panel.style.top, "96px", `${label}: the safe fallback stays visible below the site header`);
+  assert.equal(officialMissingAnchor.panel.style.left, "100px", `${label}: the safe fallback aligns to the right column`);
+  assert.equal(officialMissingAnchor.panel.style.right, "auto", `${label}: the aligned fallback clears stale right offsets`);
+  assert.equal(officialMissingAnchor.panel.style.width, "350px", `${label}: the aligned fallback keeps the right-column width`);
+  assert.equal(officialMissingAnchor.reservedTarget, null, `${label}: a missing official anchor cannot reserve layout space`);
+  assert.equal(officialMissingAnchor.cleared, true, `${label}: the safe fallback clears any earlier reserved space`);
 
   const ordinaryFallback = exerciseFallbackLayout(filePath, false);
   assert.equal(ordinaryFallback.fallbackCalls, 1, `${label}: ordinary pages retain the generic fallback`);

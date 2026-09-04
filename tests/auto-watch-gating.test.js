@@ -69,19 +69,19 @@ assert.ok(!checkFunctionSource.includes("autoWatchSeekStartTime = null"), "check
 
 // Token changes must release the auth gate in both builds (source-level guard).
 assert.ok(
-  extractFunction(userscriptSource, "applySettingsFromDialog").includes("state.autoWatchAuthBlocked = false;"),
+  extractFunction(userscriptSource, "applySettingsFromDialog").includes("setAccessTokenState(nextToken)"),
   "userscript settings save must release the auth gate on token change",
 );
 assert.ok(
-  extractFunction(userscriptSource, "clearSavedAccessToken", { async: true }).includes("state.autoWatchAuthBlocked = false;"),
+  extractFunction(userscriptSource, "clearSavedAccessToken", { async: true }).includes('setAccessTokenState("")'),
   "userscript token clear must release the auth gate",
 );
 assert.ok(
-  extractFunction(extensionSource, "applySettingsFromDialog", { async: true }).includes("state.autoWatchAuthBlocked = false;"),
+  extractFunction(extensionSource, "applySettingsFromDialog", { async: true }).includes("setAccessTokenState(nextToken)"),
   "extension settings save must release the auth gate on token change",
 );
 assert.ok(
-  extractFunction(extensionSource, "clearSavedAccessToken", { async: true }).includes("state.autoWatchAuthBlocked = false;"),
+  extractFunction(extensionSource, "clearSavedAccessToken", { async: true }).includes('setAccessTokenState("")'),
   "extension token clear must release the auth gate",
 );
 
@@ -90,6 +90,10 @@ assert.ok(
 // ---------------------------------------------------------------------------
 
 const GATING_SOURCE = [
+  extractFunction(userscriptSource, "captureCollectionOperationContext"),
+  extractFunction(userscriptSource, "isCollectionOperationContextCurrent"),
+  extractFunction(userscriptSource, "capturePageContext"),
+  extractFunction(userscriptSource, "isCurrentPageContext"),
   extractFunction(userscriptSource, "checkAutoWatchProgress", { async: true }),
   extractFunction(userscriptSource, "getAutoWatchProgressSample"),
   extractFunction(userscriptSource, "getAutoWatchFailureRecord"),
@@ -115,8 +119,10 @@ function createSandbox() {
     ...GATING_CONSTANTS,
     URL,
     Date,
+    routeRefreshSeq: 1,
     document: { visibilityState: "visible" },
     state: {
+      pageKey: "video-A",
       token: "token",
       subjectId: 7,
       autoEpisodeSyncing: false,
@@ -166,7 +172,7 @@ function createSandbox() {
     getAutoWatchThreshold: () => sandbox.autoWatchThreshold,
     patchEpisodes: (...args) => {
       sandbox.patchCalls += 1;
-      return sandbox.patchImpl(...args);
+      return Promise.resolve(sandbox.patchImpl(...args)).then((result) => result !== false);
     },
     applySingleEpisodeProgress: () => {},
     formatEpisodeSort: (value) => String(value),

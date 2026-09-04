@@ -18,6 +18,7 @@ const CONTEXT_FUNCTIONS = [
   "getOfficialBangumiMediaTitleFromDom",
   "stripOfficialBangumiProgressSuffix",
   "getOfficialBangumiSectionTitle",
+  "getOfficialBangumiPlayingSectionTitle",
   "extractOfficialBangumiSectionTitleFromPageTitle",
   "normalizeOfficialBangumiSectionTitle",
   "isOfficialBangumiSectionContainedInSeries",
@@ -108,6 +109,7 @@ const document = {
 };
 
 const sandbox = {
+  state: {},
   document,
   window: { __INITIAL_STATE__: {} },
   getPageInitialState: () => sandbox.window.__INITIAL_STATE__ || {},

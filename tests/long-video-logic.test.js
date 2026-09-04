@@ -186,6 +186,8 @@ const sandbox = {
 // Real implementations replace former hand-written stubs; extraction is strict.
 const realHelpers = [
   extractFunction(userscriptSource, "getNormalEpisodes"),
+  extractFunction(userscriptSource, "getEpisodeDisplayNo"),
+  extractFunction(userscriptSource, "getEpisodeLocalNo"),
   extractFunction(userscriptSource, "escapeHtml"),
   extractFunction(userscriptSource, "getCurrentPartNoFromUrl"),
   extractFunction(userscriptSource, "stripTrailingDurationText"),
@@ -301,7 +303,7 @@ assert.equal(logic.parseLongVideoPartTitle("第三季").seasonNo, 3);
 assert.equal(logic.parseLongVideoPartTitle("租借女友 第1-5季"), null,
   "a whole-title season range must not be mistaken for the fifth part season");
 
-const fifteenEpisodes = Array.from({ length: 15 }, (_, index) => ({ ...episodes[index % episodes.length], id: index + 101 }));
+const fifteenEpisodes = Array.from({ length: 15 }, (_, index) => ({ ...episodes[index % episodes.length], id: index + 101, sort: index + 1 }));
 const rangedSegment = logic.selectLongVideoEpisodeSegment(fifteenEpisodes, parsedSeasonRange);
 assert.equal(rangedSegment.rangeApplied, true);
 assert.equal(rangedSegment.firstEpisodeNo, 13);

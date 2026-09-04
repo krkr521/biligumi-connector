@@ -53,7 +53,9 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
     `${label} scheduleRouteRefresh must settle pending confirms immediately`,
   );
   const bindBody = extractFunction(source, "bindSubject", { async: true });
-  const guard = label === "userscript" ? "if (!isCurrentPageContext(context)) return;" : "if (!isRouteContextCurrent(routeContext)) return;";
+  const routeCheck = label === "userscript" ? "isCurrentPageContext(context)" : "isRouteContextCurrent(routeContext)";
+  assert.ok(bindBody.includes(`const isCurrent = () => ${routeCheck} && isCurrentRequest();`), `${label} bind guard must include both route and request identity`);
+  const guard = "if (!isCurrent()) return;";
   assert.ok(
     bindBody.includes(`${guard}\n      state.busy = false;`),
     `${label} collection bind cancel must not write the cancel message onto a new page`,

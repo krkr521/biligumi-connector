@@ -59,6 +59,7 @@ const IDENTICAL_FUNCTIONS = [
   "isNaturalAutoWatchTimeAdvance",
   "renderCollectionMappingHint",
   "detectCurrentEpisodeNo",
+  "getEpisodeLabelLocalNo",
   "refreshCurrentEpisodeRecognitionState",
   "getCurrentVideoPartEpisodeNo",
   "getCurrentVideoPartContext",

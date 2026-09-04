@@ -35,6 +35,7 @@
     "https://www.bilibili.com/video/*",
     "https://www.bilibili.com/bangumi/play/*",
   ];
+  let runtimeStateUpdateQueue = Promise.resolve();
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message && message.type === MSG_OPEN_DELETE_BRIDGE) {
@@ -637,6 +638,7 @@
   }
 
   async function getCandidateTabs() {
+    await runtimeStateUpdateQueue.catch(() => {});
     const state = await getRuntimeState();
     const candidateIds = [];
 
@@ -677,28 +679,33 @@
     const tabUrl = (tab && tab.url) || (pageState && pageState.url) || "";
     if (!tab || !tab.id || !isBilibiliVideoUrl(tabUrl)) return;
     const now = Date.now();
-    const state = await getRuntimeState();
-    const nextState = {
-      ...state,
-      lastBilibiliTabId: tab.id,
-      lastBilibiliUrl: tabUrl,
-      lastUpdatedAt: now,
-    };
+    // Each event must read the preceding event's committed state before merging.
+    const update = runtimeStateUpdateQueue.catch(() => {}).then(async () => {
+      const state = await getRuntimeState();
+      const nextState = {
+        ...state,
+        lastBilibiliTabId: tab.id,
+        lastBilibiliUrl: tabUrl,
+        lastUpdatedAt: now,
+      };
 
-    if (tab.active || pageState.reason === "focus" || pageState.reason === "visibility-visible") {
-      nextState.lastActiveBilibiliTabId = tab.id;
-    }
+      if (tab.active || pageState.reason === "focus" || pageState.reason === "visibility-visible") {
+        nextState.lastActiveBilibiliTabId = tab.id;
+      }
 
-    if (pageState.pip === true) {
-      nextState.lastPiPTabId = tab.id;
-      nextState.lastPiPUrl = tabUrl;
-      nextState.lastPiPAt = now;
-    } else if (pageState.pip === false && state.lastPiPTabId === tab.id) {
-      nextState.lastPiPTabId = null;
-      nextState.lastPiPUrl = "";
-    }
+      if (pageState.pip === true) {
+        nextState.lastPiPTabId = tab.id;
+        nextState.lastPiPUrl = tabUrl;
+        nextState.lastPiPAt = now;
+      } else if (pageState.pip === false && state.lastPiPTabId === tab.id) {
+        nextState.lastPiPTabId = null;
+        nextState.lastPiPUrl = "";
+      }
 
-    await setRuntimeState(nextState);
+      await setRuntimeState(nextState);
+    });
+    runtimeStateUpdateQueue = update;
+    await update;
   }
 
   function isBilibiliVideoUrl(url) {

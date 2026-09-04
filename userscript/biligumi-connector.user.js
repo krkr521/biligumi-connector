@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.19
+// @version      0.7.20
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -16,6 +16,7 @@
 // @grant        GM_xmlhttpRequest
 // @grant        GM_addStyle
 // @grant        GM_getValue
+// @grant        GM_addValueChangeListener
 // @grant        GM_setValue
 // @grant        GM_deleteValue
 // @grant        GM_openInTab
@@ -48,7 +49,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.19";
+  const SCRIPT_VERSION = "0.7.20";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
@@ -79,7 +80,6 @@
     scoreDetailMode: "biligumi.scoreDetailMode",
     syncHistory: "biligumi.syncHistory",
     nonMainPreview: "biligumi.nonMainPreview",
-    officialBangumiLayout: "biligumi.officialBangumiLayout",
     autoWatchThresholds: "biligumi.autoWatchThresholds",
     opedSkips: "biligumi.opedSkips",
     opedSkipSeconds: "biligumi.opedSkipSeconds",
@@ -162,6 +162,7 @@
   const pendingRequests = new Map();
   const subjectBundleRequests = new Map();
   const nonMainPreviewRequests = new Map();
+  const panelInputDraftContexts = new WeakMap();
   const subjectInfoLinkRequests = new Map();
   const subjectInfoLinkCache = new Map();
   const animeMovieClassificationRequests = new Map();
@@ -205,7 +206,6 @@
   const DEFAULT_OPED_SKIP_HOTKEY = "Ctrl+Alt+ArrowRight";
   const DEFAULT_CHARACTER_STRIP_ENABLED = true;
   const DEFAULT_SUBJECT_INFO_PANEL_ENABLED = false;
-  const DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED = true;
   // Bangumi chii_oauth_access_tokens.access_token is varchar(40).
   const BANGUMI_ACCESS_TOKEN_LENGTH = 40;
   const OPED_SKIP_BUTTON_CLASS = "biligumi-oped-skip-btn";
@@ -229,6 +229,7 @@
     pageKey: "",
     rawTitle: "",
     pageTitle: "",
+    officialBangumiPlayingSection: null,
     username: "",
     token: readValue(STORAGE.token, ""),
     bindings: readJsonValue(STORAGE.bindings, {}),
@@ -253,6 +254,7 @@
     episodes: [],
     episodeCollections: [],
     currentEpisodeNo: null,
+    currentEpisodeNumberSource: "",
     bindingGuardMessage: "",
     busy: false,
     scoreDetailMode: normalizeScoreDetailMode(readValue(STORAGE.scoreDetailMode, "simple")),
@@ -268,7 +270,6 @@
     error: "",
     searchResults: [],
     nonMainPreviewEnabled: true,
-    officialBangumiLayoutEnabled: readValue(STORAGE.officialBangumiLayout, "1") !== "0",
     autoWatchThresholds: readJsonValue(STORAGE.autoWatchThresholds, {}),
     opedSkips: readJsonValue(STORAGE.opedSkips, {}),
     opedSkipSeconds: normalizeOpedSkipSeconds(readValue(STORAGE.opedSkipSeconds, DEFAULT_OPED_SKIP_SECONDS)),
@@ -1276,6 +1277,8 @@
       text-decoration: none;
     }
     #${PANEL_ID}.biligumi-panel {
+      /* Bilibili's mini player is inside a grid stacking context at z-index 3. */
+      z-index: 1;
       --bgm-card-blue: #fff;
       --bgm-card-blue-top: #f0f0f0;
       --bgm-card-border: #dfe3e8;
@@ -3031,6 +3034,7 @@
 
   let routeRefreshSeq = 0;
   let scriptUpdateCheckSeq = 0;
+  let subjectSearchSeq = 0;
   let scriptUpdateCheckPromise = null;
   let scriptUpdateOpening = false;
   let scriptUpdateState = readCachedScriptUpdateState();
@@ -3049,6 +3053,7 @@
   init();
 
   function init() {
+    bindAccessTokenChanges();
     normalizeStoredWhitelist();
     refreshPageContext();
     state.subjectId = getCurrentBinding();
@@ -3116,6 +3121,7 @@
   }
 
   function scheduleRouteRefresh(previousRawTitle, previousPageKey = state.pageKey) {
+    if (state.officialBangumiPlayingSection && state.officialBangumiPlayingSection.href !== location.href) state.officialBangumiPlayingSection = null;
     const seq = ++routeRefreshSeq;
     invalidatePageInitialState();
     const pageInitialStateReady = refreshPageInitialState();
@@ -3241,7 +3247,7 @@
     const collectionLayout = getCurrentCollectionLayoutContext();
     for (const key of getDirectBindingKeysForCurrentPage()) {
       const directSubjectId = state.bindings[key];
-      if (!directSubjectId || !canReuseOfficialDirectBinding(directSubjectId)) continue;
+      if (!directSubjectId || !canReuseOfficialDirectBinding(directSubjectId, key)) continue;
       if (!/^bili:BV[\w]+:range:s\d+:\d+-\d+$/i.test(key)) migrateCurrentBindingKeys(directSubjectId);
       return directSubjectId;
     }
@@ -3275,14 +3281,17 @@
     return null;
   }
 
-  function canReuseOfficialDirectBinding(subjectId) {
+  function canReuseOfficialDirectBinding(subjectId, bindingKey = "") {
     if (!isOfficialBangumiPage()) return true;
+    // A distinct section is an independently bound work. Its parent media's
+    // season number must not invalidate the exact binding for that section.
+    if (bindingKey.includes("|section:") && getOfficialBangumiSectionBindingKeys().includes(bindingKey)) return true;
     const evidence = state.bindingSubjects && state.bindingSubjects[String(subjectId)];
     const names = evidence && Array.isArray(evidence.names) ? evidence.names : [];
     if (!names.length) return true;
     const titleInfo = getTitleBindingInfo();
     if (doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo)) return true;
-    const currentSeason = getTitleSeasonNumber(titleInfo.sourceTitle);
+    const currentSeason = titleInfo.seasonNo || getTitleSeasonNumber(titleInfo.sourceTitle);
     const evidenceSeasons = names.map(getTitleSeasonNumber).filter((value) => value > 0);
     const hasCurrentSeason = evidenceSeasons.includes(currentSeason);
     // Bidirectional season guard:
@@ -3540,7 +3549,7 @@
   }
 
   function findOfficialBangumiLayoutAnchor(rightColumn) {
-    if (!state.officialBangumiLayoutEnabled || !isOfficialBangumiPage()) return null;
+    if (!isOfficialBangumiPage()) return null;
     const selectorModules = Array.from(rightColumn.querySelectorAll(OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR))
       .map((node) => getDirectChild(rightColumn, node) || node)
       .filter(isVisible);
@@ -3696,10 +3705,17 @@
     ["search-keyword", "progress"].forEach((role) => {
       const input = panel.querySelector(`[data-role='${role}']`);
       if (!input) return;
+      const context = panelInputDraftContexts.get(input);
+      if (!isPanelInputDraftContextCurrent(context)) return;
+      const edited = input.value !== input.defaultValue;
+      const focused = document.activeElement === input;
+      if (!edited && !focused) return;
       drafts.push({
         role,
         value: input.value,
-        focused: document.activeElement === input,
+        edited,
+        focused,
+        context,
         selectionStart: typeof input.selectionStart === "number" ? input.selectionStart : null,
         selectionEnd: typeof input.selectionEnd === "number" ? input.selectionEnd : null,
       });
@@ -3710,9 +3726,10 @@
   function restorePanelInputDrafts(panel, drafts) {
     if (!panel || !Array.isArray(drafts) || !drafts.length) return;
     drafts.forEach((draft) => {
+      if (!isPanelInputDraftContextCurrent(draft.context)) return;
       const input = panel.querySelector(`[data-role='${draft.role}']`);
       if (!input) return;
-      if (input.value !== draft.value) input.value = draft.value;
+      if (draft.edited && input.value !== draft.value) input.value = draft.value;
       if (!draft.focused) return;
       input.focus({ preventScroll: true });
       if (draft.selectionStart != null && typeof input.setSelectionRange === "function") {
@@ -3723,6 +3740,29 @@
         }
       }
     });
+  }
+
+  function bindPanelInputDrafts(panel) {
+    ["search-keyword", "progress"].forEach((role) => {
+      const input = panel.querySelector(`[data-role='${role}']`);
+      if (!input) return;
+      panelInputDraftContexts.set(input, {
+        pageKey: state.pageKey,
+        routeSeq: routeRefreshSeq,
+        href: location.href,
+        subjectId: state.subjectId,
+        token: state.token,
+      });
+    });
+  }
+
+  function isPanelInputDraftContextCurrent(context) {
+    return Boolean(context
+      && context.pageKey === state.pageKey
+      && context.routeSeq === routeRefreshSeq
+      && context.href === location.href
+      && context.subjectId === state.subjectId
+      && context.token === state.token);
   }
 
   function syncSubjectInfoPanel() {
@@ -4759,13 +4799,6 @@
               <div class="biligumi-settings-help">默认关闭；会显示封面和公开 infobox 字段，并尽量解析 Bangumi 页面补全制作人员链接。</div>
               <div class="biligumi-settings-help warning">注意：此功能会对界面排版进行大量更改，并且带来一定性能开销。</div>
             </div>
-            <div class="biligumi-settings-field">
-              <label class="biligumi-settings-check">
-                <input type="checkbox" data-role="settings-official-bangumi-layout" ${state.officialBangumiLayoutEnabled ? "checked" : ""}>
-                <span>实验兼容 Bilibili 官方番剧页右侧布局，把 PV / 相关推荐列表下移给面板让位。</span>
-              </label>
-              <div class="biligumi-settings-help">官方源不是推荐使用场景；如果页面布局异常，可以关闭这个开关。</div>
-            </div>
           </div>
           <div class="biligumi-settings-section">
             <h3 class="biligumi-settings-section-title">播放</h3>
@@ -5226,6 +5259,7 @@
   function bindPanelEvents() {
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
+    bindPanelInputDrafts(panel);
 
     const typeSelect = panel.querySelector("[data-role='subject-type']");
     if (typeSelect) {
@@ -5553,6 +5587,20 @@
   }
 
   async function searchSubjects(options = {}) {
+    const searchId = ++subjectSearchSeq;
+    const origin = {
+      pageKey: state.pageKey,
+      routeSeq: routeRefreshSeq,
+      href: location.href,
+      subjectId: state.subjectId,
+      token: state.token,
+    };
+    const isRequestActive = () => searchId === subjectSearchSeq
+      && origin.pageKey === state.pageKey
+      && origin.routeSeq === routeRefreshSeq
+      && origin.href === location.href
+      && origin.token === state.token;
+    const isCurrent = () => isRequestActive() && origin.subjectId === state.subjectId;
     clearLongVideoBindingPrompt();
     const keyword = getSearchKeywordFromInput({ allowFallback: options.allowFallback !== false });
     if (!keyword) throw new Error("请输入番名再搜索");
@@ -5560,25 +5608,36 @@
 
     const directSubjectId = parseBangumiSubjectId(keyword);
     if (directSubjectId) {
-      await bindSubjectFromDirectInput(directSubjectId);
+      try {
+        await bindSubjectFromDirectInput(directSubjectId, isRequestActive);
+      } catch (error) {
+        if (isRequestActive()) throw error;
+      }
       return;
     }
-
-    setBusy("正在搜索 Bangumi...");
-    const response = await bgmRequest("/v0/search/subjects?limit=8", {
-      method: "POST",
-      body: { keyword, sort: "match", filter: { type: [2] } },
-      dedup: true,
-    });
-    state.searchResults = response.data || [];
-    state.message = state.searchResults.length ? "请选择正确的 Bangumi 条目绑定。" : "没有搜到结果，可以换个关键词。";
-    state.error = "";
-    state.busy = false;
-    render();
-    checkAutoWatchProgress().catch(showError);
+    try {
+      setBusy("正在搜索 Bangumi...");
+      const response = await bgmRequest("/v0/search/subjects?limit=8", {
+        method: "POST",
+        body: { keyword, sort: "match", filter: { type: [2] } },
+        dedup: true,
+      });
+      if (!isCurrent()) return;
+      state.searchResults = response.data || [];
+      state.message = state.searchResults.length ? "请选择正确的 Bangumi 条目绑定。" : "没有搜到结果，可以换个关键词。";
+      state.error = "";
+      state.busy = false;
+      render();
+      checkAutoWatchProgress().catch((error) => {
+        if (isCurrent()) showError(error);
+      });
+    } catch (error) {
+      if (isCurrent()) throw error;
+    }
   }
 
   function clearSearchResults() {
+    subjectSearchSeq += 1;
     state.searchResults = [];
     clearLongVideoBindingPrompt();
     state.message = "";
@@ -5726,55 +5785,71 @@
     });
   }
 
-  async function bindSubjectFromDirectInput(subjectId) {
+  async function bindSubjectFromDirectInput(subjectId, isCurrentRequest = () => true) {
     const origin = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     setBusy(`正在读取 Bangumi 条目 ${subjectId}...`);
     let subject;
     try {
       subject = await bgmRequest(`/v0/subjects/${subjectId}`);
     } catch (error) {
-      if (!isCurrentPageContext(origin)) return;
+      if (!isCurrentPageContext(origin) || !isCurrentRequest()) return;
       throw error;
     }
-    if (!isCurrentPageContext(origin)) return;
-    state.searchResults = [];
-    state.message = `已通过 Bangumi 链接/ID 绑定：${displaySubjectName(subject)}`;
-    state.error = "";
-    state.subject = subject;
+    if (!isCurrentPageContext(origin) || !isCurrentRequest()) return;
     await rememberBindingSubject(subject);
-    await requestBindSubject(subjectId, origin);
+    if (!isCurrentPageContext(origin) || !isCurrentRequest()) return;
+    state.searchResults = [subject];
+    state.message = `已读取 Bangumi 条目，正在准备绑定：${displaySubjectName(subject)}`;
+    state.error = "";
+    await requestBindSubject(subjectId, origin, isCurrentRequest);
   }
 
-  async function requestBindSubject(subjectId, context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
+  async function requestBindSubject(subjectId, context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }, isCurrentRequest = () => true) {
+    const callerIsCurrent = isCurrentRequest;
+    const searchSeq = subjectSearchSeq;
+    const tokenSnapshot = state.token;
+    isCurrentRequest = () => callerIsCurrent() && searchSeq === subjectSearchSeq && tokenSnapshot === state.token;
+    const reportError = (error) => {
+      if (isCurrentPageContext(context) && isCurrentRequest()) throw error;
+    };
     const safeSubjectId = Number(subjectId);
-    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrentPageContext(context)) return;
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrentPageContext(context) || !isCurrentRequest()) return;
     const readiness = await getLongVideoBindReadinessForSubject(safeSubjectId, getActiveVideoElement(), {
       classificationTimeoutMs: LONG_VIDEO_BIND_WAIT_TIMEOUT_MS,
-    });
-    if (!isCurrentPageContext(context)) return;
+    }).catch(reportError);
+    if (!isCurrentPageContext(context) || !isCurrentRequest()) return;
     if (readiness.action === "prompt") {
       showLongVideoBindingPrompt(safeSubjectId, context, {
         phase: "prompt",
         durationSeconds: readiness.durationSeconds,
+        isCurrentRequest,
       });
       return;
     }
     if (readiness.action === "wait") {
-      beginLongVideoBindingWait(safeSubjectId, context);
+      beginLongVideoBindingWait(safeSubjectId, context, { isCurrentRequest });
       return;
     }
     if (readiness.action === "auto") {
-      await setLongVideoEpisodeModeDecision(true);
-      if (!isCurrentPageContext(context)) return;
-      await bindSubject(safeSubjectId, context);
+      await setLongVideoEpisodeModeDecision(true).catch(reportError);
+      if (!isCurrentPageContext(context) || !isCurrentRequest()) return;
+      await bindSubject(safeSubjectId, context, isCurrentRequest).catch(reportError);
       return;
     }
-    await bindSubject(safeSubjectId, context);
+    await bindSubject(safeSubjectId, context, isCurrentRequest).catch(reportError);
   }
 
-  async function applyLongVideoAutoAccept(subjectId, routeContext, mode = "bind") {
-    await setLongVideoEpisodeModeDecision(true);
-    if (mode === "identify" && Number(state.subjectId) === Number(subjectId)) {
+  async function applyLongVideoAutoAccept(subjectId, routeContext, mode = "bind", isCurrentRequest = () => true) {
+    const isCurrent = () => isCurrentPageContext(routeContext) && isCurrentRequest()
+      && (mode !== "identify" || Number(state.subjectId) === Number(subjectId));
+    const reportError = (error) => {
+      if (isCurrent()) throw error;
+    };
+    if (!isCurrent()) return;
+    await setLongVideoEpisodeModeDecision(true).catch(reportError);
+    if (!isCurrent()) return;
+    if (mode === "identify") {
+      if (Number(state.subjectId) !== Number(subjectId)) return;
       state.message = "已自动识别为多集长视频。";
       state.error = "";
       render();
@@ -5783,7 +5858,7 @@
       return;
     }
     if (!isCurrentPageContext(routeContext)) return;
-    await bindSubject(Number(subjectId), routeContext);
+    await bindSubject(Number(subjectId), routeContext, isCurrentRequest).catch(reportError);
   }
 
   function resolveLongVideoBindingSubject(subjectId) {
@@ -5805,6 +5880,7 @@
       partTitle: extras.partTitle !== undefined ? String(extras.partTitle || "") : String(getCurrentVideoPartContext()?.title || ""),
       durationSeconds: Number(extras.durationSeconds) || 0,
       bindingContext: routeContext,
+      isCurrentRequest: typeof extras.isCurrentRequest === "function" ? extras.isCurrentRequest : () => true,
       mode: extras.mode === "identify" ? "identify" : "bind",
       phase: extras.phase || "prompt",
       waitingFor: extras.waitingFor || "",
@@ -5941,7 +6017,9 @@
 
   function beginLongVideoBindingWait(subjectId, routeContext, seed = {}) {
     const safeSubjectId = Number(subjectId);
-    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrentPageContext(routeContext)) return;
+    const isCurrentRequest = typeof seed.isCurrentRequest === "function" ? seed.isCurrentRequest : () => true;
+    const isCurrent = () => isCurrentPageContext(routeContext) && isCurrentRequest();
+    if (!Number.isFinite(safeSubjectId) || safeSubjectId <= 0 || !isCurrent()) return;
     stopLongVideoBindingWaitLoop();
     const seq = ++longVideoBindWaitSeq;
     const startedAt = Date.now();
@@ -5963,7 +6041,7 @@
       if (pollInFlight) return;
       pollInFlight = true;
       try {
-        if (!isCurrentPageContext(routeContext)) {
+        if (!isCurrent()) {
           clearLongVideoBindingPrompt({ render: true });
           return;
         }
@@ -5973,6 +6051,7 @@
           state.longVideoBindingPrompt = buildLongVideoBindingPromptState(safeSubjectId, routeContext, {
             subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
             mode: (state.longVideoBindingPrompt && state.longVideoBindingPrompt.mode) || seed.mode || "bind",
+            isCurrentRequest,
             phase: "timeout",
             waitingFor: "duration",
             statusText: "暂时读取不到视频时长。",
@@ -5984,12 +6063,13 @@
         const readiness = await getLongVideoBindReadinessForSubject(safeSubjectId, getActiveVideoElement(), {
           classificationTimeoutMs: LONG_VIDEO_BIND_WAIT_TIMEOUT_MS - elapsedMs,
         });
-        if (seq !== longVideoBindWaitSeq || !isCurrentPageContext(routeContext)) return;
+        if (seq !== longVideoBindWaitSeq || !isCurrent()) return;
         const promptMode = (state.longVideoBindingPrompt && state.longVideoBindingPrompt.mode) || seed.mode || "bind";
         if (readiness.action === "prompt") {
           showLongVideoBindingPrompt(safeSubjectId, routeContext, {
             phase: "prompt",
             mode: promptMode,
+            isCurrentRequest,
             durationSeconds: readiness.durationSeconds,
             subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
           });
@@ -5997,7 +6077,9 @@
         }
         if (readiness.action === "auto") {
           clearLongVideoBindingPrompt();
-          applyLongVideoAutoAccept(safeSubjectId, routeContext, promptMode).catch(showError);
+          applyLongVideoAutoAccept(safeSubjectId, routeContext, promptMode, isCurrentRequest).catch((error) => {
+            if (isCurrent()) showError(error);
+          });
           return;
         }
         if (readiness.action === "bind") {
@@ -6008,7 +6090,9 @@
             refreshLongVideoEpisodeGuess(getActiveVideoElement());
             return;
           }
-          bindSubject(safeSubjectId, routeContext).catch(showError);
+          bindSubject(safeSubjectId, routeContext, isCurrentRequest).catch((error) => {
+            if (isCurrent()) showError(error);
+          });
           return;
         }
         if (Date.now() - startedAt >= LONG_VIDEO_BIND_WAIT_TIMEOUT_MS) {
@@ -6017,6 +6101,7 @@
             subjectName: state.longVideoBindingPrompt && state.longVideoBindingPrompt.subjectName,
             mode: promptMode,
             phase: "timeout",
+            isCurrentRequest,
             waitingFor: readiness.waitingFor || "duration",
             statusText: "暂时读取不到视频时长。",
             durationSeconds: 0,
@@ -6042,45 +6127,55 @@
       }
     };
 
-    longVideoBindWaitTimer = window.setInterval(() => poll().catch(showError), LONG_VIDEO_BIND_WAIT_POLL_MS);
+    const reportPollError = (error) => {
+      if (seq === longVideoBindWaitSeq && isCurrent()) showError(error);
+    };
+    longVideoBindWaitTimer = window.setInterval(() => poll().catch(reportPollError), LONG_VIDEO_BIND_WAIT_POLL_MS);
     const video = getActiveVideoElement();
     if (video) {
       const onMeta = () => {
-        if (seq === longVideoBindWaitSeq) poll().catch(showError);
+        if (seq === longVideoBindWaitSeq) poll().catch(reportPollError);
       };
       video.addEventListener("loadedmetadata", onMeta, { once: true });
       video.addEventListener("durationchange", onMeta, { once: true });
     }
-    poll().catch(showError);
+    poll().catch(reportPollError);
   }
 
   function retryLongVideoBindingWait() {
     const pending = state.longVideoBindingPrompt;
     if (!pending || !pending.bindingContext) return;
-    if (!isCurrentPageContext(pending.bindingContext)) {
+    if (!isCurrentPageContext(pending.bindingContext) || (pending.isCurrentRequest && !pending.isCurrentRequest())) {
       clearLongVideoBindingPrompt({ render: true });
       return;
     }
     beginLongVideoBindingWait(pending.subjectId, pending.bindingContext, {
       subjectName: pending.subjectName,
       mode: pending.mode,
+      isCurrentRequest: pending.isCurrentRequest,
     });
   }
 
   async function resolveLongVideoBindingPrompt(enabled) {
     const pending = state.longVideoBindingPrompt;
     if (!pending) return;
-    if (!isCurrentPageContext(pending.bindingContext)) {
+    const isCurrentRequest = typeof pending.isCurrentRequest === "function" ? pending.isCurrentRequest : () => true;
+    const isCurrent = () => isCurrentPageContext(pending.bindingContext) && isCurrentRequest();
+    if (!isCurrent()) {
       clearLongVideoBindingPrompt({ render: true });
       return;
     }
     stopLongVideoBindingWaitLoop();
-    await setLongVideoEpisodeModeDecision(Boolean(enabled));
+    await setLongVideoEpisodeModeDecision(Boolean(enabled)).catch((error) => {
+      if (state.longVideoBindingPrompt === pending && isCurrent()) throw error;
+    });
+    if (state.longVideoBindingPrompt !== pending || !isCurrent()) return;
     const subjectId = Number(pending.subjectId);
     const mode = pending.mode || "bind";
     state.longVideoBindingPrompt = null;
     state.longVideoIdentifyDismissedKey = "";
-    if (mode === "identify" && Number(state.subjectId) === subjectId) {
+    if (mode === "identify") {
+      if (Number(state.subjectId) !== subjectId) return;
       state.message = enabled ? "已启用长视频分集推测。" : "已按普通视频处理。";
       state.error = "";
       render();
@@ -6088,14 +6183,18 @@
       checkAutoWatchProgress().catch(showError);
       return;
     }
-    await bindSubject(subjectId, pending.bindingContext);
+    await bindSubject(subjectId, pending.bindingContext, isCurrentRequest).catch((error) => {
+      if (isCurrent()) throw error;
+    });
   }
 
-  async function bindSubject(subjectId, context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
+  async function bindSubject(subjectId, context = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }, isCurrentRequest = () => true) {
+    if (!isCurrentRequest()) return;
     if (!isCurrentPageContext(context)) return;
+    const isCurrent = () => isCurrentPageContext(context) && isCurrentRequest();
     const legacyBindingKeys = getBindingKeysForCurrentPage();
     const collectionProposal = await buildCollectionRangeBindingProposal(subjectId);
-    if (!isCurrentPageContext(context)) return;
+    if (!isCurrent()) return;
     const collectionContext = getCurrentCollectionPartContext();
     const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(subjectId);
     const isolatedCollectionPartKey = collectionContext
@@ -6107,27 +6206,28 @@
     const longVideoRangeProposal = collectionProposal
       ? null
       : await buildLongVideoRangeGroupBindingProposal(subjectId);
-    if (!isCurrentPageContext(context)) return;
+    if (!isCurrent()) return;
     if (collectionProposal && !(await requestInlineConfirm({ message: formatCollectionRangeBindingPrompt(collectionProposal, subjectId) }))) {
-      if (!isCurrentPageContext(context)) return;
+      if (!isCurrent()) return;
       state.busy = false;
       state.message = "已取消绑定；没有修改合集映射。";
       state.error = "";
       render();
       return;
     }
-    if (!isCurrentPageContext(context)) return;
+    if (!isCurrent()) return;
     let applied = false;
     let rangeGroupWriteOutcome = "";
     if (collectionProposal) {
       await updateStoredCollectionMappings((mappings) => {
-        if (!isCurrentPageContext(context)) return false;
+        if (!isCurrent()) return false;
         putCollectionMappingRule(mappings, { ...collectionProposal.rule, subjectId: Number(subjectId) });
         applied = true;
         return true;
       });
-      if (applied) {
+      if (applied && isCurrent()) {
         await updateStoredBindings((bindings) => {
+          if (!isCurrent()) return false;
           let changed = false;
           for (const key of legacyBindingKeys) {
             if (!Object.prototype.hasOwnProperty.call(bindings, key)) continue;
@@ -6143,9 +6243,9 @@
         && (longVideoRangeProposal.alreadyBound
           || await requestInlineConfirm({ message: formatLongVideoRangeGroupBindingPrompt(longVideoRangeProposal, subjectId) }))
       );
-      if (!isCurrentPageContext(context)) return;
+      if (!isCurrent()) return;
       await updateStoredBindings((bindings) => {
-        if (!isCurrentPageContext(context)) return false;
+        if (!isCurrent()) return false;
         if (useLongVideoRangeGroup) {
           rangeGroupWriteOutcome = applyLongVideoRangeGroupBinding(
             bindings,
@@ -6160,8 +6260,9 @@
         return true;
       });
     }
-    if (!applied || !isCurrentPageContext(context)) return;
+    if (!applied || !isCurrent()) return;
     state.bindingGuardMessage = "";
+    state.subject = resolveLongVideoBindingSubject(subjectId);
     state.subjectId = subjectId;
     refreshCurrentEpisodeRecognitionState();
     state.collectionDeleteConfirmSubjectId = null;
@@ -6177,6 +6278,7 @@
     state.previewCharacterFailedKey = "";
     state.searchResults = [];
     await loadSubjectBundle();
+    if (!isCurrent()) return;
     if (rangeGroupWriteOutcome === "part-conflict") {
       state.message = "该连续范围组刚被其他页面绑定到不同条目；为避免覆盖，本次只绑定了当前分P。";
       state.error = "";
@@ -6356,14 +6458,19 @@
     const subjectId = Number(state.subjectId);
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     const requestKey = `${subjectId}|${state.token || ""}|${pageContext.pageKey}|${pageContext.routeSeq}`;
-    if (subjectBundleRequests.has(requestKey)) return subjectBundleRequests.get(requestKey);
-    const promise = loadSubjectBundleFresh(subjectId, state.token || "", pageContext)
+    const existing = subjectBundleRequests.get(requestKey);
+    if (existing) {
+      existing.uiContext.searchSeq = subjectSearchSeq;
+      return existing.promise;
+    }
+    const uiContext = { searchSeq: subjectSearchSeq };
+    const promise = loadSubjectBundleFresh(subjectId, state.token || "", pageContext, uiContext)
       .finally(() => subjectBundleRequests.delete(requestKey));
-    subjectBundleRequests.set(requestKey, promise);
+    subjectBundleRequests.set(requestKey, { promise, uiContext });
     return promise;
   }
 
-  async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }) {
+  async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }, uiContext = { searchSeq: subjectSearchSeq }) {
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
     const relayScope = createBgmApiRelayScope();
@@ -6385,8 +6492,9 @@
         tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-      state.subject = subject;
       await rememberBindingSubject(subject);
+      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      state.subject = subject;
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
       state.episodes = episodes.data || [];
@@ -6395,11 +6503,17 @@
       state.characterError = charactersResult.error;
       state.collection = mergePendingCollection(collection);
       state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
-      state.message = state.token ? "已同步 Bangumi 数据。" : "未设置 Access Token，只能查看公开条目信息。";
-      state.error = "";
-      state.busy = false;
+      // A newer search owns the panel status, even while this subject's shared
+      // data request is still valid and should finish populating its details.
+      if (uiContext.searchSeq === subjectSearchSeq) {
+        state.message = state.token ? "已同步 Bangumi 数据。" : "未设置 Access Token，只能查看公开条目信息。";
+        state.error = "";
+        state.busy = false;
+      }
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
+    } catch (error) {
+      if (uiContext.searchSeq === subjectSearchSeq && isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
     } finally {
       finishPanelLoad(loadId);
     }
@@ -6431,8 +6545,9 @@
         tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
       if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
-      state.subject = subject;
       await rememberBindingSubject(subject);
+      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      state.subject = subject;
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
       state.episodes = episodes.data || [];
@@ -6449,6 +6564,8 @@
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
       checkAutoWatchProgress().catch(showError);
+    } catch (error) {
+      if (isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
     } finally {
       finishPanelLoad(loadId);
     }
@@ -6546,11 +6663,11 @@
     if (subjectInfoLinkRequests.has(key)) return subjectInfoLinkRequests.get(key);
     const promise = bgmWebRequest(`/subject/${encodeURIComponent(key)}`)
       .then(parseSubjectInfoSupplement)
-      .catch(() => ({ links: {}, rows: [], actorRelations: {} }))
       .then((supplement) => {
         subjectInfoLinkCache.set(key, supplement);
         return supplement;
       })
+      .catch(() => ({ links: {}, rows: [], actorRelations: {} }))
       .finally(() => subjectInfoLinkRequests.delete(key));
     subjectInfoLinkRequests.set(key, promise);
     return promise;
@@ -6672,50 +6789,80 @@
     return state.username;
   }
 
+  function captureCollectionOperationContext() {
+    return { subjectId: Number(state.subjectId), token: String(state.token || ""), pageContext: capturePageContext() };
+  }
+
+  function isCollectionOperationContextCurrent(context) {
+    return Boolean(context
+      && Number(state.subjectId) === context.subjectId
+      && String(state.token || "") === context.token
+      && isCurrentPageContext(context.pageContext));
+  }
+
   async function updateCollection(patch) {
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    const context = captureCollectionOperationContext();
     setBusy("正在更新记录...");
     const payload = { ...patch };
     if (!state.collection && payload.type == null) payload.type = 3;
-    await bgmRequest(`/v0/users/-/collections/${state.subjectId}`, {
-      method: state.collection ? "PATCH" : "POST",
-      auth: true,
-      body: payload,
-      expectNoContent: true,
-    });
-    await loadSubjectBundle();
+    try {
+      await bgmRequest(`/v0/users/-/collections/${context.subjectId}`, {
+        method: state.collection ? "PATCH" : "POST",
+        auth: true,
+        authToken: context.token,
+        body: payload,
+        expectNoContent: true,
+      });
+      if (isCollectionOperationContextCurrent(context)) await loadSubjectBundle();
+    } catch (error) {
+      if (isCollectionOperationContextCurrent(context)) throw error;
+    }
   }
 
   async function rateSubject(rate) {
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
+    const context = captureCollectionOperationContext();
     const safeRate = Math.max(0, Math.min(10, Math.round(Number(rate) || 0)));
 
     const previousCollection = state.collection ? { ...state.collection } : null;
+    const previousPendingCollection = state.pendingCollection;
     const type = getCollectionType();
     state.collection = { ...(state.collection || {}), type, rate: safeRate };
-    state.pendingCollection = { ...(state.pendingCollection || {}), subjectId: state.subjectId, type, rate: safeRate, createdAt: Date.now() };
+    const pendingCollection = { ...(state.pendingCollection || {}), subjectId: state.subjectId, type, rate: safeRate, createdAt: Date.now() };
+    state.pendingCollection = pendingCollection;
     state.message = safeRate ? `正在更新评分为 ${safeRate} ${getRateLevel(safeRate)}...` : "正在清除评分...";
     state.error = "";
     state.busy = true;
     render();
 
+    let submitted = false;
     try {
-      await bgmRequest(`/v0/users/-/collections/${state.subjectId}`, {
+      await bgmRequest(`/v0/users/-/collections/${context.subjectId}`, {
         method: previousCollection ? "PATCH" : "POST",
         auth: true,
+        authToken: context.token,
         body: { type, rate: safeRate },
         expectNoContent: true,
       });
+      submitted = true;
+      if (!isCollectionOperationContextCurrent(context)) return;
       await loadSubjectBundlePreservingLocal(state.collection);
+      if (!isCollectionOperationContextCurrent(context)) return;
       state.message = safeRate ? `评分已更新为 ${safeRate} ${getRateLevel(safeRate)}。` : "评分已清除。";
       state.error = "";
       render();
-      window.setTimeout(() => loadSubjectBundlePreservingLocal(state.collection).catch(showError), 1200);
+      window.setTimeout(() => {
+        if (isCollectionOperationContextCurrent(context)) loadSubjectBundlePreservingLocal(state.collection).catch(showError);
+      }, 1200);
     } catch (error) {
-      state.collection = previousCollection;
-      state.pendingCollection = null;
+      if (!isCollectionOperationContextCurrent(context)) return;
+      if (!submitted && state.pendingCollection === pendingCollection) {
+        state.collection = previousCollection;
+        state.pendingCollection = previousPendingCollection;
+      }
       throw error;
     }
   }
@@ -6762,10 +6909,21 @@
       return;
     }
     setBusy("正在删除 Bangumi 收藏记录...");
-    const subjectId = Number(state.subjectId);
-    const tokenUsername = await getCurrentUsername();
+    const context = captureCollectionOperationContext();
+    const subjectId = context.subjectId;
+    const tokenUsername = await getCurrentUsername(context.token).catch((error) => {
+      if (isCollectionOperationContextCurrent(context)) throw error;
+      return "";
+    });
+    if (!isCollectionOperationContextCurrent(context)) return;
     if (!tokenUsername) throw new Error("无法读取 Access Token 对应的 Bangumi 账号，已停止删除。");
-    await requestBangumiFirstPartyDelete(subjectId, tokenUsername);
+    try {
+      await requestBangumiFirstPartyDelete(subjectId, tokenUsername, context.token, context);
+    } catch (error) {
+      if (isCollectionOperationContextCurrent(context)) throw error;
+      return;
+    }
+    if (!isCollectionOperationContextCurrent(context)) return;
     state.collection = null;
     state.episodeCollections = [];
     state.pendingCollection = null;
@@ -6773,10 +6931,12 @@
     state.message = "Bangumi 收藏记录已删除。";
     state.error = "";
     render();
-    window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+    window.setTimeout(() => {
+      if (isCollectionOperationContextCurrent(context)) loadSubjectBundle().catch(showError);
+    }, 900);
   }
 
-  async function requestBangumiFirstPartyDelete(subjectId, expectedUsername) {
+  async function requestBangumiFirstPartyDelete(subjectId, expectedUsername, tokenSnapshot = state.token || "", operationContext = null) {
     const existing = readJsonValue(STORAGE.deleteBridge, null);
     if (isActiveDeleteBridgeTask(existing)) {
       throw new Error("已有一项 Bangumi 删除操作正在等待处理，请先完成或关闭已打开的 Bangumi 页面。");
@@ -6812,7 +6972,7 @@
           throw new Error("Bangumi 删除任务已被替换或取消，请重试。");
         }
         if (current.status === "success") {
-          await confirmCollectionDeletedViaApi(subjectId);
+          await confirmCollectionDeletedViaApi(subjectId, tokenSnapshot, expectedUsername);
           return;
         }
         if (current.status === "error") {
@@ -6821,9 +6981,11 @@
         if (current.status === "awaiting-login" && !loginNoticeShown) {
           loginNoticeShown = true;
           bridgeTab = bringDeleteBridgeToForeground(bridgeTab, bridgeUrl);
-          state.message = "请在已打开的 Bangumi 页面完成登录；登录成功后会自动删除并关闭该页面。";
-          state.error = "";
-          render();
+          if (!operationContext || isCollectionOperationContextCurrent(operationContext)) {
+            state.message = "请在已打开的 Bangumi 页面完成登录；登录成功后会自动删除并关闭该页面。";
+            state.error = "";
+            render();
+          }
         }
         await sleep(DELETE_BRIDGE_POLL_MS);
       }
@@ -6832,7 +6994,7 @@
       const afterTtl = readJsonValue(STORAGE.deleteBridge, null);
       if (afterTtl && afterTtl.nonce === nonce) {
         if (afterTtl.status === "success") {
-          await confirmCollectionDeletedViaApi(subjectId);
+          await confirmCollectionDeletedViaApi(subjectId, tokenSnapshot, expectedUsername);
           return;
         }
         if (afterTtl.status === "error") {
@@ -6844,7 +7006,7 @@
             const current = readJsonValue(STORAGE.deleteBridge, null);
             if (current && current.nonce === nonce) {
               if (current.status === "success") {
-                await confirmCollectionDeletedViaApi(subjectId);
+                await confirmCollectionDeletedViaApi(subjectId, tokenSnapshot, expectedUsername);
                 return;
               }
               if (current.status === "error") {
@@ -6856,7 +7018,7 @@
         }
       }
       // Status channel may have been lost after a real delete — last chance via API.
-      if (await tryConfirmCollectionDeletedViaApi(subjectId)) return;
+      if (await tryConfirmCollectionDeletedViaApi(subjectId, tokenSnapshot, expectedUsername)) return;
       throw new Error("等待 Bangumi 登录或删除结果超时，请重新点击删除后再试。");
     } finally {
       clearDeleteBridgeTask(nonce);
@@ -6870,18 +7032,20 @@
     }
   }
 
-  async function confirmCollectionDeletedViaApi(subjectId) {
-    if (!(await tryConfirmCollectionDeletedViaApi(subjectId))) {
+  async function confirmCollectionDeletedViaApi(subjectId, tokenSnapshot = state.token || "", expectedUsername = "") {
+    if (!(await tryConfirmCollectionDeletedViaApi(subjectId, tokenSnapshot, expectedUsername))) {
       throw new Error("Bangumi 收藏删除未确认成功（接口仍可查询到收藏），请稍后刷新后重试。");
     }
   }
 
-  async function tryConfirmCollectionDeletedViaApi(subjectId) {
-    const path = await getCollectionReadPath(subjectId);
+  async function tryConfirmCollectionDeletedViaApi(subjectId, tokenSnapshot = state.token || "", expectedUsername = "") {
+    const path = expectedUsername
+      ? `/v0/users/${encodeURIComponent(expectedUsername)}/collections/${subjectId}`
+      : await getCollectionReadPath(subjectId, tokenSnapshot);
     if (!path) return false;
     for (let attempt = 0; attempt < DELETE_VERIFY_ATTEMPTS; attempt += 1) {
       try {
-        const collection = await bgmRequest(path, { auth: true, allow404: true });
+        const collection = await bgmRequest(path, { auth: true, authToken: tokenSnapshot, allow404: true });
         if (collection == null) return true;
       } catch (_error) {
         // Transient API/network errors: keep polling; do not treat as deleted.
@@ -7073,6 +7237,7 @@
   async function saveProgressFromInput() {
     ensureToken();
     ensureCollectionForEpisodeSync();
+    const context = captureCollectionOperationContext();
     const input = document.querySelector(`#${PANEL_ID} [data-role='progress']`);
     const episodes = getNormalEpisodes();
     const count = Math.max(0, Math.min(episodes.length, Number(input && input.value) || 0));
@@ -7095,14 +7260,17 @@
     }
 
     setBusy("正在同步章节进度...");
-    if (toDone.length) await patchEpisodes(toDone, 2, "正在标记已看章节...", false);
-    if (toUndone.length) await patchEpisodes(toUndone, 0, "正在取消多余章节...", false);
+    if (toDone.length && !(await patchEpisodes(toDone, 2, "正在标记已看章节...", false, context))) return;
+    if (toUndone.length && !(await patchEpisodes(toUndone, 0, "正在取消多余章节...", false, context))) return;
+    if (!isCollectionOperationContextCurrent(context)) return;
     applyLocalEpisodeProgress(wantedDone);
     state.busy = false;
     state.message = `章节进度已提交为 ${count}/${episodes.length}。`;
     state.error = "";
     render();
-    window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+    window.setTimeout(() => {
+      if (isCollectionOperationContextCurrent(context)) loadSubjectBundle().catch(showError);
+    }, 900);
   }
 
   async function toggleEpisode(episodeId, isDone) {
@@ -7111,22 +7279,31 @@
     await patchEpisodes([episodeId], isDone ? 0 : 2, isDone ? "正在取消章节标记..." : "正在标记章节看过...");
   }
 
-  async function patchEpisodes(episodeIds, type, message, reload = true) {
+  async function patchEpisodes(episodeIds, type, message, reload = true, context = captureCollectionOperationContext()) {
+    if (!isCollectionOperationContextCurrent(context)) return false;
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
     ensureCollectionForEpisodeSync();
     if (!episodeIds.length) {
       if (reload) await loadSubjectBundle();
-      return;
+      return isCollectionOperationContextCurrent(context);
     }
     if (message) setBusy(message);
-    await bgmRequest(`/v0/users/-/collections/${state.subjectId}/episodes`, {
-      method: "PATCH",
-      auth: true,
-      body: { episode_id: episodeIds, type },
-      expectNoContent: true,
-    });
+    try {
+      await bgmRequest(`/v0/users/-/collections/${context.subjectId}/episodes`, {
+        method: "PATCH",
+        auth: true,
+        authToken: context.token,
+        body: { episode_id: episodeIds, type },
+        expectNoContent: true,
+      });
+    } catch (error) {
+      if (!isCollectionOperationContextCurrent(context)) return false;
+      throw error;
+    }
+    if (!isCollectionOperationContextCurrent(context)) return false;
     if (type === 2) recordEpisodeSync(episodeIds);
     if (reload) await loadSubjectBundle();
+    return isCollectionOperationContextCurrent(context);
   }
 
   function recordEpisodeSync(episodeIds) {
@@ -7224,11 +7401,13 @@
     const progress = getAutoWatchProgressSample(video, longVideoGuess);
     if (!progress) return;
     const watchedPercent = progress.watchedPercent;
+    const context = captureCollectionOperationContext();
     const syncKey = `${state.subjectId}:${Number(currentEpisode.id)}:${getAutoWatchScopeKey()}`;
     updateAutoWatchJumpState(video, syncKey, watchedPercent);
     if (watchedPercent < getAutoWatchThreshold()) return;
     if (state.autoWatchBlockedKey === syncKey) return;
     if (!(await recordCurrentCollectionSegmentProgressIfNeeded())) return;
+    if (!isCollectionOperationContextCurrent(context) || state.autoEpisodeSyncing) return;
     if (state.autoEpisodeSyncLastKey === syncKey) return;
     if (state.autoWatchAuthBlocked) return;
     const failure = getAutoWatchFailureRecord(syncKey);
@@ -7240,20 +7419,24 @@
     state.autoEpisodeSyncing = true;
     state.autoEpisodeSyncLastKey = syncKey;
     try {
-      await patchEpisodes([Number(currentEpisode.id)], 2, "", false);
+      if (!(await patchEpisodes([Number(currentEpisode.id)], 2, "", false, context))) return;
       applySingleEpisodeProgress(Number(currentEpisode.id), 2);
       await clearCurrentCollectionSegmentProgress();
+      if (!isCollectionOperationContextCurrent(context)) return;
       clearAutoWatchFailureRecord(syncKey);
       state.busy = false;
       state.message = `已自动标记第 ${formatEpisodeSort(getEpisodeDisplayNo(currentEpisode))} 集看过。`;
       state.error = "";
       render();
-      window.setTimeout(() => loadSubjectBundle().catch(showError), 900);
+      window.setTimeout(() => {
+        if (isCollectionOperationContextCurrent(context)) loadSubjectBundle().catch(showError);
+      }, 900);
     } catch (error) {
+      if (!isCollectionOperationContextCurrent(context)) return;
       state.autoEpisodeSyncLastKey = "";
       handleAutoWatchSyncFailure(error, syncKey);
     } finally {
-      state.autoEpisodeSyncing = false;
+      if (isCollectionOperationContextCurrent(context)) state.autoEpisodeSyncing = false;
     }
   }
 
@@ -8798,6 +8981,37 @@
     render();
   }
 
+  function setAccessTokenState(token) {
+    const nextToken = String(token || "");
+    if (nextToken === state.token) return false;
+    state.token = nextToken;
+    state.username = "";
+    state.collection = null;
+    state.episodeCollections = [];
+    state.pendingCollection = null;
+    state.autoEpisodeSyncing = false;
+    state.autoEpisodeSyncLastKey = "";
+    state.autoWatchAuthBlocked = false;
+    state.collectionEditorOpen = false;
+    state.collectionEditorContext = null;
+    pendingRequests.clear();
+    return true;
+  }
+
+  function syncAccessTokenFromStorage(token) {
+    if (!setAccessTokenState(token)) return;
+    refreshSettingsTokenHelp(document.getElementById(SETTINGS_ID));
+    render();
+    if (shouldRenderFullPanel() && state.subjectId) loadSubjectBundle().catch(showError);
+  }
+
+  function bindAccessTokenChanges() {
+    if (typeof GM_addValueChangeListener !== "function") return;
+    GM_addValueChangeListener(STORAGE.token, (_key, _previous, nextToken, remote) => {
+      if (remote) syncAccessTokenFromStorage(nextToken);
+    });
+  }
+
   function getApiRelayAutoFallbackSetting(input) {
     if (state.apiRelayAutoFallbackConfirmationPending) return state.apiRelayAutoFallbackEnabled;
     return Boolean(input && input.checked);
@@ -8812,7 +9026,6 @@
     const apiRelayAutoFallbackInput = settings.querySelector("[data-role='settings-api-relay-auto-fallback']");
     const characterStripInput = settings.querySelector("[data-role='settings-character-strip']");
     const subjectInfoPanelInput = settings.querySelector("[data-role='settings-subject-info-panel']");
-    const officialBangumiLayoutInput = settings.querySelector("[data-role='settings-official-bangumi-layout']");
     const longVideoEpisodeGuessInput = settings.querySelector("[data-role='settings-long-video-episode-guess']");
     const longVideoOffsetInput = settings.querySelector("[data-role='settings-long-video-offset']");
     const autoWatchThresholdInput = settings.querySelector("[data-role='settings-auto-watch-threshold']");
@@ -8826,7 +9039,6 @@
     const nextApiRelayAutoFallbackEnabled = getApiRelayAutoFallbackSetting(apiRelayAutoFallbackInput);
     const nextCharacterStripEnabled = Boolean(characterStripInput && characterStripInput.checked);
     const nextSubjectInfoPanelEnabled = Boolean(subjectInfoPanelInput && subjectInfoPanelInput.checked);
-    const nextOfficialBangumiLayoutEnabled = Boolean(officialBangumiLayoutInput && officialBangumiLayoutInput.checked);
     const nextLongVideoEpisodeGuessEnabled = Boolean(longVideoEpisodeGuessInput && longVideoEpisodeGuessInput.checked);
     const longVideoContext = getLongVideoSettingsContext();
     const parsedOffsetSeconds = parseTimecode(longVideoOffsetInput && longVideoOffsetInput.value);
@@ -8852,20 +9064,13 @@
     const tokenChanged = nextToken !== state.token;
     const characterStripChanged = nextCharacterStripEnabled !== state.characterStripEnabled;
     const subjectInfoPanelChanged = nextSubjectInfoPanelEnabled !== state.subjectInfoPanelEnabled;
-    const officialLayoutChanged = nextOfficialBangumiLayoutEnabled !== state.officialBangumiLayoutEnabled;
     const normalizedLongVideoOffsetSeconds = normalizeLongVideoOffsetSeconds(nextLongVideoOffsetSeconds);
     const longVideoSettingsChanged = nextLongVideoEpisodeGuessEnabled !== state.longVideoEpisodeGuessEnabled
       || Boolean(longVideoContext.ownerKey
         && normalizedLongVideoOffsetSeconds !== normalizeLongVideoOffsetSeconds(state.longVideoEpisodeOffsets[longVideoContext.ownerKey]));
 
-    if (tokenChanged) {
-      state.username = "";
-      pendingRequests.clear();
-      state.autoWatchAuthBlocked = false;
-    }
-    state.token = nextToken;
+    setAccessTokenState(nextToken);
     state.apiRelayAutoFallbackEnabled = nextApiRelayAutoFallbackEnabled;
-    state.officialBangumiLayoutEnabled = nextOfficialBangumiLayoutEnabled;
     state.characterStripEnabled = nextCharacterStripEnabled;
     state.subjectInfoPanelEnabled = nextSubjectInfoPanelEnabled;
     state.longVideoEpisodeGuessEnabled = nextLongVideoEpisodeGuessEnabled;
@@ -8883,13 +9088,12 @@
     if (state.subjectId) setOpedSkipEnabled(nextOpedSkipEnabled);
     state.opedSkipHotkey = nextOpedSkipHotkey;
 
-    writeValue(STORAGE.token, state.token);
+    if (hasValidReplacementToken) writeValue(STORAGE.token, nextToken);
     writeValue(STORAGE.apiRelayAutoFallback, state.apiRelayAutoFallbackEnabled ? "1" : "0");
     writeListValue(STORAGE.whitelist, state.whitelist);
     writeJsonValue(STORAGE.whitelistLabels, state.whitelistLabels);
     writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
     writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
-    writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
     writeValue(STORAGE.longVideoEpisodeGuess, state.longVideoEpisodeGuessEnabled ? "1" : "0");
     writeJsonValue(STORAGE.longVideoEpisodeOffsets, state.longVideoEpisodeOffsets);
     writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
@@ -8918,7 +9122,7 @@
     }
     if (opedSkipSecondsInput) opedSkipSecondsInput.value = String(nextOpedSkipSeconds);
 
-    if (characterStripChanged || subjectInfoPanelChanged || officialLayoutChanged) {
+    if (characterStripChanged || subjectInfoPanelChanged) {
       syncSubjectInfoPanel();
       syncCharacterStrip();
       layoutPanelWithoutOwningBiliDom();
@@ -8947,7 +9151,6 @@
     state.apiRelayAutoFallbackEnabled = false;
     state.characterStripEnabled = DEFAULT_CHARACTER_STRIP_ENABLED;
     state.subjectInfoPanelEnabled = DEFAULT_SUBJECT_INFO_PANEL_ENABLED;
-    state.officialBangumiLayoutEnabled = DEFAULT_OFFICIAL_BANGUMI_LAYOUT_ENABLED;
     state.longVideoEpisodeGuessEnabled = false;
     state.longVideoDetectionCache = null;
     resetAutoWatchObservationState();
@@ -8962,7 +9165,6 @@
     writeValue(STORAGE.apiRelayAutoFallback, "0");
     writeValue(STORAGE.characterStrip, state.characterStripEnabled ? "1" : "0");
     writeValue(STORAGE.subjectInfoPanel, state.subjectInfoPanelEnabled ? "1" : "0");
-    writeValue(STORAGE.officialBangumiLayout, state.officialBangumiLayoutEnabled ? "1" : "0");
     writeValue(STORAGE.longVideoEpisodeGuess, "0");
     writeJsonValue(STORAGE.autoWatchThresholds, state.autoWatchThresholds);
     writeJsonValue(STORAGE.opedSkips, state.opedSkips);
@@ -9062,14 +9264,10 @@
 
   async function clearSavedAccessToken() {
     if (!state.token) return;
+    const tokenSnapshot = state.token;
     if (!(await requestInlineConfirm({ context: "settings", danger: true, message: "确定清除已保存的 Access Token 吗？\n清除后需要重新填写 Token 才能访问需要登录的 Bangumi 功能。" }))) return;
-    state.token = "";
-    state.username = "";
-    state.collection = null;
-    state.episodeCollections = [];
-    state.pendingCollection = null;
-    pendingRequests.clear();
-    state.autoWatchAuthBlocked = false;
+    if (state.token !== tokenSnapshot) return;
+    setAccessTokenState("");
     writeValue(STORAGE.token, "");
 
     const settings = document.getElementById(SETTINGS_ID);
@@ -9152,9 +9350,20 @@
     render();
   }
 
+  function setCollectionEditorSaving(editorContext, saving) {
+    editorContext.saving = saving;
+    if (state.collectionEditorContext !== editorContext) return;
+    const editor = document.querySelector(`#${SETTINGS_ID} .biligumi-collection-dialog`);
+    if (!editor) return;
+    editor.querySelectorAll("input, textarea, button").forEach((input) => {
+      input.disabled = saving;
+    });
+  }
+
   async function saveCollectionEditor() {
     ensureToken();
     const editorContext = state.collectionEditorContext;
+    if (editorContext && editorContext.saving) return;
     if (!editorContext || !editorContext.subjectId) throw new Error("请先绑定 Bangumi 条目");
     if (!isCurrentPageContext(editorContext) || Number(editorContext.subjectId) !== Number(state.subjectId)) {
       state.collectionEditorOpen = false;
@@ -9162,6 +9371,7 @@
       removeModal();
       throw new Error("页面已经切换，本次保存已取消。请在当前页面重新打开编辑器。");
     }
+    const context = captureCollectionOperationContext();
     const subjectId = Number(editorContext.subjectId);
     const typeInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-type']:checked`);
     const rateInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-rate']`);
@@ -9180,25 +9390,40 @@
       private: Boolean(privateInput && privateInput.checked),
     };
     const hadCollection = hasCollection();
-    state.collectionEditorOpen = false;
-    state.collectionEditorContext = null;
-    removeModal();
+    const previousCollection = state.collection;
+    const previousPendingCollection = state.pendingCollection;
+    setCollectionEditorSaving(editorContext, true);
     state.collection = { ...(state.collection || {}), ...payload };
-    state.pendingCollection = { ...(state.pendingCollection || {}), subjectId, ...payload, createdAt: Date.now() };
+    const pendingCollection = { ...(state.pendingCollection || {}), subjectId, ...payload, createdAt: Date.now() };
+    state.pendingCollection = pendingCollection;
     setBusy("正在保存记录...");
     try {
       await bgmRequest(`/v0/users/-/collections/${subjectId}`, {
         method: hadCollection ? "PATCH" : "POST",
         auth: true,
+        authToken: context.token,
         body: payload,
         expectNoContent: true,
       });
     } catch (error) {
-      if (!isCurrentPageContext(editorContext) || Number(state.subjectId) !== subjectId) return;
+      if (!isCollectionOperationContextCurrent(context)) return;
+      if (state.pendingCollection === pendingCollection) {
+        state.collection = previousCollection;
+        state.pendingCollection = previousPendingCollection;
+      }
+      state.busy = false;
       throw error;
+    } finally {
+      setCollectionEditorSaving(editorContext, false);
     }
-    if (!isCurrentPageContext(editorContext) || Number(state.subjectId) !== subjectId) return;
+    if (!isCollectionOperationContextCurrent(context)) return;
+    if (state.collectionEditorContext === editorContext) {
+      state.collectionEditorOpen = false;
+      state.collectionEditorContext = null;
+      removeModal();
+    }
     await loadSubjectBundlePreservingLocal(state.collection);
+    if (!isCollectionOperationContextCurrent(context)) return;
     state.message = "记录已保存。";
     render();
   }
@@ -9299,7 +9524,6 @@
     const changeRoles = [
       "settings-character-strip",
       "settings-subject-info-panel",
-      "settings-official-bangumi-layout",
       "settings-long-video-episode-guess",
       "settings-oped-skip-enabled",
     ];
@@ -10084,8 +10308,14 @@
   }
 
   function getTitleBindingInfo() {
-    const sourceTitle = resolveCurrentPageTitle();
-    const cleanedTitle = cleanTitle(sourceTitle);
+    const rawTitle = getPageTitle();
+    const sourceTitle = shouldUseRawTitleForPreview(rawTitle)
+      ? rawTitle
+      : getOfficialBangumiContextTitle() || getSeriesTitle() || rawTitle;
+    const cleanedTitle = resolveCurrentPageTitle(rawTitle);
+    const seasonNo = getTitleSeasonNumber(sourceTitle)
+      || getTitleSeasonNumber(getSeriesTitle())
+      || getTitleSeasonNumber(rawTitle);
     const sourceToken = normalizeTitleMatchToken(sourceTitle);
     const token = normalizeBindingToken(cleanedTitle);
     const matchToken = normalizeTitleMatchToken(cleanedTitle);
@@ -10099,17 +10329,28 @@
     else if (cleanedLength <= 2) confidence = 0.35;
     else if (sourceLength >= 8 && cleanedLength <= 3) confidence = 0.4;
     else if (sourceLength >= 12 && cleanedLength <= 6 && retainedRatio < 0.28) confidence = 0.5;
-    return { sourceTitle, cleanedTitle, token, matchToken, confidence, lowConfidence: confidence < 0.6 };
+    return { sourceTitle, cleanedTitle, token, matchToken, seasonNo, confidence, lowConfidence: confidence < 0.6 };
   }
 
   function canReuseTitleBinding(subjectId) {
     const titleInfo = getTitleBindingInfo();
+    const evidence = state.bindingSubjects && state.bindingSubjects[String(subjectId)];
+    const names = evidence && Array.isArray(evidence.names) ? evidence.names : [];
+    const currentSeason = titleInfo.seasonNo || getTitleSeasonNumber(titleInfo.sourceTitle);
+    const evidenceSeasons = names.map(getTitleSeasonNumber).filter((value) => value > 0);
+    const seasonConflict = currentSeason > 1
+      ? !evidenceSeasons.includes(currentSeason)
+      : evidenceSeasons.length > 0 && !evidenceSeasons.includes(currentSeason || 1);
+    if (seasonConflict) {
+      state.bindingGuardMessage = "当前视频的季度与已有标题绑定不一致或缺少季度证据，已暂停自动绑定；请确认当前季度的 Bangumi 条目。";
+      state.message = state.bindingGuardMessage;
+      return false;
+    }
     if (!titleInfo.lowConfidence) {
       if (state.message === state.bindingGuardMessage) state.message = "";
       state.bindingGuardMessage = "";
       return true;
     }
-    const evidence = state.bindingSubjects && state.bindingSubjects[String(subjectId)];
     if (doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo)) {
       if (state.message === state.bindingGuardMessage) state.message = "";
       state.bindingGuardMessage = "";
@@ -10128,7 +10369,7 @@
     if (!names.length) return false;
     const rawTitle = getPageTitle();
     const normalizedRawTitle = normalizeTitleText(rawTitle);
-    const fullTitleTokens = [getOfficialBangumiContextTitle(), getSeriesTitle(), rawTitle].map(normalizeTitleMatchToken).filter(Boolean);
+    const fullTitles = [getOfficialBangumiContextTitle(), getSeriesTitle(), rawTitle].filter(Boolean);
     const candidates = [
       getOfficialBangumiContextTitle(),
       getSeriesTitle(),
@@ -10140,7 +10381,7 @@
     ].map(normalizeTitleMatchToken).filter(Boolean);
     return names.some((name) => {
       const subjectName = normalizeTitleMatchToken(name);
-      if (fullTitleTokens.some((fullTitle) => hasTitleSeasonConflict(fullTitle, subjectName))) return false;
+      if (fullTitles.some((fullTitle) => hasTitleSeasonConflict(fullTitle, name))) return false;
       return candidates.some((candidate) => isTitleEvidenceMatch(candidate, subjectName));
     });
   }
@@ -10942,6 +11183,8 @@
 
   function getOfficialBangumiSectionTitle() {
     if (!isOfficialBangumiPage()) return "";
+    const playingSectionTitle = getOfficialBangumiPlayingSectionTitle();
+    if (playingSectionTitle) return playingSectionTitle;
     // Prefer live DOM section UI first. Skipping DOM when the list does not yet
     // contain the current ep was racing section switches against page-title extract.
     const selectors = [
@@ -10957,6 +11200,30 @@
       if (text) return text;
     }
     return extractOfficialBangumiSectionTitleFromPageTitle();
+  }
+
+  function getOfficialBangumiPlayingSectionTitle() {
+    const href = location.href;
+    const mediaIdentity = `${getOfficialBangumiMediaIdFromDom()}|${getSeriesTitle()}`;
+    const cached = state.officialBangumiPlayingSection;
+    if (cached && (cached.href !== href || cached.mediaIdentity !== mediaIdentity)) state.officialBangumiPlayingSection = null;
+    const routeEpisodeId = location.pathname.match(/\/bangumi\/play\/ep(\d+)/i)?.[1] || "";
+    const nodes = Array.from(document.querySelectorAll("[class*='SectionPanel_panel'] a[href*='/bangumi/play/ep']"));
+    const sectionTitles = new Set();
+    for (const node of nodes) {
+      if (!isVisible(node)) continue;
+      const episodeId = String(node.getAttribute("href") || "").match(/\/bangumi\/play\/ep(\d+)(?:[/?#]|$)/i)?.[1] || "";
+      // A selected tab only says which list is being browsed. On ss routes,
+      // the playing item is the only DOM evidence of the history-resumed EP.
+      if (routeEpisodeId ? episodeId !== routeEpisodeId : !node.matches("[class*='EpisodeVirtualList_activeItem'], [class*='EpisodeVirtualList_activeNumber']")) continue;
+      const panel = node.closest("[class*='SectionPanel_panel']");
+      const title = stripOfficialBangumiProgressSuffix(panel?.querySelector("h3")?.textContent);
+      if (title) sectionTitles.add(title);
+    }
+    if (sectionTitles.size === 1) state.officialBangumiPlayingSection = { href, mediaIdentity, title: [...sectionTitles][0] };
+    // Virtual lists unmount the playing item when scrolled or while another tab
+    // is browsed. Keep its confirmed section until playback or route changes.
+    return state.officialBangumiPlayingSection?.title || "";
   }
 
   function extractOfficialBangumiSectionTitleFromPageTitle(rawTitle = getPageTitle(), seriesTitle = getSeriesTitle()) {
@@ -11340,7 +11607,7 @@
       if (isTotalEpisodeCountMatch(title, match)) continue;
       const token = String(match[1] || "");
       const value = /^\d/.test(token) ? Number(token) : parseChineseNumber(token);
-      if (!Number.isFinite(value) || value <= 0 || value > 9999) continue;
+      if (!Number.isFinite(value) || value < 0 || (value === 0 && !(options && options.allowZero)) || value > 9999) continue;
       if (index >= 3 && value >= 1900 && value <= 2099) continue;
       if (index >= 5 && !hasExplicitEpisodeUnit && isCommonResolutionNumber(value)) continue;
       return value;
@@ -11371,10 +11638,14 @@
   }
 
   function detectCurrentEpisodeNo(rawTitle) {
+    const recognized = (value, source = "label") => {
+      if (value != null && typeof state !== "undefined") state.currentEpisodeNumberSource = source;
+      return value;
+    };
     const collectionContext = getCurrentCollectionPartContext();
     if (collectionContext && !isCurrentOrdinaryEpisodeCollection(collectionContext)) {
       const collectionRule = getCollectionMappingRule(collectionContext);
-      if (collectionRule) return getCollectionMappedEpisodeNo(collectionContext, collectionRule);
+      if (collectionRule) return recognized(getCollectionMappedEpisodeNo(collectionContext, collectionRule), "ordinal");
       return null;
     }
     const layout = getCurrentCollectionLayoutContext();
@@ -11387,12 +11658,12 @@
     // such as "(2/13)". Prefer that ordinal over a visible label such as
     // "第1集": a season with a real episode 0 uses label 1 for item 2.
     const officialProgressNo = getOfficialBangumiProgressEpisodeNo();
-    if (officialProgressNo) return officialProgressNo;
-    const titleEpisodeNo = detectEpisodeNo(rawTitle);
-    if (titleEpisodeNo) return titleEpisodeNo;
-    if (hasEpisodeRangeMarker(rawTitle)) return detectEpisodeNo(getActiveEpisodeText(), { allowBare: true }) || getCurrentVideoPartEpisodeNo();
+    if (officialProgressNo) return recognized(officialProgressNo, "ordinal");
+    const titleEpisodeNo = detectEpisodeNo(rawTitle, { allowZero: true });
+    if (titleEpisodeNo != null) return recognized(titleEpisodeNo);
+    if (hasEpisodeRangeMarker(rawTitle)) return recognized(detectEpisodeNo(getActiveEpisodeText(), { allowBare: true, allowZero: true }) ?? getCurrentVideoPartEpisodeNo());
     if (isNonMainEpisodeTitle(rawTitle)) return null;
-    return detectEpisodeNo(getActiveEpisodeText(), { allowBare: true }) || getCurrentVideoPartEpisodeNo();
+    return recognized(detectEpisodeNo(getActiveEpisodeText(), { allowBare: true, allowZero: true }) ?? getCurrentVideoPartEpisodeNo());
   }
 
   function scheduleEpisodeContextRefresh() {
@@ -11436,9 +11707,10 @@
       return;
     }
     if (getLongVideoEpisodeModeDecision() === true || (state.longVideoEpisodeGuess && state.longVideoEpisodeGuess.active)) return;
+    const previousNumberSource = state.currentEpisodeNumberSource;
     const nextEpisodeNo = detectCurrentEpisodeNo(rawTitle);
     const safeNextEpisodeNo = Number(nextEpisodeNo);
-    if (!Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo <= 0) {
+    if (nextEpisodeNo == null || !Number.isFinite(safeNextEpisodeNo) || safeNextEpisodeNo < 0) {
       const layout = getCurrentCollectionLayoutContext();
       if (
         state.currentEpisodeNo != null
@@ -11451,7 +11723,8 @@
       }
       return;
     }
-    if (Number(state.currentEpisodeNo) === safeNextEpisodeNo) return;
+    if (state.currentEpisodeNo != null && Number(state.currentEpisodeNo) === safeNextEpisodeNo
+      && previousNumberSource === state.currentEpisodeNumberSource) return;
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
     render();
@@ -11838,6 +12111,8 @@
     const qualifiedCurrentRow = parsedRows.find((row) => row.partNo === part.partNo) || null;
     const currentLongVideo = currentRow && currentRow.longVideo || parseLongVideoPartTitle(part.title);
     const isLongRange = currentLongVideo
+      && currentLongVideo.episodeStart != null
+      && currentLongVideo.episodeEnd != null
       && Number.isInteger(Number(currentLongVideo.episodeStart))
       && Number.isInteger(Number(currentLongVideo.episodeEnd))
       && Number(currentLongVideo.episodeEnd) >= Number(currentLongVideo.episodeStart);
@@ -12342,7 +12617,7 @@
     if (rangeMatch) {
       const episodeStart = parseChineseNumber(rangeMatch[1]);
       const episodeEnd = parseChineseNumber(rangeMatch[2]);
-      if (episodeStart > 0 && episodeEnd >= episodeStart && episodeEnd <= 9999) {
+      if (episodeStart >= 0 && episodeEnd >= episodeStart && episodeEnd <= 9999) {
         return { seasonNo, episodeStart, episodeEnd, rangeLabel: `${rangeLabelPrefix} ${episodeStart}-${episodeEnd}` };
       }
     }
@@ -12351,7 +12626,7 @@
       || remainder.match(new RegExp(`^(?:EPISODE|E|EP)\\.?\\s*${episodeToken}(?!\\d)`, "i"));
     if (explicitSingle) {
       const episodeNo = parseChineseNumber(explicitSingle[1]);
-      if (episodeNo > 0 && episodeNo <= 9999) {
+      if (episodeNo >= 0 && episodeNo <= 9999) {
         return { seasonNo, episodeStart: episodeNo, episodeEnd: episodeNo, rangeLabel: `${rangeLabelPrefix} ${episodeNo}-${episodeNo}` };
       }
     }
@@ -12422,8 +12697,8 @@
       partCount: Math.max(nodes.length, urlPartNo || 1),
       title,
       seasonNo: Number(parsed.seasonNo) || null,
-      episodeStart: Number(parsed.episodeStart) || null,
-      episodeEnd: Number(parsed.episodeEnd) || null,
+      episodeStart: parsed.episodeStart == null ? null : Number(parsed.episodeStart),
+      episodeEnd: parsed.episodeEnd == null ? null : Number(parsed.episodeEnd),
       rangeLabel: parsed.rangeLabel || "",
     };
   }
@@ -12484,7 +12759,23 @@
   function isExplicitLongVideoPartRange(part = getCurrentVideoPartContext()) {
     const start = Number(part && part.episodeStart);
     const end = Number(part && part.episodeEnd);
-    return Boolean(part && part.seasonNo && Number.isInteger(start) && Number.isInteger(end) && start > 0 && end > start);
+    return Boolean(part && part.seasonNo && part.episodeStart != null && part.episodeEnd != null
+      && Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end > start);
+  }
+
+  function getEpisodeLabelLocalNo(label, episodes = getNormalEpisodes(), absoluteSort = false) {
+    const number = Number(label);
+    if (!Number.isFinite(number) || number < 0 || !episodes.length) return null;
+    const firstSort = Number(episodes[0].sort);
+    // A later season may retain global Bangumi numbering (13..24) while its
+    // videos use season-local labels (1..12). EP0 and fractional labels keep
+    // their explicit sort instead of shifting following episodes by position.
+    const targetSort = !absoluteSort && firstSort > 1 && number > 0 && number <= episodes.length
+      ? firstSort + number - 1
+      : number;
+    const matches = episodes.map((episode, index) => ({ episode, index }))
+      .filter(({ episode }) => episode.sort != null && Number(episode.sort) === targetSort);
+    return matches.length === 1 ? matches[0].index + 1 : null;
   }
 
   function selectLongVideoEpisodeSegment(episodes, part) {
@@ -12499,13 +12790,17 @@
       rangeFallback: false,
       rangeLabel: String(part && part.rangeLabel || ""),
     };
-    if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) return base;
-    if (start > allEpisodes.length || end > allEpisodes.length) {
+    if (!part || part.episodeStart == null || part.episodeEnd == null
+      || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start) return base;
+    const absoluteSort = allEpisodes.length > 0 && start >= Number(allEpisodes[0].sort) && end > allEpisodes.length;
+    const localStart = getEpisodeLabelLocalNo(start, allEpisodes, absoluteSort);
+    const localEnd = getEpisodeLabelLocalNo(end, allEpisodes, absoluteSort);
+    if (localStart == null || localEnd == null || localEnd < localStart) {
       return { ...base, rangeFallback: true };
     }
-    const selected = allEpisodes.slice(start - 1, end);
+    const selected = allEpisodes.slice(localStart - 1, localEnd);
     return selected.length
-      ? { ...base, episodes: selected, firstEpisodeNo: start, rangeApplied: true }
+      ? { ...base, episodes: selected, firstEpisodeNo: localStart, rangeApplied: true }
       : { ...base, rangeFallback: true };
   }
 
@@ -13148,6 +13443,7 @@
     state.longVideoEpisodeGuess = guess;
     state.longVideoEpisodeRenderKey = renderKey;
     state.currentEpisodeNo = nextEpisodeNo;
+    state.currentEpisodeNumberSource = "ordinal";
     if (changed) render();
     return guess;
   }
@@ -13207,7 +13503,7 @@
         : (segment.rangeFallback ? ` · ${escapeHtml(segment.rangeLabel || "分P范围")} 无法与条目对应，已按整季估算` : "");
       const safety = guess.autoMarkSafe ? "" : " · 仅显示推测，不会自动标记";
       const autoMark = guess.autoMarkSafe ? ` · 达到设置的 ${getAutoWatchThreshold()}% 后自动标记` : "";
-      text = `实验推测：第 ${guess.episodeNo} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${autoMark}${safety}`;
+      text = `实验推测：第 ${getEpisodeDisplayNo(guess.episode, guess.episodeNo)} 集 · 本集约 ${guess.episodePercent}%${name ? ` · ${escapeHtml(name)}` : ""}${partNote}${autoMark}${safety}`;
     }
     return `<div class="biligumi-long-video-hint"><div class="biligumi-long-video-hint-text">${text}</div>${actions}</div>`;
   }
@@ -13337,7 +13633,7 @@
     const part = getCurrentVideoPartContext();
     if (part && part.seasonNo) return null;
     if (!part || part.partCount <= 1 || isNonMainEpisodeTitle(part.title)) return null;
-    return detectEpisodeNo(part.title);
+    return detectEpisodeNo(part.title, { allowZero: true });
   }
 
   function getActiveEpisodeNodeText(el, requireVisible = true) {
@@ -13363,7 +13659,7 @@
     candidates.push(rawText, stripTrailingDurationText(rawText));
     return candidates
       .map((text) => String(text || "").replace(/\s+/g, " ").trim())
-      .find((text) => text && detectEpisodeNo(text, { allowBare: true })) || "";
+      .find((text) => text && detectEpisodeNo(text, { allowBare: true, allowZero: true }) != null) || "";
   }
 
   function stripTrailingDurationText(text) {
@@ -13478,13 +13774,16 @@
     const hasEpisodeZero = episodes.some((ep) => ep && ep.sort != null && Number(ep.sort) === 0);
     const rawSort = episode && episode.sort;
     const bangumiSort = rawSort == null || rawSort === "" ? NaN : Number(rawSort);
-    return hasEpisodeZero && Number.isFinite(bangumiSort) && bangumiSort >= 0
+    return (hasEpisodeZero || !Number.isInteger(bangumiSort)) && Number.isFinite(bangumiSort) && bangumiSort >= 0
       ? bangumiSort
       : localNo;
   }
 
   function isCurrentEpisodeNumber(episode, localNo, total) {
     const currentNo = Number(state.currentEpisodeNo);
+    if (state.currentEpisodeNo != null && state.currentEpisodeNumberSource === "label") {
+      return Number(localNo) === getEpisodeLabelLocalNo(currentNo);
+    }
     if (!Number.isFinite(currentNo) || currentNo <= 0) return false;
     if (!Number.isInteger(currentNo)) return Number(episode && episode.sort) === currentNo;
     if (currentNo <= Number(total || 0)) return Number(localNo) === currentNo;

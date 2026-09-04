@@ -80,6 +80,7 @@ const FUNCTION_NAMES = [
   "parseLongVideoPartTitle",
   "parseChineseNumber",
   "selectLongVideoEpisodeSegment",
+  "getEpisodeLabelLocalNo",
   "getAnimeMoviePlatformDecision",
   "getLongVideoDetection",
   "buildLongVideoEpisodeTimeline",
