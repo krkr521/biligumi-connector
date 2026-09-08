@@ -163,21 +163,20 @@ assert.ok(maleHtml.includes(">CV <a href=\"https://bgm.tv/person/31360\""));
 assert.ok(maleHtml.includes(">中配 <a href=\"https://bgm.tv/person/18116\""));
 assert.ok(maleHtml.indexOf("高杉真宙") < maleHtml.indexOf("藤新"));
 
-// Without already-fetched web metadata, preserve all API actors and label the
-// group neutrally. Do not guess that actors[0] is the primary CV.
+// Without already-fetched web metadata, preserve all API actors under CV,
+// regardless of actor count. Do not guess that actors[0] is the primary CV.
 assert.deepEqual(plainGroups(apiCharacters[0]), [
-  { label: "出演", actors: ["藤新", "高杉真宙"] },
+  { label: "CV", actors: ["藤新", "高杉真宙"] },
 ]);
 
-// A partially matched actor must also remain neutral instead of being mislabeled CV.
+// An actor without a matched relation uses the same CV fallback.
 {
   const partial = displaySandbox.applyCharacterActorRelations(
     [{ id: 57009, name: "僕", actors: [{ id: 31360, name: "高杉真宙" }, { id: 999, name: "未知出演" }] }],
     { 57009: relations[57009].slice(0, 1) },
   );
   assert.deepEqual(plainGroups(partial[0]), [
-    { label: "CV", actors: ["高杉真宙"] },
-    { label: "出演", actors: ["未知出演"] },
+    { label: "CV", actors: ["高杉真宙", "未知出演"] },
   ]);
 }
 

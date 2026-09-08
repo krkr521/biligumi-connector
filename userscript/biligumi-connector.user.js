@@ -4360,7 +4360,7 @@
 
   function getDisplayCharacterActorGroups(character) {
     const actors = getDisplayCharacterActors(character);
-    const fallbackLabel = actors.length > 1 ? "出演" : "CV";
+    const fallbackLabel = "CV";
     const groups = [];
     const groupsByLabel = new Map();
     actors.forEach((actor) => {
