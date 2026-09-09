@@ -61,6 +61,7 @@ function createSandbox(source, extension) {
     "getOfficialBangumiSectionBindingKeys", "getOfficialBangumiSectionBindingKey", "getOfficialBangumiContextTitle",
     "getTitleBindingInfo", "getTitleBindingKey", "getTitleBindingTitleToken", "doesCurrentTitleMatchSubjectEvidence",
     "isTitleEvidenceMatch", "hasTitleSeasonConflict", "getTitleSeasonNumber", "parseChineseTitleNumber", "normalizeTitleMatchToken",
+    "getTitleSubdivisionInfo", "hasTitleSubdivisionConflict",
     "getTitleBigramDice", "extractAnimeWorkTitle", "extractQuotedWorkTitle", "migrateCurrentBindingKeys", "withBindingsLock",
     ...(extension ? ["captureRouteContext", "isRouteContextCurrent", "ensureRouteContext", "updateBindings", "mergeBindingKeys"]
       : ["capturePageContext", "isCurrentPageContext", "updateStoredBindings"]),

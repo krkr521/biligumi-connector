@@ -226,6 +226,8 @@ function createBindingSandbox({ official, directSubjectId = null, directEvidence
   };
   runInSandbox(extractFunction(userscriptSource, "parseChineseTitleNumber"), sandbox);
   runInSandbox(extractFunction(userscriptSource, "getTitleSeasonNumber"), sandbox);
+  runInSandbox(extractFunction(userscriptSource, "getTitleSubdivisionInfo"), sandbox);
+  runInSandbox(extractFunction(userscriptSource, "hasTitleSubdivisionConflict"), sandbox);
   runInSandbox(extractFunction(userscriptSource, "canReuseOfficialDirectBinding"), sandbox);
   runInSandbox(
     `${extractFunction(userscriptSource, "getCurrentBinding")};globalThis.readBinding = getCurrentBinding;`,

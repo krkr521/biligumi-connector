@@ -13,6 +13,7 @@ const {
 const source = readSource(USERSCRIPT_PATH);
 const extensionSource = readSource(EXTENSION_PATH);
 const functionSource = (name, async = false) => extractFunction(source, name, async ? { async: true } : {});
+const nonMainConstants = extractConstants(source, ["NON_MAIN_KEYWORD_PATTERN", "NON_MAIN_EPISODE_PATTERN"]);
 const collectionConstants = extractConstants(source, [
   "MIN_COLLECTION_PARSED_PARTS",
   "MAX_COLLECTION_SEGMENTS",
@@ -296,8 +297,11 @@ assert.equal(recognitionSandbox.state.currentEpisodeNo, null, "a paused video st
 
 const sandbox = {
   ...collectionConstants,
+  ...nonMainConstants,
+  getPageTitle: () => "测试合集",
   Date,
   state: { collectionMappings: {}, longVideoEpisodeGuess: null },
+  inferCollectionRangeBindingStart: async () => null,
   getCurrentCollectionLayoutContext: () => null,
   getLongVideoEpisodeModeDecision: () => null,
   isCurrentOrdinaryEpisodeCollection: () => false,
@@ -313,6 +317,8 @@ runInSandbox([
   functionSource("normalizeCollectionMappings"),
   functionSource("normalizeCollectionMappingRule"),
   functionSource("normalizeCollectionSegmentProgress"),
+  functionSource("normalizeTitleText"),
+  functionSource("isNonMainEpisodeTitle"),
   functionSource("parseCollectionPartTitle"),
   functionSource("parseBareCollectionEpisodeTitle"),
   functionSource("parseChineseNumber"),
@@ -331,6 +337,8 @@ runInSandbox([
   functionSource("formatCollectionRangeBindingPrompt"),
   functionSource("formatCollectionSourceRange"),
   functionSource("isCurrentCollectionPartAutoMarkEligible"),
+  functionSource("getCollectionBindingStartOptions"),
+  functionSource("reviseCollectionRangeBindingProposal"),
   functionSource("buildCollectionRangeBindingProposal", true),
   functionSource("getCollectionSegmentProgressKey"),
   functionSource("recordCurrentCollectionSegmentProgressIfNeeded", true),
@@ -442,7 +450,8 @@ const normalizedProgress = sandbox.normalizeCollectionSegmentProgress
   ? sandbox.normalizeCollectionSegmentProgress(progressFixture)
   : runInSandbox(
     `${functionSource("normalizeCollectionSegmentProgress")};globalThis.readProgress = normalizeCollectionSegmentProgress;`,
-    { ...collectionConstants, Date },
+    { ...collectionConstants,
+  ...nonMainConstants, Date },
   ).readProgress(progressFixture);
 assert.equal(Object.keys(normalizedProgress).length, collectionConstants.COLLECTION_SEGMENT_PROGRESS_MAX_ENTRIES);
 assert.equal(normalizedProgress.stale, undefined, "abandoned partial progress expires lazily");
@@ -583,7 +592,9 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   sandbox.getSubjectMainEpisodeCountForMapping = async () => 12;
   sandbox.declaredTotalEpisodes = 12;
   proposal = await sandbox.api.buildCollectionRangeBindingProposal(3001);
-  assert.equal(proposal, null, "an unfinished season never extends a range mapping");
+  assert.equal(proposal.rule.sourceStart, 5, "an explicit continuation preserves its source start");
+  assert.equal(proposal.rule.targetStart, 5, "the existing first four episodes are not mapped twice");
+  assert.equal(proposal.rule.sourceEnd, 12, "confirmed season mappings reserve their known complete range for later uploads");
 
   // Mid-range rebind must replace the covering rule wholesale, not orphan 1..N-1.
   sandbox.state.collectionMappings = {
@@ -783,6 +794,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   let currentPartNo = 1;
   const collectionDomSandbox = {
     ...collectionConstants,
+    ...nonMainConstants,
+    getPageTitle: () => "测试合集",
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? collectionNodes : [],
@@ -794,6 +807,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   runInSandbox([
     functionSource("parseChineseNumber"),
     functionSource("parseCollectionFragment"),
+    functionSource("normalizeTitleText"),
+    functionSource("isNonMainEpisodeTitle"),
     functionSource("parseCollectionPartTitle"),
     functionSource("parseBareCollectionEpisodeTitle"),
     functionSource("parseLongVideoPartTitle"),
@@ -838,6 +853,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     }));
     const numericSandbox = {
       ...collectionConstants,
+      ...nonMainConstants,
+      getPageTitle: () => "测试合集",
       document: {
         querySelector: () => null,
         querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? numericNodes : [],
@@ -849,6 +866,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     runInSandbox([
       functionSource("parseChineseNumber"),
       functionSource("parseCollectionFragment"),
+      functionSource("normalizeTitleText"),
+      functionSource("isNonMainEpisodeTitle"),
       functionSource("parseCollectionPartTitle"),
       functionSource("parseBareCollectionEpisodeTitle"),
       functionSource("parseLongVideoPartTitle"),
@@ -911,6 +930,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   }));
   const incompleteSandbox = {
     ...collectionConstants,
+    ...nonMainConstants,
+    getPageTitle: () => "测试合集",
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? incompleteNodes : [],
@@ -922,6 +943,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
   runInSandbox([
     functionSource("parseChineseNumber"),
     functionSource("parseCollectionFragment"),
+    functionSource("normalizeTitleText"),
+    functionSource("isNonMainEpisodeTitle"),
     functionSource("parseCollectionPartTitle"),
     functionSource("parseBareCollectionEpisodeTitle"),
     functionSource("parseLongVideoPartTitle"),
@@ -947,6 +970,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     }));
     const splitSandbox = {
       ...collectionConstants,
+      ...nonMainConstants,
+      getPageTitle: () => "测试合集",
       document: {
         querySelector: () => null,
         querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? splitNodes : [],
@@ -958,6 +983,8 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     runInSandbox([
       functionSource("parseChineseNumber"),
       functionSource("parseCollectionFragment"),
+      functionSource("normalizeTitleText"),
+      functionSource("isNonMainEpisodeTitle"),
       functionSource("parseCollectionPartTitle"),
       functionSource("parseBareCollectionEpisodeTitle"),
       functionSource("parseLongVideoPartTitle"),
@@ -1097,13 +1124,8 @@ globalThis.readLayout = getCurrentCollectionLayoutContext;`, splitSandbox);
   sandbox.getCurrentCollectionPartContext = () => decimalGapThird.context;
   assert.equal(await sandbox.api.recordCurrentCollectionSegmentProgressIfNeeded(), false,
     "DOM .1+.3 without .2 never reaches contiguous segment completion");
-  const decimalGapKey = sandbox.api.getCollectionSegmentProgressKey(decimalGapFirst.context, gapRule);
-  assert.deepEqual(plain(gapProgress[decimalGapKey].completed), [1, 3]);
-  assert.equal(
-    plain(gapProgress[decimalGapKey].completed).includes(2),
-    false,
-    "missing middle fragment index 2 is never recorded from the live list",
-  );
+  assert.deepEqual(plain(gapProgress), {},
+    "an invalid live sequence cannot leave watched indexes for a later repaired list");
 
   // Restore shared sandbox hooks used by later hybrid / eligibility tests.
   currentContext = null;
@@ -1127,6 +1149,8 @@ globalThis.readLayout = getCurrentCollectionLayoutContext;`, splitSandbox);
   let hybridPartNo = 2;
   const hybridSandbox = {
     ...collectionConstants,
+    ...nonMainConstants,
+    getPageTitle: () => "测试合集",
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? hybridNodes : [],
@@ -1138,6 +1162,8 @@ globalThis.readLayout = getCurrentCollectionLayoutContext;`, splitSandbox);
   runInSandbox([
     functionSource("parseChineseNumber"),
     functionSource("parseCollectionFragment"),
+    functionSource("normalizeTitleText"),
+    functionSource("isNonMainEpisodeTitle"),
     functionSource("parseCollectionPartTitle"),
     functionSource("parseBareCollectionEpisodeTitle"),
     functionSource("parseLongVideoPartTitle"),
@@ -1234,7 +1260,7 @@ globalThis.readHybridContext = getCurrentCollectionPartContext;`, hybridSandbox)
     },
     replacesRule: null,
   }, 1001);
-  assert.match(prompt, /当前集检测到 2 段/, "split confirm copy refers to the current episode only");
+  assert.match(prompt, /当前集按 2 段核对/, "split confirm copy refers to the current episode only");
   assert.doesNotMatch(prompt, /每集 2 段/);
 
   let storedProgress = {

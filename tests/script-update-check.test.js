@@ -30,7 +30,7 @@ runInSandbox(pureFunctions + "\n;globalThis.updatePure = { parseUserscriptVersio
 assert.match(source, /^\/\/ @connect\s+raw\.githubusercontent\.com$/m);
 assert.match(source, /^\/\/ @connect\s+api\.gitcode\.com$/m);
 assert.match(source, /^\/\/ @connect\s+raw\.gitcode\.com$/m);
-assert.equal(constants.SCRIPT_VERSION, "0.7.20");
+assert.equal(constants.SCRIPT_VERSION, "0.7.21");
 assert.equal(constants.SCRIPT_UPDATE_TIMEOUT_MS, 4000);
 assert.equal(constants.SCRIPT_UPDATE_CACHE_TTL_MS, 21600000);
 assert.equal(constants.SCRIPT_UPDATE_SOURCES.length, 2);
@@ -62,7 +62,7 @@ const cacheNow = 2000000000000;
 const cacheSandbox = {
   SCRIPT_UPDATE_SOURCES: constants.SCRIPT_UPDATE_SOURCES,
   SCRIPT_UPDATE_CACHE_TTL_MS: constants.SCRIPT_UPDATE_CACHE_TTL_MS,
-  SCRIPT_VERSION: constants.SCRIPT_VERSION,
+  SCRIPT_VERSION: "0.7.20", // Keep the cache fixture's current/future versions independent of releases.
   STORAGE: { scriptUpdateCache: "update-cache" },
   Date: { now: () => cacheNow },
   compareScriptVersions: pureSandbox.updatePure.compareScriptVersions,

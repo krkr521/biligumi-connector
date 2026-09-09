@@ -15,6 +15,7 @@ const functions = [
   "getCurrentBinding", "getTitleBindingKey", "getTitleBindingTitleToken",
   "getTitleBindingInfo", "canReuseTitleBinding", "canReuseOfficialDirectBinding",
   "doesCurrentTitleMatchSubjectEvidence", "isTitleEvidenceMatch", "hasTitleSeasonConflict",
+  "getTitleSubdivisionInfo", "hasTitleSubdivisionConflict",
   "getTitleSeasonNumber", "parseChineseTitleNumber", "getTitleBigramDice",
   "normalizeBindingToken", "normalizeTitleMatchToken", "resolveCurrentPageTitle",
   "cleanTitle", "extractAnimeWorkTitle", "extractQuotedWorkTitle", "getNonMainTitleSource",
@@ -114,5 +115,51 @@ for (const [label, file] of [["userscript", USERSCRIPT_PATH], ["extension", EXTE
     api.rawTitle = "[S2] Example Anime Episode 1";
     api.state.bindingSubjects["111"].names = ["Example Anime"];
     assert.equal(api.canReuseOfficialDirectBinding(111), false, "a cleaned official context must retain its raw S2 evidence");
+  });
+
+  test(`${label}: same-season title reuse rejects conflicting parts without migrating the binding`, () => {
+    for (const [current, stored] of [["Part 2", "Part 1"], ["2nd cour", "1st cour"], ["第2部", "第1部"], ["Ｐａｒｔ ２", "Part One"]]) {
+      const api = setup(source);
+      api.rawTitle = `[${current}] Example Anime Season 4 第1集`;
+      api.state.bindingSubjects["111"].names = [`[${stored}] Example Anime Season 4`];
+      const info = api.getTitleBindingInfo();
+      assert.equal(info.seasonNo, 4, "the season remains independent from its subdivision");
+      api.state.bindings[api.getTitleBindingKey()] = 111;
+      assert.equal(api.getCurrentBinding(), null, current);
+      assert.deepEqual(api.migrations, [], current);
+      assert.match(api.state.bindingGuardMessage, /篇章/);
+    }
+  });
+
+  test(`${label}: matching part evidence and ordinary full-season reuse continue to resolve`, () => {
+    const api = setup(source);
+    api.rawTitle = "[Part 2] Example Anime Season 4 第1集";
+    api.state.bindings[api.getTitleBindingKey()] = 111;
+    api.state.bindingSubjects["111"].names = ["Example Anime Season 4", "Example Anime Season 4 Part Two"];
+    assert.equal(api.getCurrentBinding(), 111, "a generic alias does not erase matching subdivision evidence");
+    assert.deepEqual(api.migrations, [111]);
+    api.state.bindingSubjects["111"].names = ["Example Anime Season 4"];
+    assert.equal(api.getCurrentBinding(), null, "a part needs corresponding cached evidence");
+    api.rawTitle = "Example Anime Season 4 第2集";
+    api.state.bindings[api.getTitleBindingKey()] = 111;
+    assert.equal(api.getCurrentBinding(), 111, "ordinary seasons do not require subdivision metadata");
+    api.state.bindingSubjects["111"].names = ["Example Anime Season 4 Part 2"];
+    assert.equal(api.getCurrentBinding(), null, "a full-season page cannot silently inherit a specific part");
+  });
+
+  test(`${label}: official direct reuse retains raw part evidence when the series title is generic`, () => {
+    const api = setup(source);
+    api.official = true;
+    api.rawTitle = "[Part 2] Example Anime Season 4 第1集";
+    api.seriesTitle = "Example Anime Season 4";
+    api.officialContextTitle = "Example Anime Season 4";
+    api.state.bindings["/video/BVNEW"] = 111;
+    api.state.bindingSubjects["111"].names = ["Example Anime Season 4 Part 1"];
+    assert.equal(api.getCurrentBinding(), null);
+    assert.deepEqual(api.migrations, []);
+    api.state.bindingSubjects["111"].names = ["Example Anime Season 4", "Example Anime Season 4 Part 2"];
+    assert.equal(api.getCurrentBinding(), 111);
+    api.state.bindingSubjects["111"].names.push("Example Anime Season 4 Part 1");
+    assert.equal(api.getCurrentBinding(), null, "conflicting cached aliases cannot establish a unique part");
   });
 }

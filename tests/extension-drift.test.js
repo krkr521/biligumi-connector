@@ -22,6 +22,13 @@ const extensionSource = readSource(EXTENSION_PATH);
 
 // No route/storage adapter usage: must be byte-identical across both builds.
 const IDENTICAL_FUNCTIONS = [
+  "getCollectionBindingSourceSignature",
+  "ensureCollectionBindingSourceCurrent",
+  "getCollectionBindingStartOptions",
+  "reviseCollectionRangeBindingProposal",
+  "renderCollectionBindingEditor",
+  "handleCollectionBindingStartChange",
+  "validateCollectionRangeBindingWrite",
   "normalizeCollectionMappings",
   "normalizeCollectionMappingRule",
   "normalizeCollectionSegmentProgress",

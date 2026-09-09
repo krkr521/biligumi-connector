@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.21";
+  const SCRIPT_VERSION = "0.3.22";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -1356,6 +1356,134 @@
       font-size: 13px;
       line-height: 1.5;
       white-space: pre-line;
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor {
+      display: grid;
+      gap: 10px;
+      min-width: 0;
+      margin-top: 12px;
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor label {
+      display: grid;
+      gap: 7px;
+      color: #61545c;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    #${PANEL_ID} .biligumi-collection-start-control {
+      position: relative;
+      display: block;
+      min-width: 0;
+    }
+    #${PANEL_ID} .biligumi-collection-start-control::after {
+      content: "";
+      position: absolute;
+      top: 14px;
+      right: 14px;
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid #b86b81;
+      border-bottom: 1.5px solid #b86b81;
+      transform: rotate(45deg);
+      pointer-events: none;
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor select {
+      display: block;
+      appearance: none;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      height: 38px;
+      padding: 0 36px 0 12px;
+      border: 1px solid #e4cdd5;
+      border-radius: 8px;
+      background: #fff;
+      color: var(--bgm-ink);
+      font-size: 13px;
+      font-weight: 500;
+      line-height: normal;
+      text-overflow: ellipsis;
+      cursor: pointer;
+      transition: border-color .16s ease, box-shadow .16s ease;
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor select:hover {
+      border-color: #cd92a3;
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor select:focus-visible {
+      outline: 2px solid var(--bgm-pink);
+      outline-offset: 2px;
+      border-color: var(--bgm-pink);
+      box-shadow: 0 0 0 4px rgba(217, 117, 140, .1);
+    }
+    #${PANEL_ID} .biligumi-collection-binding-editor .biligumi-collection-binding-preview {
+      padding-top: 9px;
+      border-top: 1px solid rgba(217, 117, 140, .18);
+      color: #69717d;
+      font-size: 12px;
+      line-height: 1.7;
+      overflow-wrap: anywhere;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-hint {
+      margin: 10px 14px 0;
+      padding: 10px 12px;
+      border-color: #e6e9ef;
+      background: #fafbfc;
+      color: #5f6f80;
+      line-height: 1.6;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-heading {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px 12px;
+      margin-bottom: 6px;
+      color: #526171;
+      font-weight: 600;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-hint .biligumi-collection-mapping-edit {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 5px;
+      flex: 0 0 auto;
+      min-height: 28px;
+      padding: 3px 9px;
+      border: 1px solid #ead6dd;
+      border-radius: 6px;
+      background: #fff;
+      color: #a9506a;
+      font-size: 12px;
+      font-weight: 500;
+      line-height: 20px;
+      white-space: nowrap;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-hint .biligumi-collection-mapping-edit:hover {
+      border-color: #d99caf;
+      background: #fff2f6;
+      color: #a04460;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-edit:focus-visible {
+      outline: 2px solid var(--bgm-pink);
+      outline-offset: 2px;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-edit svg {
+      width: 13px;
+      height: 13px;
+      flex: 0 0 auto;
+      pointer-events: none;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-detail {
+      overflow-wrap: anywhere;
+    }
+    #${PANEL_ID} .biligumi-collection-mapping-help {
+      margin-top: 3px;
+      color: #7b8794;
+      font-size: 11px;
+    }
+    #${PANEL_ID} .biligumi-inline-confirm-actions button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
     }
     #${PANEL_ID} .biligumi-inline-confirm-actions {
       display: flex;
@@ -3008,6 +3136,7 @@
   let routeRefreshSeq = 0;
   let extensionUpdateCheckSeq = 0;
   let subjectSearchSeq = 0;
+  let subjectBindRequestSeq = 0;
   let extensionUpdateCheckPromise = null;
   let extensionUpdateChecking = false;
   let extensionUpdateOpening = false;
@@ -3267,6 +3396,11 @@
     const names = evidence && Array.isArray(evidence.names) ? evidence.names : [];
     if (!names.length) return true;
     const titleInfo = getTitleBindingInfo();
+    if (hasTitleSubdivisionConflict(titleInfo.subdivisionTitles || titleInfo.sourceTitle, names)) {
+      state.bindingGuardMessage = "检测到官方番剧已切换季度或篇章，旧绑定缺少一致的 Part / cour / 分部证据；请重新选择 Bangumi 条目。";
+      state.message = state.bindingGuardMessage;
+      return false;
+    }
     if (doesCurrentTitleMatchSubjectEvidence(evidence, titleInfo)) return true;
     const currentSeason = titleInfo.seasonNo || getTitleSeasonNumber(titleInfo.sourceTitle);
     const evidenceSeasons = names.map(getTitleSeasonNumber).filter((value) => value > 0);
@@ -4493,7 +4627,13 @@
         const targetLabel = Number.isFinite(targetNo) && targetNo > 0
           ? formatCollectionTargetEpisodeLabel(targetNo, rule)
           : "特殊分P（不自动标记）";
-        return `<div class="biligumi-notice">合集映射：${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}。解绑会只删除当前范围映射。</div>`;
+        return `<div class="biligumi-notice biligumi-collection-mapping-hint">
+          <div class="biligumi-collection-mapping-heading"><span>合集映射</span>
+            <button type="button" class="biligumi-button biligumi-collection-mapping-edit" data-action="edit-collection-mapping"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10.5 2.5 3 3M3 10l8-8a1.4 1.4 0 0 1 3 3l-8 8-4 1 1-4Z"/></svg><span>调整映射</span></button>
+          </div>
+          <div class="biligumi-collection-mapping-detail">${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}</div>
+          <div class="biligumi-collection-mapping-help">解绑仅移除这段映射</div>
+        </div>`;
       }
       if (getCollectionMappingRules(context.bvid).length) {
         return `<div class="biligumi-notice">检测到合集；当前分P「${escapeHtml(context.title)}」尚未映射。请为这一段绑定正确的 Bangumi 条目。</div>`;
@@ -5014,18 +5154,143 @@
     `;
   }
 
+  function getCollectionBindingStartOptions(context) {
+    if (!context) return [];
+    const rows = Array.isArray(context.sourceEpisodes) ? context.sourceEpisodes : [];
+    const seen = new Set();
+    const options = [];
+    for (const row of rows) {
+      const sourceStart = Number(row.episodeNo);
+      if (!Number.isInteger(sourceStart) || sourceStart < 0 || seen.has(sourceStart)) continue;
+      if (Number(row.fragmentIndex || 1) !== 1) continue;
+      seen.add(sourceStart);
+      options.push({ sourceStart, partNo: Number(row.partNo), title: String(row.title || '') });
+    }
+    if (!rows.length) {
+      const start = Number(context.groupStart);
+      const end = Number(context.groupEnd);
+      if (Number.isInteger(start) && Number.isInteger(end) && end >= start && end - start < 2000) {
+        for (let sourceStart = start; sourceStart <= end; sourceStart += 1) {
+          options.push({ sourceStart, partNo: 0, title: '来源第' + sourceStart + '集' });
+        }
+      }
+    }
+    return options;
+  }
+
+  function reviseCollectionRangeBindingProposal(proposal, sourceStart) {
+    const start = Number(sourceStart);
+    if (!proposal || sourceStart == null || sourceStart === ''
+      || !Number.isInteger(start)
+      || !getCollectionBindingStartOptions(proposal.context).some((option) => option.sourceStart === start)) {
+      throw new Error('请选择本条目第一集对应的分P');
+    }
+    const original = proposal.rule;
+    const siblings = Array.isArray(proposal.siblingRules) ? proposal.siblingRules : [];
+    if (siblings.some((rule) => start >= rule.sourceStart && start <= rule.sourceEnd)) {
+      throw new Error('所选起点与已有范围映射重叠，请先调整已有映射');
+    }
+    const targetStart = start === Number(proposal.initialSourceStart)
+      ? Number(proposal.initialTargetStart || 1) : 1;
+    const remaining = Number(proposal.episodeCount) - targetStart + 1;
+    if (!Number.isInteger(remaining) || remaining <= 0) throw new Error('该 Bangumi 条目的正片范围已经映射完成');
+    const expectedEnd = start + remaining - 1;
+    let sourceEnd = proposal.extendToExpectedEnd ? expectedEnd : Math.min(Number(proposal.context.groupEnd), expectedEnd);
+    const next = siblings.filter((rule) => rule.sourceStart > start).sort((a, b) => a.sourceStart - b.sourceStart)[0];
+    if (next) sourceEnd = Math.min(sourceEnd, next.sourceStart - 1);
+    const current = Number(proposal.context.episodeNo);
+    if (sourceEnd < start || current < start || current > sourceEnd) {
+      throw new Error('所选起点不能覆盖当前播放集，请核对起点或选择正确的 Bangumi 条目');
+    }
+    return {
+      ...proposal,
+      startConfirmed: true,
+      editError: '',
+      rule: {
+        ...original,
+        id: original.seasonKey + ':' + start + '-' + sourceEnd,
+        sourceStart: start,
+        sourceEnd,
+        targetStart,
+        targetEpisodeZero: proposal.hasEpisodeZero === true,
+      },
+    };
+  }
+
+  function renderCollectionBindingEditor(proposal) {
+    if (!proposal) return '';
+    const rule = proposal.rule;
+    const context = proposal.context;
+    const selected = proposal.startConfirmed ? Number(rule.sourceStart) : null;
+    const options = getCollectionBindingStartOptions(context);
+    const optionHtml = options.map((option) => '<option value="' + option.sourceStart + '"'
+      + (selected === option.sourceStart ? ' selected' : '') + '>'
+      + escapeHtml((option.partNo ? 'P' + option.partNo + ' · ' : '') + option.title) + '</option>').join('');
+    const label = proposal.startConfirmed && Number(rule.targetStart) > 1
+      ? '映射起点（对应本条目第' + rule.targetStart + '集）'
+      : '本条目第一集对应的分P';
+    let preview = '请选择起点；无需切换播放位置或重新搜索。';
+    if (proposal.startConfirmed) {
+      const current = rule.targetStart + context.episodeNo - rule.sourceStart;
+      const uploadedEnd = Math.min(context.groupEnd, rule.sourceEnd);
+      const uploadedRule = { ...rule, sourceEnd: uploadedEnd };
+      preview = '当前播放：' + context.title + ' → ' + formatCollectionTargetEpisodeLabel(current, rule)
+        + '\n已上传范围：' + formatCollectionSourceRange(uploadedRule) + ' → ' + formatCollectionTargetRange(uploadedRule);
+      if (rule.sourceEnd > uploadedEnd) {
+        preview += '\n完整映射：' + formatCollectionSourceRange(rule) + ' → ' + formatCollectionTargetRange(rule)
+          + '；同季后续新增分P将沿用此映射。';
+      }
+    }
+    return '<div class="biligumi-collection-binding-editor">'
+      + '<label>' + escapeHtml(label)
+      + '<span class="biligumi-collection-start-control"><select class="biligumi-input" data-role="collection-binding-start">'
+      + '<option value=""' + (selected == null ? ' selected' : '') + '>请选择分P</option>'
+      + optionHtml + '</select></span></label>'
+      + '<div class="biligumi-inline-confirm-text biligumi-collection-binding-preview" aria-live="polite">' + escapeHtml(preview) + '</div>'
+      + (proposal.editError ? '<div class="biligumi-error" role="alert">' + escapeHtml(proposal.editError) + '</div>' : '')
+      + '</div>';
+  }
+
+  function handleCollectionBindingStartChange(event) {
+    if (!event || !event.isTrusted) return;
+    const pending = state.inlineConfirm;
+    if (!pending || !pending.collectionProposal) return;
+    if (pending.isCurrent && !pending.isCurrent()) {
+      settleInlineConfirm(false);
+      return;
+    }
+    event.stopPropagation();
+    const proposal = pending.collectionProposal;
+    const value = event.target.value;
+    try {
+      if (value === '') {
+        proposal.startConfirmed = false;
+        proposal.editError = '';
+      } else {
+        Object.assign(proposal, reviseCollectionRangeBindingProposal(proposal, Number(value)));
+      }
+    } catch (error) {
+      proposal.startConfirmed = false;
+      proposal.editError = error.message;
+    }
+    render();
+    const select = document.getElementById(PANEL_ID)?.querySelector('[data-role="collection-binding-start"]');
+    if (select) select.focus();
+  }
+
   function renderInlineConfirm() {
     const pending = state.inlineConfirm;
     if (!pending || pending.context !== "panel") return "";
-    return `
-      <div class="biligumi-row biligumi-inline-confirm">
-        <div class="biligumi-inline-confirm-text">${escapeHtml(pending.message)}</div>
-        <div class="biligumi-inline-confirm-actions">
-          <button type="button" class="biligumi-button" data-action="inline-confirm-cancel">${escapeHtml(pending.cancelLabel)}</button>
-          <button type="button" class="biligumi-button ${pending.danger ? "danger" : "primary"}" data-action="inline-confirm-accept">${escapeHtml(pending.confirmLabel)}</button>
-        </div>
-      </div>
-    `;
+    const proposal = pending.collectionProposal;
+    const disabled = proposal && (!proposal.startConfirmed || proposal.editError);
+    return '<div class="biligumi-row biligumi-inline-confirm">'
+      + '<div class="biligumi-inline-confirm-text">' + escapeHtml(pending.message) + '</div>'
+      + (proposal ? renderCollectionBindingEditor(proposal) : '')
+      + '<div class="biligumi-inline-confirm-actions">'
+      + '<button type="button" class="biligumi-button" data-action="inline-confirm-cancel">' + escapeHtml(pending.cancelLabel) + '</button>'
+      + '<button type="button" class="biligumi-button ' + (pending.danger ? 'danger' : 'primary')
+      + '" data-action="inline-confirm-accept"' + (disabled ? ' disabled' : '') + '>' + escapeHtml(pending.confirmLabel) + '</button>'
+      + '</div></div>';
   }
 
   function renderScoreBox() {
@@ -5236,6 +5501,8 @@
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
     bindPanelInputDrafts(panel);
+    const collectionStart = panel.querySelector("[data-role='collection-binding-start']");
+    if (collectionStart) collectionStart.addEventListener("change", handleCollectionBindingStartChange);
 
     const typeSelect = panel.querySelector("[data-role='subject-type']");
     if (typeSelect) {
@@ -5386,6 +5653,7 @@
     if (action === "decline-long-video-bind") resolveLongVideoBindingPrompt(false).catch(showError);
     if (action === "retry-long-video-bind-wait") retryLongVideoBindingWait();
     if (action === "cancel-long-video-bind") cancelLongVideoBindingPrompt();
+    if (action === "edit-collection-mapping" && state.subjectId) requestBindSubject(Number(state.subjectId)).catch(showError);
     if (action === "unbind") unbindSubject().catch(showError);
     if (action === "edit-collection") openCollectionEditor();
     if (action === "collection-cancel") closeCollectionEditor();
@@ -5715,9 +5983,11 @@
 
   async function requestBindSubject(subjectId, routeContext = captureRouteContext(), isCurrentRequest = () => true) {
     const callerIsCurrent = isCurrentRequest;
+    const bindRequestSeq = ++subjectBindRequestSeq;
     const searchSeq = subjectSearchSeq;
     const tokenSnapshot = state.token;
-    isCurrentRequest = () => callerIsCurrent() && searchSeq === subjectSearchSeq && tokenSnapshot === state.token;
+    isCurrentRequest = () => callerIsCurrent() && bindRequestSeq === subjectBindRequestSeq
+      && searchSeq === subjectSearchSeq && tokenSnapshot === state.token;
     const reportError = (error) => {
       if (isRouteContextCurrent(routeContext) && isCurrentRequest()) throw error;
     };
@@ -5880,6 +6150,8 @@
         confirmLabel: options.confirmLabel ? String(options.confirmLabel) : "确定",
         cancelLabel: options.cancelLabel ? String(options.cancelLabel) : "取消",
         danger: Boolean(options.danger),
+        collectionProposal: context === "panel" ? options.collectionProposal || null : null,
+        isCurrent: typeof options.isCurrent === "function" ? options.isCurrent : null,
         context,
         returnFocus: context === "settings" ? document.activeElement : null,
         resolve,
@@ -5896,6 +6168,18 @@
   function settleInlineConfirm(accepted) {
     const pending = state.inlineConfirm;
     if (!pending) return;
+    if (accepted && pending.isCurrent && !pending.isCurrent()) accepted = false;
+    if (accepted && pending.collectionProposal) {
+      const proposal = pending.collectionProposal;
+      if (!proposal.startConfirmed || proposal.editError) return;
+      try {
+        Object.assign(proposal, reviseCollectionRangeBindingProposal(proposal, proposal.rule.sourceStart));
+      } catch (error) {
+        proposal.editError = error.message;
+        render();
+        return;
+      }
+    }
     state.inlineConfirm = null;
     if (pending.context === "settings") {
       removeSettingsInlineConfirm();
@@ -5912,6 +6196,12 @@
     const pending = state.inlineConfirm;
     if (!pending) return;
     const root = document.getElementById(pending.context === "settings" ? SETTINGS_ID : PANEL_ID);
+    const collectionStart = pending.collectionProposal && root
+      ? root.querySelector("[data-role='collection-binding-start']") : null;
+    if (collectionStart && !pending.collectionProposal.startConfirmed) {
+      collectionStart.focus();
+      return;
+    }
     const buttons = root
       ? root.querySelectorAll(".biligumi-inline-confirm-actions .biligumi-button, .biligumi-settings-confirm-actions .biligumi-button")
       : [];
@@ -6093,12 +6383,50 @@
     });
   }
 
+  function getCollectionBindingSourceSignature(context) {
+    if (!context) return "";
+    const text = (value) => String(value || "").normalize("NFKC").replace(/\s+/g, " ").trim();
+    const rows = Array.isArray(context.sourceEpisodes) ? context.sourceEpisodes : [];
+    return JSON.stringify([
+      String(context.bvid || "").toUpperCase(),
+      String(context.seasonKey || ""),
+      Number(context.partNo),
+      Number(context.episodeNo),
+      Number(context.fragmentIndex || 1),
+      Number(context.segmentCount || 1),
+      Number(context.groupStart),
+      Number(context.groupEnd),
+      text(context.collectionTitle || context.videoTitle),
+      text(context.title),
+      rows.map((row) => [
+        Number(row && row.partNo),
+        Number(row && row.episodeNo),
+        Number(row?.fragmentIndex ?? 1),
+        Number(row?.fragmentCount ?? 1),
+        text(row && row.title),
+      ]),
+    ]);
+  }
+
+  function ensureCollectionBindingSourceCurrent(proposal) {
+    // Re-read semantic rows rather than DOM identities. Recycled nodes can change
+    // their titles while the ordinary short-lived part-row cache still matches.
+    if (typeof getCollectionPartRows === "function") getCollectionPartRows.cache = null;
+    const current = getCurrentCollectionPartContext();
+    const expected = getCollectionBindingSourceSignature(proposal && proposal.context);
+    if (!expected || expected !== getCollectionBindingSourceSignature(current)) {
+      throw new Error("合集分P列表或当前集已变化，请重新搜索并确认绑定");
+    }
+    return current;
+  }
+
+
   async function bindSubject(subjectId, routeContext = captureRouteContext(), isCurrentRequest = () => true) {
     if (!isCurrentRequest()) return;
     ensureRouteContext(routeContext, "页面已切换，已取消绑定；请在当前页面重新操作。");
     const isCurrent = () => isRouteContextCurrent(routeContext) && isCurrentRequest();
     const legacyBindingKeys = getBindingKeysForCurrentPage();
-    const collectionProposal = await buildCollectionRangeBindingProposal(subjectId);
+    const collectionProposal = await buildCollectionRangeBindingProposal(subjectId, { isCurrent });
     if (!isCurrent()) return;
     const collectionContext = getCurrentCollectionPartContext();
     const declaredTotalEpisodes = getStoredSubjectDeclaredTotalEpisodeCount(subjectId);
@@ -6112,7 +6440,8 @@
       ? null
       : await buildLongVideoRangeGroupBindingProposal(subjectId);
     if (!isCurrent()) return;
-    if (collectionProposal && !(await requestInlineConfirm({ message: formatCollectionRangeBindingPrompt(collectionProposal, subjectId) }))) {
+    if (collectionProposal) ensureCollectionBindingSourceCurrent(collectionProposal);
+    if (collectionProposal && !(await requestInlineConfirm({ message: formatCollectionRangeBindingPrompt(collectionProposal, subjectId), collectionProposal, isCurrent, confirmLabel: "保存绑定" }))) {
       if (!isCurrent()) return;
       state.busy = false;
       state.message = "已取消绑定；没有修改合集映射。";
@@ -6124,8 +6453,11 @@
     let applied = false;
     let rangeGroupWriteOutcome = "";
     if (collectionProposal) {
-      await updateStoredCollectionMappings((mappings) => {
+      ensureCollectionBindingSourceCurrent(collectionProposal);
+      await updateStoredCollectionMappings((mappings, bindings) => {
         if (!isCurrent()) return false;
+        ensureCollectionBindingSourceCurrent(collectionProposal);
+        validateCollectionRangeBindingWrite(mappings, collectionProposal, bindings);
         putCollectionMappingRule(mappings, { ...collectionProposal.rule, subjectId: Number(subjectId) });
         applied = true;
         return true;
@@ -10140,7 +10472,8 @@
     else if (cleanedLength <= 2) confidence = 0.35;
     else if (sourceLength >= 8 && cleanedLength <= 3) confidence = 0.4;
     else if (sourceLength >= 12 && cleanedLength <= 6 && retainedRatio < 0.28) confidence = 0.5;
-    return { sourceTitle, cleanedTitle, token, matchToken, seasonNo, confidence, lowConfidence: confidence < 0.6 };
+    return { sourceTitle, cleanedTitle, token, matchToken, seasonNo, confidence, lowConfidence: confidence < 0.6,
+      subdivisionTitles: [sourceTitle, getSeriesTitle(), rawTitle].filter(Boolean) };
   }
 
   function canReuseTitleBinding(subjectId) {
@@ -10152,8 +10485,8 @@
     const seasonConflict = currentSeason > 1
       ? !evidenceSeasons.includes(currentSeason)
       : evidenceSeasons.length > 0 && !evidenceSeasons.includes(currentSeason || 1);
-    if (seasonConflict) {
-      state.bindingGuardMessage = "当前视频的季度与已有标题绑定不一致或缺少季度证据，已暂停自动绑定；请确认当前季度的 Bangumi 条目。";
+    if (seasonConflict || hasTitleSubdivisionConflict(titleInfo.subdivisionTitles || titleInfo.sourceTitle, names)) {
+      state.bindingGuardMessage = "当前视频的季度或篇章与已有标题绑定不一致或缺少对应证据，已暂停自动绑定；请确认正确的 Bangumi 条目。";
       state.message = state.bindingGuardMessage;
       return false;
     }
@@ -10209,7 +10542,48 @@
     return candidateLength >= 4 && nameLength >= 4 && lengthRatio >= 0.6 && getTitleBigramDice(candidate, subjectName) >= 0.78;
   }
 
+  function getTitleSubdivisionInfo(value) {
+    const titles = Array.isArray(value) ? value : [value];
+    const words = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8, nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12, twelfth: 12 };
+    const cn = "(?:\\d{1,2}|[一二两兩三四五六七八九十]{1,3})";
+    const en = "(?:\\d{1,2}(?:st|nd|rd|th)?|" + Object.keys(words).join("|") + "|[ivxlcdm]+)";
+    const ordinal = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|[ivxlcdm]+)";
+    const patterns = [
+      new RegExp("(?<![a-z0-9])(?:part|cour)\\s*[:._-]?\\s*(" + en + ")(?=$|[^a-z0-9])", "gu"),
+      new RegExp("(?<![a-z0-9])(" + ordinal + ")\\s*(?:part|cour)\\b", "gu"),
+      new RegExp("第\\s*(" + cn + ")\\s*部(?:分)?", "gu"),
+    ];
+    const number = (token) => {
+      const raw = String(token || "").replace(/^(\d+)(?:st|nd|rd|th)$/, "$1");
+      if (/^\d+$/.test(raw)) return Number(raw);
+      if (words[raw]) return words[raw];
+      if (/^(?=.+)(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$/.test(raw)) {
+        const roman = { i: 1, v: 5, x: 10, l: 50, c: 100 };
+        return [...raw].reduce((total, char, index) => total + (roman[char] < (roman[raw[index + 1]] || 0) ? -roman[char] : roman[char]), 0);
+      }
+      return parseChineseTitleNumber(raw);
+    };
+    const parsed = titles.flatMap((title) => {
+      const text = String(title || "").normalize("NFKC").toLowerCase();
+      return patterns.flatMap((pattern, index) => Array.from(text.matchAll(pattern))
+        .filter((match) => index !== 1 || !/(?<![a-z0-9])(?:season|s|シーズン)\s*[:._-]?\s*$/u.test(text.slice(0, match.index)))
+        .map((match) => number(match[1])));
+    });
+    const numbers = [...new Set(parsed.filter((item) => Number.isInteger(item) && item > 0 && item < 100))];
+    return { explicit: parsed.length > 0, number: numbers.length === 1 ? numbers[0] : 0,
+      ambiguous: numbers.length > 1 || parsed.some((item) => !Number.isInteger(item) || item <= 0 || item >= 100) };
+  }
+
+  function hasTitleSubdivisionConflict(candidate, subjectName) {
+    const current = getTitleSubdivisionInfo(candidate);
+    const stored = getTitleSubdivisionInfo(subjectName);
+    if (current.ambiguous || stored.ambiguous) return true;
+    if (!current.explicit && !stored.explicit) return false;
+    return !current.explicit || !stored.explicit || current.number !== stored.number;
+  }
+
   function hasTitleSeasonConflict(candidate, subjectName) {
+    if (hasTitleSubdivisionConflict(candidate, subjectName)) return true;
     const candidateSeason = getTitleSeasonNumber(candidate);
     const subjectSeason = getTitleSeasonNumber(subjectName);
     if (candidateSeason && subjectSeason) return candidateSeason !== subjectSeason;
@@ -10217,13 +10591,48 @@
   }
 
   function getTitleSeasonNumber(value) {
-    const text = String(value || "").toLowerCase();
-    const numeric = text.match(/第\s*(\d{1,2})\s*(?:季|期|部)/)
-      || text.match(/(?<![a-z0-9])(?:season|s|part|cour)\s*0*(\d{1,2})(?:$|[^0-9])/)
-      || text.match(/(\d{1,2})(?:st|nd|rd|th)\s*(?:season|part|cour)/);
-    if (numeric) return Number(numeric[1]) || 0;
-    const chinese = text.match(/第\s*([一二两兩三四五六七八九十]{1,3})\s*(?:季|期|部)/);
-    return chinese ? parseChineseTitleNumber(chinese[1]) : 0;
+    const text = String(value || "").normalize("NFKC").toLowerCase();
+    const words = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8, nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12, twelfth: 12 };
+    const cn = "(?:\\d{1,2}|[零〇一二两兩三四五六七八九十]{1,3})";
+    const en = "(?:\\d{1,2}(?:st|nd|rd|th)?|" + Object.keys(words).join("|") + "|[ivxlcdm]+)";
+    const ordinal = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|[ivxlcdm]+)";
+    const number = (token) => {
+      const raw = String(token || "").replace(/^(\d+)(?:st|nd|rd|th)$/, "$1");
+      if (/^\d+$/.test(raw)) return Number(raw);
+      if (words[raw]) return words[raw];
+      if (/^(?=.+)(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$/.test(raw)) {
+        const values = { i: 1, v: 5, x: 10, l: 50, c: 100 };
+        return [...raw].reduce((total, char, index) => total + (values[char] < (values[raw[index + 1]] || 0) ? -values[char] : values[char]), 0);
+      }
+      return parseChineseTitleNumber(raw);
+    };
+    const separator = "(?:[-~～–—/、,+&]|至|到|和|与|及|\\bto\\b|\\band\\b)";
+    const rangePatterns = [
+      "(?:全|共)\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)",
+      "(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*(?:" + separator + "\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*)+(?:季|期)",
+      "\\b(?:seasons?|s)\\s*" + en + "\\s*(?:" + separator + "\\s*(?:(?:seasons?|s)\\s*)?" + en + "\\b)",
+      "\\b" + ordinal + "\\s*(?:" + separator + "\\s*" + ordinal + "\\s*)+seasons?\\b",
+      "\\b(?:all|complete)\\s+" + en + "\\s+seasons?\\b",
+    ];
+    if (rangePatterns.some((pattern) => new RegExp(pattern, "iu").test(text))) return 0;
+    const patterns = [
+      new RegExp("第\\s*(" + cn + ")\\s*(?:季|期|シーズン)", "gu"),
+      new RegExp("(?:^|[^\\p{L}\\p{N}])(" + cn + ")\\s*(?:季|期)(?=$|[\\s\\p{P}\\p{S}])", "gu"),
+      /(?<!\d)(\d{1,2})\s*(?:季|期)(?=$|[\s\p{P}\p{S}])/gu,
+      new RegExp("(?<![a-z0-9])(" + ordinal + ")\\s*(?:season\\b|シーズン)", "gu"),
+      new RegExp("(?<![a-z0-9])(?:season|シーズン)\\s*[:._-]?\\s*(" + en + ")(?=$|[^a-z0-9])", "gu"),
+      /(?<![a-z0-9])s\s*[:._-]?\s*(\d{1,2})(?=$|[^a-z0-9]|e(?:p(?:isode)?)?\.?\s*\d)/gu,
+    ];
+    const seasons = [...new Set(patterns.flatMap((pattern, index) => Array.from(text.matchAll(pattern))
+      .filter((match) => index !== 3 || !/(?<![a-z0-9])(?:part|cour|season|s|シーズン)\s*[:._-]?\s*$/iu.test(text.slice(0, match.index)))
+      .map((match) => number(match[1]))).filter((season) => season > 0 && season < 100))];
+    if (seasons.length) return seasons.length === 1 ? seasons[0] : 0;
+    // Keep legacy part/cour evidence for title-binding isolation, but a real
+    // season marker above always takes precedence over these subdivisions.
+    const subdivision = text.match(new RegExp("(?<![a-z0-9])(?:part|cour)\\s*(" + en + ")(?=$|[^a-z0-9])", "u"))
+      || text.match(new RegExp("(?<![a-z0-9])(" + en + ")\\s*(?:part|cour)\\b", "u"))
+      || text.match(new RegExp("第\\s*(" + cn + ")\\s*部", "u"));
+    return subdivision ? number(subdivision[1]) : 0;
   }
 
   function parseChineseTitleNumber(value) {
@@ -11290,11 +11699,16 @@
   }
 
   function isSeasonMarker(value) {
-    const text = String(value || "").trim();
+    const text = String(value || "").normalize("NFKC").trim().toLowerCase();
+    const word = "(?:one|first|two|second|three|third|four|fourth|five|fifth|six|sixth|seven|seventh|eight|eighth|nine|ninth|ten|tenth|eleven|eleventh|twelve|twelfth)";
+    const roman = "(?=[ivxlc])(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})";
+    const englishNumber = "(?:\\d{1,3}(?:st|nd|rd|th)?|" + word + "|" + roman + ")";
     return /^(\d{1,2})\s*月\s*(?:新番)?$/i.test(text)
-      || /^第\s*[一二两兩三四五六七八九十\d]{1,3}\s*(?:季|期|部)$/i.test(text)
+      || /^第\s*[一二两兩三四五六七八九十\d]{1,3}\s*(?:季|期|部|シーズン)$/i.test(text)
       || /^\d{1,3}(?:st|nd|rd|th)\s*(?:season|part|cour)$/i.test(text)
-      || /^(?:season|s|part|cour)\s*0*\d{1,3}$/i.test(text);
+      || /^(?:season|s|part|cour)\s*0*\d{1,3}$/i.test(text)
+      || new RegExp("^(?:season|シーズン|part|cour)\\s*[:._-]?\\s*" + englishNumber + "$", "u").test(text)
+      || new RegExp("^" + englishNumber + "\\s*(?:season|シーズン|part|cour)$", "u").test(text);
   }
 
   function isEpisodeMarkerToken(value) {
@@ -11380,19 +11794,46 @@
   }
 
   function getCurrentSeasonSearchKeyword() {
+    const words = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8, nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12, twelfth: 12 };
+    const cn = "(?:\\d{1,2}|[零〇一二两兩三四五六七八九十]{1,3})";
+    const en = "(?:\\d{1,2}(?:st|nd|rd|th)?|" + Object.keys(words).join("|") + "|[ivxlcdm]+)";
+    const ordinal = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|[ivxlcdm]+)";
+    const separator = "(?:[-~～–—/、,+&]|至|到|和|与|及|\\bto\\b|\\band\\b)";
+    const rangePatterns = [
+      "(?:全|共)\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)",
+      "(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*(?:" + separator + "\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*)+(?:季|期)",
+      "\\b(?:seasons?|s)\\s*" + en + "\\s*(?:" + separator + "\\s*(?:(?:seasons?|s)\\s*)?" + en + "\\b)",
+      "\\b" + ordinal + "\\s*(?:" + separator + "\\s*" + ordinal + "\\s*)+seasons?\\b",
+      "\\b(?:all|complete)\\s+" + en + "\\s+seasons?\\b",
+    ];
+    const patterns = [
+      new RegExp("第\\s*(" + cn + ")\\s*(?:季|期|シーズン)", "gu"),
+      new RegExp("(?:^|[^\\p{L}\\p{N}])(" + cn + ")\\s*(?:季|期)(?=$|[\\s\\p{P}\\p{S}])", "gu"),
+      /(?<!\d)(\d{1,2})\s*(?:季|期)(?=$|[\s\p{P}\p{S}])/gu,
+      new RegExp("(?<![a-z0-9])(" + ordinal + ")\\s*(?:season\\b|シーズン)", "gu"),
+      new RegExp("(?<![a-z0-9])(?:season|シーズン)\\s*[:._-]?\\s*(" + en + ")(?=$|[^a-z0-9])", "gu"),
+      /(?<![a-z0-9])s\s*[:._-]?\s*(\d{1,2})(?=$|[^a-z0-9]|e(?:p(?:isode)?)?\.?\s*\d)/gu,
+    ];
     const collectionContext = getCurrentCollectionPartContext();
     const partContext = collectionContext || getCurrentVideoPartContext();
-    const seasonNo = Number(partContext && partContext.seasonNo);
+    const partTitle = String(partContext && partContext.title || "").normalize("NFKC").toLowerCase();
+    const explicitPartSeason = patterns.some((pattern, index) => Array.from(partTitle.matchAll(pattern)).some((match) => index !== 3 || !/(?<![a-z0-9])(?:part|cour|season|s|シーズン)\s*[:._-]?\s*$/iu.test(partTitle.slice(0, match.index))))
+      ? getTitleSeasonNumber(partTitle) : 0;
+    const seasonNo = Number(partContext && partContext.seasonNo) || explicitPartSeason;
     if (!Number.isInteger(seasonNo) || seasonNo <= 0) return "";
-    const rawTitle = String(state.rawTitle || getPageTitle() || "");
-    const withoutSeasonRange = rawTitle
-      .replace(/(?:第\s*)?[一二两兩三四五六七八九十百\d]{1,4}\s*[-~～–—至到]\s*[一二两兩三四五六七八九十百\d]{1,4}\s*季/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const baseTitle = cleanTitle(withoutSeasonRange);
+    let sourceTitle = String(state.rawTitle || getPageTitle() || "").normalize("NFKC");
+    for (const pattern of rangePatterns) sourceTitle = sourceTitle.replace(new RegExp(pattern, "giu"), " ");
+    for (const [index, pattern] of patterns.entries()) {
+      sourceTitle = sourceTitle.replace(new RegExp(pattern.source, "giu"), (match, token, offset, title) =>
+        index === 3 && /(?<![a-z0-9])(?:part|cour|season|s|シーズン)\s*[:._-]?\s*$/iu.test(title.slice(0, offset)) ? match : " ");
+    }
+    let baseTitle = cleanTitle(sourceTitle.replace(/\s+/g, " ").trim());
+    const numericWorkTitle = sourceTitle.match(/^\s*[【\[「『《]?\s*(\d+\s*\/\s*\d+)\s*[】\]」』》]?\s*$/);
+    if (numericWorkTitle) baseTitle = numericWorkTitle[1].replace(/\s+/g, "");
     if (!baseTitle) return "";
-    if (getTitleSeasonNumber(baseTitle) === seasonNo) return baseTitle;
-    return seasonNo === 1 ? baseTitle : `${baseTitle} 第${seasonNo}季`;
+    // Use the active, qualified part's season after removing collection-wide
+    // season ranges/counts and stale individual season labels from its title.
+    return seasonNo === 1 ? baseTitle : baseTitle + " 第" + seasonNo + "季";
   }
 
   function detectEpisodeNo(text, options = {}) {
@@ -11578,6 +12019,50 @@
     return true;
   }
 
+  function validateCollectionRangeBindingWrite(mappings, proposal, bindings = {}) {
+    const rule = proposal && proposal.rule;
+    const context = proposal && proposal.context || {};
+    const bvid = String(rule && rule.bvid || context.bvid || "").toUpperCase();
+    if (!rule || !/^BV[\w]+$/i.test(bvid)
+      || !Number.isInteger(Number(rule.sourceStart)) || Number(rule.sourceStart) < 0
+      || !Number.isInteger(Number(rule.sourceEnd)) || Number(rule.sourceEnd) < Number(rule.sourceStart)
+      || !Number.isInteger(Number(rule.subjectId)) || Number(rule.subjectId) <= 0) {
+      throw new Error("合集映射范围无效，请重新选择首集");
+    }
+    const existing = mappings && Array.isArray(mappings[bvid]) ? mappings[bvid] : [];
+    const replaced = proposal.replacesRule || null;
+    const replacementFields = ["id", "seasonKey", "sourceStart", "sourceEnd", "targetStart", "subjectId", "targetEpisodeZero", "segmentCount", "autoProgress"];
+    const sameRule = (left, right) => replacementFields.every((key) => {
+      if (key === "id" || key === "seasonKey") return String(left[key] || "") === String(right[key] || "");
+      if (key === "targetEpisodeZero") return (left[key] === true) === (right[key] === true);
+      if (key === "autoProgress") return (left[key] !== false) === (right[key] !== false);
+      return left[key] == null || right[key] == null ? left[key] == null && right[key] == null : Number(left[key]) === Number(right[key]);
+    });
+    if (replaced && !existing.some((item) => sameRule(item, replaced))) {
+      throw new Error("已有合集映射已被修改或删除，请重新确认范围");
+    }
+    for (const item of existing) {
+      const overlaps = item.seasonKey === rule.seasonKey
+        && Number(item.sourceStart) <= Number(rule.sourceEnd)
+        && Number(item.sourceEnd) >= Number(rule.sourceStart);
+      if (!overlaps && String(item.id || "") !== String(rule.id || "")) continue;
+      if (replaced && sameRule(item, replaced)) continue;
+      throw new Error("该范围已有其他合集映射，请重新选择首集或先解除冲突绑定");
+    }
+    const rows = Array.isArray(context.sourceEpisodes) ? context.sourceEpisodes : [];
+    for (const row of rows) {
+      const episodeNo = Number(row && row.episodeNo);
+      const partNo = Number(row && row.partNo);
+      if (!Number.isInteger(episodeNo) || episodeNo < Number(rule.sourceStart) || episodeNo > Number(rule.sourceEnd)
+        || !Number.isInteger(partNo) || partNo <= 0) continue;
+      const isolatedSubjectId = Number(bindings && bindings[`bili:${bvid}:p${partNo}`]);
+      if (isolatedSubjectId && isolatedSubjectId !== Number(rule.subjectId)) {
+        throw new Error(`P${partNo} 已单独绑定其他 Bangumi 条目，请先解除该分P绑定`);
+      }
+    }
+    return true;
+  }
+
   function normalizeCollectionMappings(value) {
     const source = value && typeof value === "object" && !Array.isArray(value) ? value : {};
     const result = {};
@@ -11638,80 +12123,145 @@
   }
 
   function parseCollectionPartTitle(value) {
-    const text = stripTrailingDurationText(String(value || "").replace(/\s+/g, " ").trim())
-      .replace(/[【】\[\]]/g, " ")
+    const raw = String(value || "");
+    const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
+    const text = stripTrailingDurationText(normalized.replace(/\s+/g, " ").trim())
+      .replace(/[‐‑‒–—−]/g, "-")
+      .replace(/[【】\[\]()「」『』《》〈〉]/g, " ")
       .replace(/\s+/g, " ")
       .trim();
-    if (!text) return null;
+    if (!text || isNonMainEpisodeTitle(text)) return null;
 
-    // Hierarchical split labels (season.episode.fragment) are accepted only
-    // after list-level validation in getQualifiedCollectionPartRows.
-    const hierarchicalMatch = text.match(/^0*(\d{1,2})\s*[.．]\s*0*(\d{1,3})\s*[.．]\s*0*([1-8])(?:\s+.+)?$/);
-    if (hierarchicalMatch) {
-      const seasonNo = Number(hierarchicalMatch[1]);
-      const episodeNo = Number(hierarchicalMatch[2]);
-      const fragmentIndex = Number(hierarchicalMatch[3]);
-      if (seasonNo > 0 && episodeNo >= 0 && fragmentIndex > 0 && fragmentIndex <= MAX_COLLECTION_SEGMENTS) {
-        return {
-          seasonKey: `season:${seasonNo}`,
-          seasonNo,
-          episodeNo,
-          fragmentIndex,
-          fragmentCount: Math.max(2, fragmentIndex),
-          hierarchical: true,
-          label: text,
-        };
-      }
-    }
-
-    // Allow optional free-text after the episode token (e.g. "1.1 相遇", "第二季1 开端").
-    const seasonPatterns = [
-      /^(?:第\s*)?([一二两兩三四五六七八九十百\d]{1,4})\s*季\s*(?:第\s*)?0*(\d{1,3})(?:\s*[话話集])?(?:\s*[-_.．]?\s*(上|下|前|后|後|A|B|1|2))?(?:\s+.+)?$/i,
-      /^(?:S|SEASON)\s*0*(\d{1,2})\s*(?:E|EP)?\.?\s*0*(\d{1,3})(?:\s*[-_.．]?\s*(A|B|上|下|1|2))?(?:\s+.+)?$/i,
-    ];
-    for (const [index, pattern] of seasonPatterns.entries()) {
-      const match = text.match(pattern);
-      if (!match) continue;
-      const seasonNo = index === 0 ? parseChineseNumber(match[1]) : Number(match[1]);
-      const episodeNo = Number(match[2]);
-      const fragment = parseCollectionFragment(match[3]);
-      if (!Number.isFinite(seasonNo) || seasonNo <= 0 || !Number.isFinite(episodeNo) || episodeNo < 0) return null;
-      return {
-        seasonKey: `season:${seasonNo}`,
+    const makeResult = (seasonNo, episodeNo, fragmentIndex = null, hierarchical = false) => {
+      if (seasonNo != null && (!Number.isInteger(seasonNo) || seasonNo <= 0 || seasonNo > 99)) return null;
+      if (!Number.isInteger(episodeNo) || episodeNo < 0 || episodeNo > 999) return null;
+      if (fragmentIndex != null && (!Number.isInteger(fragmentIndex) || fragmentIndex < 1 || fragmentIndex > MAX_COLLECTION_SEGMENTS)) return null;
+      const result = {
+        seasonKey: seasonNo == null ? "default" : "season:" + seasonNo,
         seasonNo,
         episodeNo,
-        fragmentIndex: fragment.index,
-        fragmentCount: fragment.count,
-        label: text,
+        fragmentIndex: fragmentIndex == null ? 1 : fragmentIndex,
+        fragmentCount: fragmentIndex == null ? 1 : Math.max(2, fragmentIndex),
       };
+      if (hierarchical) result.hierarchical = true;
+      result.label = text;
+      return result;
+    };
+    const hasDescriptionBoundary = (tail) => !tail || /^(?:\s+|[:：]\s*)\S/.test(tail);
+    const parseEpisodeTail = (tail) => {
+      const match = String(tail || "").match(/^(?:(?:EPISODE|EP|E)\s*|第\s*)?([\d零〇一二两兩三四五六七八九十百]+)(?:\s*[话話集])?(.*)$/i);
+      if (!match) return null;
+      const episodeNo = parseChineseNumber(match[1]);
+      const rest = match[2];
+      if (/^\s*(?:(?:EPISODE|EP|E)\s*[\d零〇一二两兩三四五六七八九十百]|第\s*[\d零〇一二两兩三四五六七八九十百]+\s*[话話集])/i.test(rest)) return null;
+      // A numeric hyphen after an episode denotes a range, not its second fragment.
+      if (/^\s*[-~～至到/]\s*(?:(?:EPISODE|EP|E|第)\s*)?[\d零〇一二两兩三四五六七八九十百]/i.test(rest)) return null;
+      if (/^\s*[-_.]?\s*(?:上\s*中\s*下|(?:上|前)(?:篇|半段|半|部分)?\s*(?:[/、&+和及-]\s*|\s+)(?:中|下|后|後))/.test(rest)) return null;
+      const fragment = rest.match(/^\s*(?:[._]\s*0*([1-8])|[-_.]?\s*((?:上|下|前|后|後)(?:半(?:部分|段|部|集)?|篇|部分|部)?|A|B)|[-_.]?\s*(?:(?:第\s*)?([\d零〇一二两兩三四五六七八九十百]+)\s*(?:段|部分)|(?:PART|PT\.?)\s*0*(\d+)))(.*)$/i);
+      if (fragment && hasDescriptionBoundary(fragment[5])) {
+        const fragmentIndex = fragment[1] ? Number(fragment[1]) : fragment[4] ? Number(fragment[4])
+          : fragment[3] ? parseChineseNumber(fragment[3]) : parseCollectionFragment(fragment[2].charAt(0)).index;
+        return { episodeNo, fragmentIndex };
+      }
+      // Explicit but invalid/ambiguous fragment labels must not become free-text
+      // descriptions, which would incorrectly turn a partial upload into a full episode.
+      if (/^\s*(?:[._]\s*\d|[-_.]?\s*(?:(?:PART|PT\.?)(?:\s|[\d.]|$)|(?:第\s*)?[\d零〇一二两兩三四五六七八九十百]+\s*(?:段|部分)|[上中下前后後](?:半|篇|段|部分|部|中|下|$|\s)))/i.test(rest)) return null;
+      return hasDescriptionBoundary(rest) ? { episodeNo, fragmentIndex: null } : null;
+    };
+    const romanNumber = (value) => {
+      const token = String(value || "").toUpperCase();
+      const digits = { I: 1, V: 5, X: 10, L: 50, C: 100 };
+      if (!/^[IVXLC]+$/.test(token)) return NaN;
+      let total = 0;
+      for (let index = 0; index < token.length; index += 1) {
+        const current = digits[token[index]];
+        total += current < (digits[token[index + 1]] || 0) ? -current : current;
+      }
+      let remaining = total;
+      let canonical = "";
+      for (const [amount, symbol] of [[90, "XC"], [50, "L"], [40, "XL"], [10, "X"], [9, "IX"], [5, "V"], [4, "IV"], [1, "I"]]) {
+        while (remaining >= amount) {
+          canonical += symbol;
+          remaining -= amount;
+        }
+      }
+      return total > 0 && total <= 99 && canonical === token ? total : NaN;
+    };
+
+    const seasonWords = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8, nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12, twelfth: 12 };
+    const wordPattern = Object.keys(seasonWords).join("|");
+    const ordinalWords = "first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth";
+    const chineseSeasonNumber = "[\\d零〇一二两兩三四五六七八九十百]+";
+    const englishSeasonNumber = "(?:\\d{1,2}(?:st|nd|rd|th)?|" + wordPattern + "|[IVXLCDM]+)";
+    const englishSeasonOrdinal = "(?:\\d{1,2}(?:st|nd|rd|th)|" + ordinalWords + "|[IVXLCDM]+)";
+    const rangeSeparator = "(?:[-~～/、,+&]|至|到|和|与|及|\\bto\\b|\\band\\b)";
+    const multiSeasonPatterns = [
+      "(?:全|共)\\s*(?:第\\s*)?" + chineseSeasonNumber + "\\s*(?:季|期|シーズン)",
+      "(?:第\\s*)?" + chineseSeasonNumber + "\\s*(?:季|期)?\\s*(?:" + rangeSeparator + "\\s*(?:第\\s*)?" + chineseSeasonNumber + "\\s*(?:季|期)?\\s*)+(?:季|期)",
+      "(?<![a-z0-9])seasons?\\s*[:._]?\\s*" + englishSeasonNumber + "\\s*" + rangeSeparator + "\\s*(?:seasons?\\s*)?" + englishSeasonNumber + "(?![a-z0-9])",
+      "(?<![a-z0-9])" + englishSeasonOrdinal + "\\s*" + rangeSeparator + "\\s*" + englishSeasonOrdinal + "\\s+seasons?\\b",
+      "\\b(?:all|complete)\\s+" + englishSeasonNumber + "\\s+seasons?\\b",
+    ];
+    if (multiSeasonPatterns.some((pattern) => new RegExp(pattern, "i").test(text))) return null;
+
+    // Explicit season markers must end before the episode token: S412 is never
+    // split into season 41 / episode 2. Part/cour and 上下篇 are not season markers.
+    const seasonMatches = [];
+    const wordNumber = (token) => seasonWords[String(token || "").toLowerCase()];
+    const markerPatterns = [
+      { pattern: /(?:第\s*)?([\d零〇一二两兩三四五六七八九十百]+)\s*(?:季|期|シーズン)/g, parse: parseChineseNumber },
+      { pattern: /(?<![a-z0-9])(?:SEASON|シーズン|S)\s*[:._-]?\s*0*(\d{1,2})(?!\d)/gi, parse: Number },
+      { pattern: /(?<![a-z0-9])(\d{1,2})(?:st|nd|rd|th)\s+(?:SEASON\b|シーズン)/gi, parse: Number, reverse: true },
+      { pattern: /(?<![a-z0-9])(?:SEASON|シーズン)\s*[:._-]?\s*([IVXLCDM]+)(?![a-z])/gi, parse: romanNumber },
+      { pattern: /(?<![a-z0-9])([IVXLCDM]+)\s+(?:SEASON\b|シーズン)/gi, parse: romanNumber, reverse: true },
+      { pattern: /(?:第\s*)?([IVXLCDM]+)\s*[季期]/gi, parse: romanNumber },
+      { pattern: new RegExp("(?<![a-z0-9])(" + ordinalWords + ")\\s+(?:SEASON\\b|シーズン)", "gi"), parse: wordNumber, reverse: true },
+      { pattern: new RegExp("(?<![a-z0-9])(?:SEASON|シーズン)\\s*[:._-]?\\s*(" + wordPattern + ")(?![a-z])", "gi"), parse: wordNumber },
+    ];
+    for (const entry of markerPatterns) {
+      for (const match of text.matchAll(entry.pattern)) {
+        if (entry.reverse && /(?<![a-z0-9])(?:part|cour|season|s|シーズン)\s*[:._-]?\s*$/iu.test(text.slice(0, match.index))) continue;
+        seasonMatches.push({ seasonNo: entry.parse(match[1]), start: match.index, end: match.index + match[0].length });
+      }
+    }
+    // Numeric season notation cannot override a contradictory season marker or
+    // a second episode label elsewhere in the same title.
+    const matchesNumericSeason = (seasonNo, prefix) => seasonMatches.every((marker) => (
+      marker.seasonNo === seasonNo && marker.end <= prefix.length
+      && /^[\s:._-]*$/.test(prefix.slice(marker.end))
+    ));
+
+    // A numeric season.episode.fragment label still needs list-level validation.
+    // A clearly separated work title is allowed; version labels cannot qualify.
+    const hierarchicalMatch = text.match(/^(?:(.+?)(?:\s+|[:：]\s*))?0*(\d{1,2})\s*\.\s*0*(\d{1,3})\s*\.\s*0*([1-8])((?:\s+|[:：]\s*).+)?$/);
+    if (hierarchicalMatch) {
+      const prefix = hierarchicalMatch[1] || "";
+      if (/(?:^|\s)(?:v(?:er(?:sion)?)?\.?\s*\d*|version|date)(?:\s|$)|版本|日期|分辨率/i.test(prefix)) return null;
+      if (!matchesNumericSeason(Number(hierarchicalMatch[2]), prefix)) return null;
+      return makeResult(Number(hierarchicalMatch[2]), Number(hierarchicalMatch[3]), Number(hierarchicalMatch[4]), true);
     }
 
-    const decimalMatch = text.match(new RegExp(`^0*(\\d{1,3})\\s*[.．]\\s*([1-${MAX_COLLECTION_SEGMENTS}])(?:\\s+.+)?$`));
-    if (decimalMatch) {
-      const fragmentIndex = Number(decimalMatch[2]);
-      return {
-        seasonKey: "default",
-        seasonNo: null,
-        episodeNo: Number(decimalMatch[1]),
-        fragmentIndex,
-        fragmentCount: Math.max(2, fragmentIndex),
-        label: text,
-      };
+    // The widely used season x episode notation has an explicit separator,
+    // unlike a bare two-number dotted label, whose meaning stays episode.fragment.
+    const crossMatch = text.match(/^(?:(.+?)(?:\s+|[:：]\s*))?0*(\d{1,2})\s*[x×]\s*([\d零〇一二两兩三四五六七八九十百]+(?:\s*[话話集])?.*)$/i);
+    if (crossMatch) {
+      if (/版本|日期|分辨率|(?:^|\s)(?:version|resolution|date|v\d*)(?:\s|$)/i.test(crossMatch[1] || "")) return null;
+      if (!matchesNumericSeason(Number(crossMatch[2]), crossMatch[1] || "")) return null;
+      const episode = parseEpisodeTail(crossMatch[3]);
+      return episode ? makeResult(Number(crossMatch[2]), episode.episodeNo, episode.fragmentIndex) : null;
     }
 
-    const splitMatch = text.match(/^(?:(?:E|EP)\s*)?(?:第\s*)?0*(\d{1,3})\s*(?:[话話集])?\s*[-_.．]?\s*(上|下|前|后|後|A|B)(?:\s+.+)?$/i);
-    if (splitMatch) {
-      const fragment = parseCollectionFragment(splitMatch[2]);
-      return {
-        seasonKey: "default",
-        seasonNo: null,
-        episodeNo: Number(splitMatch[1]),
-        fragmentIndex: fragment.index,
-        fragmentCount: fragment.count,
-        label: text,
-      };
+    if (seasonMatches.length) {
+      seasonMatches.sort((left, right) => left.start - right.start);
+      const marker = seasonMatches[seasonMatches.length - 1];
+      if (seasonMatches.some((item) => item.seasonNo !== marker.seasonNo)) return null;
+      const tail = text.slice(marker.end).replace(/^[\s:._-]+/, "");
+      const episode = parseEpisodeTail(tail);
+      return episode ? makeResult(marker.seasonNo, episode.episodeNo, episode.fragmentIndex) : null;
     }
-    return null;
+
+    const episode = parseEpisodeTail(text);
+    return episode && episode.fragmentIndex != null ? makeResult(null, episode.episodeNo, episode.fragmentIndex) : null;
   }
 
   function parseBareCollectionEpisodeTitle(value) {
@@ -11824,8 +12374,12 @@
     });
     finishRun();
     const hierarchicalGroups = new Map();
+    const hierarchicalSeasons = new Set(rows.filter((row) => row.parsed && row.parsed.hierarchical)
+      .map((row) => row.parsed.seasonKey));
     rows.forEach((row) => {
-      if (!row.parsed || !row.parsed.hierarchical) return;
+      // Explicit S4E12-style rows can establish continuity for 4.12.1 rows
+      // in the same season when an uploader mixes equivalent notations.
+      if (!row.parsed || !hierarchicalSeasons.has(row.parsed.seasonKey)) return;
       const key = row.parsed.seasonKey;
       if (!hierarchicalGroups.has(key)) hierarchicalGroups.set(key, []);
       hierarchicalGroups.get(key).push(row);
@@ -11873,7 +12427,7 @@
       row.parsed
       && !row.bareNumeric
       && !row.parsed.hierarchical
-      && /^0*\d{1,3}\s*[.．]\s*[1-8](?:\s|$)/.test(String(row.title || ""))
+      && /^(?:(?:EPISODE|EP|E)\s*|第\s*)?[\d零〇一二两兩三四五六七八九十百]+\s*[.．]\s*0*[1-8](?:\s|[:：]|$)/i.test(String(row.parsed.label || row.title || ""))
     ));
     const decimalFragmentsByEpisode = new Map();
     decimalRows.forEach((row) => {
@@ -11910,9 +12464,13 @@
     if (!part || part.partCount <= 1) return null;
     const rows = getCollectionPartRows(nodes);
     const parsedRows = getQualifiedCollectionPartRows(rows);
-    // Four recognizable parts is conservative enough to avoid treating an ordinary 2–3P upload as a collection.
-    if (parsedRows.length < MIN_COLLECTION_PARSED_PARTS) return null;
     const currentRow = rows.find((row) => row.partNo === part.partNo) || null;
+    // Four recognizable parts is conservative enough to avoid treating an ordinary 2–3P upload as a collection.
+    // A structured collection rejected for missing fragments must remain unmapped,
+    // rather than falling through to the ordinary-video progress path.
+    const rejectedStructuredList = currentRow && currentRow.parsed && !currentRow.bareNumeric
+      && rows.filter((row) => row.parsed && !row.bareNumeric).length >= MIN_COLLECTION_PARSED_PARTS;
+    if (parsedRows.length < MIN_COLLECTION_PARSED_PARTS && !rejectedStructuredList) return null;
     const qualifiedCurrentRow = parsedRows.find((row) => row.partNo === part.partNo) || null;
     const currentLongVideo = currentRow && currentRow.longVideo || parseLongVideoPartTitle(part.title);
     const isLongRange = currentLongVideo
@@ -11940,7 +12498,9 @@
     const groupRows = parsedRows.filter((row) => row.parsed.seasonKey === parsed.seasonKey);
     const logicalEpisodes = Array.from(new Set(groupRows.map((row) => row.parsed.episodeNo))).sort((a, b) => a - b);
     if (logicalEpisodes.length < 2) return null;
-    // Count actual uploaded parts per logical episode (declared "1.1" alone is 1 segment, not 2).
+    // Plain decimal labels may describe a whole episode as "1.1". Explicit season
+    // splits also retain their declared minimum, so a newly uploaded first half
+    // cannot complete the episode before its second half is available.
     const fragmentsByEpisode = new Map();
     groupRows.forEach((row) => {
       const key = row.parsed.episodeNo;
@@ -11948,17 +12508,42 @@
       fragmentsByEpisode.get(key).add(Math.max(1, Number(row.parsed.fragmentIndex) || 1));
     });
     const actualFragments = fragmentsByEpisode.get(parsed.episodeNo);
+    const currentEpisodeRows = groupRows.filter((row) => row.parsed.episodeNo === parsed.episodeNo);
+    const fragmentSequenceValid = currentEpisodeRows.every((row, index) => (
+      Number(row.parsed.fragmentIndex || 1) === index + 1
+      && (!index || row.partNo === currentEpisodeRows[index - 1].partNo + 1)
+    ));
+    const groupEnd = logicalEpisodes[logicalEpisodes.length - 1];
+    const knownFragmentCount = groupRows.reduce((count, row) => Math.max(count, Number(row.parsed.fragmentCount) || 1), 1);
+    // A tail episode is still being uploaded. Do not lower an established split
+    // count until a following episode establishes its end; explicit whole episodes
+    // (without a fragment suffix) are unaffected.
+    const fragmentMinimum = (row) => row.parsed.seasonKey !== "default"
+      && row.parsed.episodeNo === groupEnd && Number(row.parsed.fragmentCount) > 1
+      ? Math.max(knownFragmentCount, Number(row.parsed.fragmentCount)) : Number(row.parsed.fragmentCount) || 1;
+    const declaredFragments = parsed.seasonKey === "default" ? 1 : groupRows
+      .filter((row) => row.parsed.episodeNo === parsed.episodeNo)
+      .reduce((count, row) => Math.max(count, fragmentMinimum(row)), 1);
     const hasSplitEpisodes = Array.from(fragmentsByEpisode.values()).some((fragments) => fragments.size > 1);
     return {
       ...part,
       ...parsed,
       title: layout.currentRow && layout.currentRow.title || part.title,
       groupStart: logicalEpisodes[0],
-      groupEnd: logicalEpisodes[logicalEpisodes.length - 1],
+      groupEnd,
       groupLogicalEpisodeCount: logicalEpisodes.length,
+      collectionTitle: getPageTitle(),
+      sourceEpisodes: groupRows.map((row) => ({
+        episodeNo: row.parsed.episodeNo,
+        fragmentIndex: row.parsed.fragmentIndex || 1,
+        fragmentCount: fragmentMinimum(row),
+        partNo: row.partNo,
+        title: row.title,
+      })),
       parsedPartCount: parsedRows.length,
       hasSplitEpisodes,
-      segmentCount: Math.max(1, actualFragments ? actualFragments.size : 1),
+      fragmentSequenceValid,
+      segmentCount: Math.max(declaredFragments, actualFragments ? actualFragments.size : 1),
     };
   }
 
@@ -12088,69 +12673,353 @@
     return true;
   }
 
-  async function buildCollectionRangeBindingProposal(subjectId) {
+  function getCollectionInferenceSeasonInfo(value) {
+    const text = String(value || "").normalize("NFKC").toLowerCase();
+    const words = { one: 1, first: 1, two: 2, second: 2, three: 3, third: 3, four: 4, fourth: 4, five: 5, fifth: 5, six: 6, sixth: 6, seven: 7, seventh: 7, eight: 8, eighth: 8, nine: 9, ninth: 9, ten: 10, tenth: 10, eleven: 11, eleventh: 11, twelve: 12, twelfth: 12 };
+    const cn = "(?:\\d{1,2}|[零〇一二两兩三四五六七八九十]{1,3})";
+    const en = "(?:\\d{1,2}(?:st|nd|rd|th)?|" + Object.keys(words).join("|") + "|[ivxlcdm]+)";
+    const ordinal = "(?:\\d{1,2}(?:st|nd|rd|th)|first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|[ivxlcdm]+)";
+    const number = (token) => {
+      const raw = String(token || "").replace(/^(\d+)(?:st|nd|rd|th)$/, "$1");
+      if (/^\d+$/.test(raw)) return Number(raw);
+      if (words[raw]) return words[raw];
+      if (/^(?=.+)(?:xc|xl|l?x{0,3})(?:ix|iv|v?i{0,3})$/.test(raw)) {
+        const values = { i: 1, v: 5, x: 10, l: 50, c: 100 };
+        return [...raw].reduce((total, char, index) => total + (values[char] < (values[raw[index + 1]] || 0) ? -values[char] : values[char]), 0);
+      }
+      const digits = { 一: 1, 二: 2, 两: 2, 兩: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+      if (raw === "十") return 10;
+      const parts = raw.split("十");
+      return parts.length === 2 ? (digits[parts[0]] || 1) * 10 + (digits[parts[1]] || 0) : digits[raw] || 0;
+    };
+    const separator = "(?:[-~～–—/、,+&]|至|到|和|与|及|\\bto\\b|\\band\\b)";
+    const rangePatterns = [
+      "(?:全|共)\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)",
+      "(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*(?:" + separator + "\\s*(?:第\\s*)?" + cn + "\\s*(?:季|期)?\\s*)+(?:季|期)",
+      "\\b(?:seasons?|s)\\s*" + en + "\\s*(?:" + separator + "\\s*(?:(?:seasons?|s)\\s*)?" + en + "\\b)",
+      "\\b" + ordinal + "\\s*(?:" + separator + "\\s*" + ordinal + "\\s*)+seasons?\\b",
+      "\\b(?:all|complete)\\s+" + en + "\\s+seasons?\\b",
+    ];
+    if (rangePatterns.some((pattern) => new RegExp(pattern, "iu").test(text))) return null;
+    const patterns = [
+      new RegExp("第\\s*(" + cn + ")\\s*(?:季|期|シーズン)", "gu"),
+      new RegExp("(?:^|[^\\p{L}\\p{N}])(" + cn + ")\\s*(?:季|期)(?=$|[\\s\\p{P}\\p{S}])", "gu"),
+      /(?<!\d)(\d{1,2})\s*(?:季|期)(?=$|[\s\p{P}\p{S}])/gu,
+      new RegExp("(?<![a-z0-9])(" + ordinal + ")\\s*(?:season\\b|シーズン)", "gu"),
+      new RegExp("(?<![a-z0-9])(?:season|シーズン)\\s*[:._-]?\\s*(" + en + ")(?=$|[^a-z0-9])", "gu"),
+      /(?<![a-z0-9])s\s*[:._-]?\s*(\d{1,2})(?=$|[^a-z0-9]|e(?:p(?:isode)?)?\.?\s*\d)/gu,
+    ];
+    const matches = patterns.flatMap((pattern, index) => Array.from(text.matchAll(pattern))
+      .filter((match) => index !== 3 || !/(?<![a-z0-9])(?:part|cour|season|s|シーズン)\s*[:._-]?\s*$/iu.test(text.slice(0, match.index)))
+      .map((match) => ({ seasonNo: number(match[1]), index: match.index, length: match[0].length }))).filter((match) => match.seasonNo > 0 && match.seasonNo < 100);
+    const seasons = [...new Set(matches.map((match) => match.seasonNo))];
+    if (seasons.length !== 1) return null;
+    const first = matches.reduce((earliest, match) => match.index < earliest.index ? match : earliest);
+    const before = text.slice(0, first.index).replace(/[^\p{L}\p{N}]+/gu, "");
+    // A leading "[Season IV]" is metadata too, but a short work prefix must
+    // not be replaced by an episode label or another subdivision after it.
+    const after = text.slice(first.index + first.length).replace(/[^\p{L}\p{N}]+/gu, "");
+    const metadataOnly = /^(?:(?:ep(?:isode)?|e|part|cour|pt)\d+|(?:第)?[\d零〇一二两兩三四五六七八九十百]+(?:集|话|話|章|回|篇|段|部分|部)?|[上中下前后後](?:半)?(?:部分|篇|部|段|集)?)+$/.test(after)
+      || new RegExp("^(?:(?:episode|ep|part|cour)" + en + ")+$", "u").test(after);
+    const base = before.length >= 3 ? before : !before && !metadataOnly ? after : "";
+    return base.length >= 3 ? { seasonNo: seasons[0], base } : null;
+  }
+
+  function getCollectionInferenceSubjectTitles(subject) {
+    const aliases = (Array.isArray(subject && subject.infobox) ? subject.infobox : [])
+      .filter((entry) => entry && entry.key === "别名")
+      .flatMap((entry) => Array.isArray(entry.value) ? entry.value.map((item) => item && item.v) : [entry.value]);
+    return [subject && subject.name, subject && subject.name_cn, ...aliases].filter((title) => typeof title === "string" && title.trim());
+  }
+
+  function getCollectionInferenceSubjectIdentity(subject) {
+    if (!subject || Number(subject.type) !== 2) return null;
+    const titles = getCollectionInferenceSubjectTitles(subject);
+    if (titles.some((title) => /总集|總集|総集|recap|summary|剧场|劇場|movie|特别篇|特別篇|特別編|番外|スピンオフ|spin[\s-]*off/i.test(title))) return null;
+    const identities = titles.map(getCollectionInferenceSeasonInfo).filter(Boolean);
+    const seasons = [...new Set(identities.map((identity) => identity.seasonNo))];
+    if (seasons.length !== 1) return null;
+    return { seasonNo: seasons[0], bases: [...new Set(identities.map((identity) => identity.base))] };
+  }
+
+  function collectionInferenceTitlesMatch(left, right) {
+    return Boolean(left && right && left.seasonNo === right.seasonNo && left.bases.some((base) => right.bases.includes(base)));
+  }
+
+  function collectionInferenceSourceMatches(context, identity) {
+    if (!context || !identity) return false;
+    const seasonNo = Number(context.seasonNo || String(context.seasonKey || "").replace(/^season:/, ""));
+    if (seasonNo !== identity.seasonNo) return false;
+    const title = String(context.collectionTitle || context.videoTitle || "").normalize("NFKC").toLowerCase();
+    const compact = title.replace(/[^\p{L}\p{N}]+/gu, "");
+    return identity.bases.some((base) => {
+      if (base.length >= 5) return compact.includes(base);
+      // Short aliases such as "re0" require a whole token, not an arbitrary substring.
+      return /^[a-z0-9]+$/.test(base) && title.split(/[^\p{L}\p{N}]+/u).includes(base);
+    });
+  }
+
+  function getCollectionInferenceSourceCount(context) {
+    const rows = context && context.sourceEpisodes;
+    if (!Array.isArray(rows) || !rows.length || Number(context.groupStart) !== 1) return 0;
+    let lastPart = 0;
+    let episodeNo = 0;
+    let fragmentIndex = 0;
+    let declaredFragments = 1;
+    let hasSplitEpisodes = false;
+    for (const row of rows) {
+      const partNo = Number(row && row.partNo);
+      const nextEpisode = Number(row && row.episodeNo);
+      const nextFragment = Number(row?.fragmentIndex ?? 1);
+      const declared = Number(row?.fragmentCount ?? 1);
+      if (!row || !Number.isInteger(partNo) || partNo <= lastPart
+        || !Number.isInteger(nextEpisode) || !Number.isInteger(nextFragment)
+        || nextFragment < 1 || nextFragment > 8
+        || !Number.isInteger(declared) || declared < 1 || declared > 8) return 0;
+      if (lastPart && partNo !== lastPart + 1) return 0;
+      if (nextEpisode === episodeNo + 1 && nextFragment === 1) {
+        if (episodeNo && fragmentIndex < declaredFragments) return 0;
+        episodeNo = nextEpisode;
+        fragmentIndex = 1;
+        declaredFragments = declared;
+      } else if (episodeNo > 0 && nextEpisode === episodeNo && nextFragment === fragmentIndex + 1) {
+        fragmentIndex = nextFragment;
+        declaredFragments = Math.max(declaredFragments, declared);
+        hasSplitEpisodes = true;
+      } else {
+        return 0;
+      }
+      lastPart = partNo;
+    }
+    if (fragmentIndex < declaredFragments || (context.hasSplitEpisodes && !hasSplitEpisodes)) return 0;
+    if (Number(context.groupLogicalEpisodeCount) > 0 && Number(context.groupLogicalEpisodeCount) !== episodeNo) return 0;
+    return Number(context.groupEnd) === episodeNo ? episodeNo : 0;
+  }
+
+  function getCollectionInferenceAirDay(value) {
+    const text = String(value || "");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+    const millis = Date.parse(text + "T00:00:00Z");
+    return Number.isFinite(millis) && new Date(millis).toISOString().slice(0, 10) === text ? millis : null;
+  }
+
+  function getCollectionInferenceEpisodeEvidence(subject, response) {
+    const identity = getCollectionInferenceSubjectIdentity(subject);
+    const count = Number(subject && subject.total_episodes);
+    const listedCount = Number(response && response.total);
+    const data = response && response.data;
+    if (!identity || !Number.isInteger(count) || count < 1 || listedCount !== count || !Array.isArray(data) || data.length !== count || data.some((episode) => !episode || typeof episode !== "object")) return null;
+    const eps = Number(subject.eps);
+    if (Number.isFinite(eps) && eps > 0 && eps !== count) return null;
+    const infoboxCount = (Array.isArray(subject.infobox) ? subject.infobox : []).find((entry) => entry && entry.key === "话数");
+    if (infoboxCount && /^\d+$/.test(String(infoboxCount.value)) && Number(infoboxCount.value) !== count) return null;
+    const episodes = [...data].sort((left, right) => Number(left.sort) - Number(right.sort));
+    const ids = new Set();
+    for (let index = 0; index < episodes.length; index += 1) {
+      const episode = episodes[index];
+      const sort = Number(episode && episode.sort);
+      const id = Number(episode && episode.id);
+      const airDay = getCollectionInferenceAirDay(episode && episode.airdate);
+      if (!episode || Number(episode.type) !== 0 || !Number.isInteger(sort) || sort < 1 || !Number.isInteger(id) || id <= 0 || ids.has(id) || airDay == null) return null;
+      if (index > 0 && (sort !== Number(episodes[index - 1].sort) + 1 || airDay < getCollectionInferenceAirDay(episodes[index - 1].airdate))) return null;
+      ids.add(id);
+    }
+    const episodeNumbers = episodes.map((episode) => Number(episode.ep));
+    const hasContinuousEp = episodeNumbers.every((number, index) => Number.isInteger(number) && number > 0 && (index === 0 || number === episodeNumbers[index - 1] + 1));
+    return {
+      subjectId: Number(subject.id),
+      identity,
+      count,
+      episodes,
+      firstSort: Number(episodes[0].sort),
+      lastSort: Number(episodes.at(-1).sort),
+      firstEp: hasContinuousEp ? episodeNumbers[0] : null,
+      lastEp: hasContinuousEp ? episodeNumbers.at(-1) : null,
+    };
+  }
+
+  function inferCollectionRangeBindingStartFromEvidence(context, chain, options = {}) {
+    const sourceCount = getCollectionInferenceSourceCount(context);
+    if (!sourceCount || !Array.isArray(chain) || chain.length < 1 || chain.length > 5) return null;
+    const selectedIndex = options.targetSubjectId == null
+      ? chain.length - 1
+      : chain.findIndex((entry) => entry && entry.subjectId === Number(options.targetSubjectId));
+    const current = chain[selectedIndex];
+    if (!current || !collectionInferenceSourceMatches(context, current.identity)) return null;
+    const seen = new Set();
+    for (let index = 0; index < chain.length; index += 1) {
+      const entry = chain[index];
+      if (!entry || !Number.isInteger(entry.subjectId) || entry.subjectId <= 0 || seen.has(entry.subjectId) || !collectionInferenceTitlesMatch(entry.identity, current.identity)) return null;
+      seen.add(entry.subjectId);
+      if (index > 0) {
+        const previous = chain[index - 1];
+        const orderedSort = entry.firstSort === previous.lastSort + 1;
+        const orderedEp = entry.firstEp != null && previous.lastEp != null && entry.firstEp === previous.lastEp + 1;
+        if ((!orderedSort && !orderedEp) || getCollectionInferenceAirDay(entry.episodes[0].airdate) < getCollectionInferenceAirDay(previous.episodes.at(-1).airdate)) return null;
+      }
+    }
+    const previousCount = chain.slice(0, selectedIndex).reduce((total, entry) => total + entry.count, 0);
+    const sourceStart = previousCount + 1;
+    const expectedEnd = previousCount + current.count;
+    const seasonTotal = chain.reduce((total, entry) => total + entry.count, 0);
+    const currentEpisodeNo = Number(context.episodeNo);
+    if (sourceCount < sourceStart || sourceCount > seasonTotal || !Number.isInteger(currentEpisodeNo)
+      || currentEpisodeNo < sourceStart || currentEpisodeNo > Math.min(sourceCount, expectedEnd)) return null;
+    const now = options.now == null ? new Date() : new Date(options.now);
+    if (!Number.isFinite(now.getTime())) return null;
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    const tomorrow = today + 86400000;
+    const days = chain.flatMap((entry) => entry.episodes.map((episode) => getCollectionInferenceAirDay(episode.airdate)));
+    if (days.some((day) => day == null)) return null;
+    const airedCount = days.filter((day) => day < today).length;
+    const onairCount = days.filter((day) => day >= today && day <= tomorrow).length;
+    const completed = airedCount === seasonTotal;
+    // Today's/tomorrow's green episodes are a release window, not confirmed uploads.
+    // Once the season has ended, a missing upload must use the manual start selector.
+    if (completed ? sourceCount !== seasonTotal : (sourceCount < Math.max(0, airedCount - 1) || sourceCount > airedCount + onairCount)) return null;
+    const broadcastNote = completed
+      ? "全季正片数量与合集一致"
+      : "合集已上传" + sourceCount + "集，已播" + airedCount + "集、今明两天放送窗口" + onairCount + "集（最多允许落后1集）";
+    return {
+      sourceStart,
+      expectedEnd,
+      reason: "已核对同作品第" + current.identity.seasonNo + "季" + (chain.length > 1 ? "前后篇关系" : "正片列表")
+        + "：前篇共" + previousCount + "集，本篇" + current.count + "集，全季共" + seasonTotal
+        + "集；建议从合集第" + sourceStart + "集对应本篇第1集。" + broadcastNote + "。",
+    };
+  }
+
+  async function inferCollectionRangeBindingStart(context, subjectId, options = {}) {
+    const safeSubjectId = Number(subjectId);
+    const isCurrent = typeof options.isCurrent === "function" ? options.isCurrent : () => true;
+    if (!Number.isInteger(safeSubjectId) || safeSubjectId <= 0 || !getCollectionInferenceSourceCount(context) || !isCurrent()) return null;
+    try {
+      const readEvidence = async (id) => {
+        const [subject, episodes] = await Promise.all([
+          bgmRequest("/v0/subjects/" + id),
+          bgmRequestPagedData("/v0/episodes?subject_id=" + id + "&type=0", { pageSize: 200 }),
+        ]);
+        if (!isCurrent() || Number(subject && subject.id) !== id) return null;
+        return getCollectionInferenceEpisodeEvidence(subject, episodes);
+      };
+      const selected = await readEvidence(safeSubjectId);
+      if (!isCurrent() || !selected || !collectionInferenceSourceMatches(context, selected.identity)) return null;
+      const chain = [selected];
+      const seen = new Set([safeSubjectId]);
+      const relationCache = new Map();
+      const readRelations = async (id) => {
+        if (relationCache.has(id)) return relationCache.get(id);
+        const relations = await bgmRequest("/v0/subjects/" + id + "/subjects");
+        if (!isCurrent() || !Array.isArray(relations)) return null;
+        relationCache.set(id, relations);
+        return relations;
+      };
+      const directRelations = (relations, direction) => relations.filter((relation) => (
+        relation && relation.relation === direction && Number(relation.type) === 2
+      ));
+      // Inspect only a single direct path in each direction, with five subjects total.
+      // Distinct season numbers mark a boundary; unknown seasons/branches/cycles do not.
+      for (const direction of ["前传", "续集"]) {
+        for (;;) {
+          const edge = direction === "前传" ? chain[0] : chain.at(-1);
+          const relations = await readRelations(edge.subjectId);
+          if (!isCurrent() || !relations) return null;
+          const related = directRelations(relations, direction);
+          if (!related.length) break;
+          if (related.length !== 1) return null;
+          const relation = related[0];
+          const relationIdentity = getCollectionInferenceSubjectIdentity(relation);
+          if (!relationIdentity) return null;
+          if (relationIdentity.seasonNo !== selected.identity.seasonNo) break;
+          if (!collectionInferenceTitlesMatch(relationIdentity, selected.identity) || chain.length >= 5) return null;
+          const relatedId = Number(relation.id);
+          if (!Number.isInteger(relatedId) || relatedId <= 0 || seen.has(relatedId)) return null;
+          const evidence = await readEvidence(relatedId);
+          if (!isCurrent() || !evidence || !collectionInferenceTitlesMatch(evidence.identity, selected.identity)) return null;
+          seen.add(relatedId);
+          if (direction === "前传") chain.unshift(evidence);
+          else chain.push(evidence);
+        }
+      }
+      // Relations are normally reciprocal. Disagreeing or missing links cannot
+      // establish a complete season, even if one direction looked plausible.
+      for (let index = 1; index < chain.length; index += 1) {
+        const previous = chain[index - 1];
+        const next = chain[index];
+        const forward = directRelations(relationCache.get(previous.subjectId) || [], "续集");
+        const backward = directRelations(relationCache.get(next.subjectId) || [], "前传");
+        if (forward.length !== 1 || backward.length !== 1
+          || Number(forward[0].id) !== next.subjectId || Number(backward[0].id) !== previous.subjectId) return null;
+      }
+      return isCurrent() ? inferCollectionRangeBindingStartFromEvidence(context, chain, { ...options, targetSubjectId: safeSubjectId }) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+
+  async function buildCollectionRangeBindingProposal(subjectId, options = {}) {
+    const isCurrent = typeof options.isCurrent === 'function' ? options.isCurrent : () => true;
     const context = getCurrentCollectionPartContext();
-    if (!context) return null;
+    if (!context || !isCurrent()) return null;
     const existingResolution = getCollectionMappingResolution(context);
     if (existingResolution.ambiguous) throw new Error("当前分P命中多条合集规则，请先删除冲突规则");
     const declaredTotalEpisodes = await getSubjectDeclaredTotalEpisodeCountForMapping(subjectId);
-    if (!isCollectionRangeMappingEligible(context, declaredTotalEpisodes)) return null;
-    // Range mapping is allowed only after Bangumi declares a completed total. The
-    // type=0 list below verifies that the corresponding episode records are available.
+    if (!isCurrent()) return null;
+    if (!isCollectionRangeMappingEligible(context, declaredTotalEpisodes)
+      && !(declaredTotalEpisodes > 0 && context.seasonKey !== 'default')) return null;
     const inspectEpisodeZero = context.groupStart === 0
       || Number(existingResolution.rule && existingResolution.rule.sourceStart) === 0;
     const episodeInfo = await getSubjectMainEpisodeInfoForMapping(subjectId, inspectEpisodeZero);
+    if (!isCurrent()) return null;
     const availableEpisodeCount = Number(episodeInfo && episodeInfo.episodeCount);
     const episodeCount = Number(declaredTotalEpisodes);
     if (!Number.isFinite(availableEpisodeCount) || availableEpisodeCount < episodeCount) {
       throw new Error("无法读取该 Bangumi 条目的正片话数，未创建合集映射");
     }
-    // If the current episode already sits inside a rule, replace that whole range
-    // instead of starting mid-range and orphaning earlier source episodes.
     const coveringRule = existingResolution.rule || null;
     const siblingRules = getCollectionMappingRules(context.bvid)
       .filter((rule) => rule.seasonKey === context.seasonKey)
       .filter((rule) => !coveringRule || rule.id !== coveringRule.id)
       .sort((left, right) => left.sourceStart - right.sourceStart);
-    let sourceStart;
-    if (coveringRule) {
-      sourceStart = coveringRule.sourceStart;
-    } else {
-      const priorForStart = siblingRules.filter((rule) => rule.sourceEnd < context.episodeNo).at(-1) || null;
-      sourceStart = priorForStart && context.episodeNo <= priorForStart.sourceEnd + 1
-        ? priorForStart.sourceEnd + 1
-        : (context.episodeNo === context.groupStart ? context.groupStart : context.episodeNo);
+    const priorForStart = siblingRules.filter((rule) => rule.sourceEnd < context.episodeNo).at(-1) || null;
+    const adjacentPrior = priorForStart && context.episodeNo <= priorForStart.sourceEnd + 1;
+    let suggestion = null;
+    if (!coveringRule) {
+      suggestion = await inferCollectionRangeBindingStart(context, subjectId, { isCurrent });
+      if (!isCurrent()) return null;
     }
+    const sourceStart = coveringRule ? coveringRule.sourceStart
+      : suggestion ? suggestion.sourceStart
+        : adjacentPrior ? priorForStart.sourceEnd + 1 : context.episodeNo;
     const priorRule = siblingRules.filter((rule) => rule.sourceEnd < sourceStart).at(-1) || null;
-    const nextRule = siblingRules.find((rule) => rule.sourceStart > sourceStart) || null;
-    const continuesPriorSubject = Boolean(
-      priorRule
-      && priorRule.sourceEnd + 1 === sourceStart
-      && Number(priorRule.subjectId) === Number(subjectId)
-      && priorRule.targetStart != null
-    );
-    const targetStart = continuesPriorSubject
-      ? Number(priorRule.targetStart) + sourceStart - Number(priorRule.sourceStart)
-      : 1;
-    const targetEpisodeZero = continuesPriorSubject
-      ? priorRule.targetEpisodeZero === true
-      : episodeInfo.hasEpisodeZero === true;
-    const remainingEpisodeCount = episodeCount - targetStart + 1;
-    if (remainingEpisodeCount <= 0) throw new Error("该 Bangumi 条目的正片范围已经映射完成");
-    let sourceEnd = Math.min(context.groupEnd, sourceStart + remainingEpisodeCount - 1);
-    if (nextRule) sourceEnd = Math.min(sourceEnd, nextRule.sourceStart - 1);
-    if (sourceEnd < sourceStart) throw new Error("自动建议的合集范围与已有规则冲突");
-    return {
+    const continuesPriorSubject = Boolean(priorRule && priorRule.sourceEnd + 1 === sourceStart
+      && Number(priorRule.subjectId) === Number(subjectId) && priorRule.targetStart != null);
+    const targetStart = coveringRule && Number(coveringRule.subjectId) === Number(subjectId) && coveringRule.targetStart != null ? Number(coveringRule.targetStart)
+      : continuesPriorSubject ? Number(priorRule.targetStart) + sourceStart - Number(priorRule.sourceStart) : 1;
+    const targetEpisodeZero = coveringRule && Number(coveringRule.subjectId) === Number(subjectId) ? coveringRule.targetEpisodeZero === true
+      : continuesPriorSubject ? priorRule.targetEpisodeZero === true : episodeInfo.hasEpisodeZero === true;
+    const startConfirmed = Boolean(coveringRule || suggestion || adjacentPrior);
+    const proposal = {
       context,
       episodeCount,
-      hasEpisodeZero: episodeInfo.hasEpisodeZero === true,
+      hasEpisodeZero: targetEpisodeZero,
       replacesRule: coveringRule,
+      siblingRules,
+      initialSourceStart: sourceStart,
+      initialTargetStart: targetStart,
+      extendToExpectedEnd: context.seasonKey !== 'default',
+      startConfirmed,
+      reason: coveringRule ? '沿用已保存的起点；可在下方修改。'
+        : suggestion ? suggestion.reason
+          : adjacentPrior ? '已按相邻的已保存范围预填起点。'
+            : '当前信息不足以确定起点，请选择本条目第一集对应的分P。',
       rule: {
         bvid: context.bvid,
-        id: `${context.seasonKey}:${sourceStart}-${sourceEnd}`,
+        id: context.seasonKey + ':' + sourceStart,
         seasonKey: context.seasonKey,
         sourceStart,
-        sourceEnd,
+        sourceEnd: sourceStart,
         targetStart,
         subjectId: Number(subjectId),
         targetEpisodeZero,
@@ -12158,6 +13027,14 @@
         autoProgress: true,
       },
     };
+    // Missing/deleted first fragments must not prevent opening the manual editor.
+    // No range can be saved until the user selects a currently available first P.
+    if (!getCollectionBindingStartOptions(context).some((option) => option.sourceStart === sourceStart)) {
+      return { ...proposal, startConfirmed: false, reason: '建议起点的首个分P不在当前列表中，请重新选择本条目第一集对应的分P。' };
+    }
+    const revised = reviseCollectionRangeBindingProposal(proposal, sourceStart);
+    revised.startConfirmed = startConfirmed;
+    return revised;
   }
 
   async function buildLongVideoRangeGroupBindingProposal(subjectId) {
@@ -12258,20 +13135,13 @@
   }
 
   function formatCollectionRangeBindingPrompt(proposal, subjectId) {
-    const rule = proposal.rule;
     const subject = resolveLongVideoBindingSubject(subjectId);
-    const subjectName = subject ? displaySubjectName(subject) : `Bangumi subject ${subjectId}`;
-    const splitNote = rule.segmentCount > 1 ? `；当前集检测到 ${rule.segmentCount} 段，只在全部分段看完后自动标记` : "";
-    const targetRange = formatCollectionTargetRange(rule);
-    const zeroNote = Number(rule.sourceStart) === 0
-      ? (rule.targetEpisodeZero
-        ? "\n\nBangumi API 的正片列表明确包含 EP0，将从 EP0 开始对齐。"
-        : "\n\n来源第0集将按 Bangumi 第1集处理，后续集数整体顺延一集。")
-      : "";
+    const subjectName = subject ? displaySubjectName(subject) : 'Bangumi subject ' + subjectId;
     const replaceNote = proposal.replacesRule
-      ? `\n\n这将替换已有映射「${formatCollectionSourceRange(proposal.replacesRule)}」，不会留下被截断的前半段。`
-      : "";
-    return `检测到一个跨条目的多P合集。\n\n建议把 ${formatCollectionSourceRange(rule)} 绑定到“${subjectName}”，并映射为 ${targetRange}${splitNote}。${zeroNote}${replaceNote}\n\n确定保存这条范围映射吗？`;
+      ? '\n保存将替换已有映射「' + formatCollectionSourceRange(proposal.replacesRule) + '」。' : '';
+    const splitNote = proposal.rule.segmentCount > 1
+      ? '\n当前集按 ' + proposal.rule.segmentCount + ' 段核对，全部分段看完后才自动标记。' : '';
+    return '绑定到“' + subjectName + '”\n\n' + (proposal.reason || '请核对首集与当前播放集的对应关系。') + splitNote + replaceNote;
   }
 
   function formatLongVideoRangeGroupBindingPrompt(proposal, subjectId) {
@@ -12316,7 +13186,7 @@
       return true;
     }
     const context = collectionContext;
-    if (!context) return true;
+    if (!context) return !layout;
     const resolution = getCollectionMappingResolution(context);
     if (resolution.ambiguous) return false;
     const rule = resolution.rule;
@@ -12356,13 +13226,19 @@
 
   async function recordCurrentCollectionSegmentProgressIfNeeded() {
     const context = getCurrentCollectionPartContext();
-    if (!context) return true;
+    if (!context) {
+      const layout = getCurrentCollectionLayoutContext();
+      return !layout || layout.currentKind === "long-range";
+    }
+    // Invalid numbering cannot contribute watched fragments: after an uploader
+    // repairs the labels, old indexes could otherwise stand for different parts.
+    if (context.fragmentSequenceValid === false) return false;
     if (isCurrentOrdinaryEpisodeCollection(context)) return true;
     const rule = getCollectionMappingRule(context);
     if (!rule) return false;
     if (!rule.autoProgress) return false;
     const segmentCount = Math.max(1, Number(context.segmentCount) || Number(rule.segmentCount) || 1);
-    if (segmentCount <= 1) return true;
+    if (segmentCount <= 1) return context.fragmentSequenceValid !== false;
     const fragmentIndex = Math.max(1, Number(context.fragmentIndex) || 1);
     const key = getCollectionSegmentProgressKey(context, rule);
     if (!key) return false;
@@ -12380,7 +13256,7 @@
       }
       return completed.length !== previous.length;
     });
-    return complete;
+    return complete && context.fragmentSequenceValid !== false;
   }
 
   async function clearCurrentCollectionSegmentProgress() {
@@ -13399,7 +14275,8 @@
   async function updateStoredCollectionMappings(update) {
     return withBindingsLock(async () => {
       const next = normalizeCollectionMappings(await readJsonValueFresh(STORAGE.collectionMappings, {}));
-      const changed = update(next) !== false;
+      const bindings = await readJsonValueFresh(STORAGE.bindings, {});
+      const changed = update(next, bindings) !== false;
       if (changed) await writeJsonValueAsync(STORAGE.collectionMappings, next);
       state.collectionMappings = next;
       return next;

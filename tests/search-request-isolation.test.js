@@ -13,7 +13,7 @@ function deferred() {
 function load(file) {
   const requests = [];
   const sandbox = {
-    subjectSearchSeq: 0, routeRefreshSeq: 1, keyword: "A", renders: 0,
+    subjectSearchSeq: 0, subjectBindRequestSeq: 0, routeRefreshSeq: 1, keyword: "A", renders: 0,
     location: { href: "https://www.bilibili.com/video/BV1A" },
     state: { pageKey: "A", subjectId: 101, token: "token-a", searchResults: [], busy: false, error: "" },
     clearLongVideoBindingPrompt() {},
