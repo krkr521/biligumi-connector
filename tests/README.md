@@ -10,6 +10,17 @@ node --test
 
 自动测试从两份实际脚本提取函数执行，使用可控的 Promise、DOM 和存储夹具；后台 PiP 测试执行完整 background 脚本。模拟网络不会访问真实账号。共享关键函数还会核对双端一致性，平台存储、路由适配器保留各自实现。
 
+## 收藏保存后的自动刷新
+
+`collection-save-refresh.test.js` 从油猴和扩展源码执行实际保存与回读流程，覆盖：
+
+- POST/PATCH 成功后只读取收藏和章节进度，跳过保存前的请求缓存；500 或网络错误自动有限重试，保存请求不会因此重发。
+- 读取持续失败时保留已保存内容，并提示“已保存，暂时无法刷新”；401 不循环重试。
+- 评分不变、标签/观看状态/吐槽/隐私变化时，旧响应或临时 404 不撤销新内容；全部提交字段吻合后才清除待同步状态。
+- 换页、换账号、新保存和新搜索发生后，旧响应不覆盖新操作的数据或提示；真实写入失败仍保留编辑器草稿。
+
+`write-context-isolation.test.js` 另覆盖旧整包读取在元数据存储等待期间遇到新修改的成功/失败隔离。浏览器验收使用当前源码表单和事件链，以及受控的内存 API；它不代表已安装版本或真实账号写入已验证。
+
 ## 本次 14 项修复的回归矩阵
 
 下表的反例既包括原故障，也包括修复不能破坏的正常行为。文件链接指向 CI 自动执行的用例；同一测试文件可能覆盖多个异步步骤，不以 Node 输出的用例数量代表场景数量。
@@ -21,7 +32,7 @@ node --test
 | R3：把普通 EP 标签当官方列表序号，EP0 / 1.5 导致选错集 | 区分集号来源，显式范围先定位实际集号，再生成本地序号与时间线 | [episode-number-source](episode-number-source.test.js)、[official-episode-zero](official-episode-zero.test.js)、[long-video-logic](long-video-logic.test.js)：普通第 1 集不会选 EP0、第 2 集不会选 1.5；官方 `(2/13)` 保留序号含义；延迟收到 0 与来源改变能刷新；后季 sort 从 13、来源从 1 编号，显式全局范围、合集 EP0 顺延、分段集、小数集和长视频范围均保持语义 |
 | R4：旧 bundle 在存储 await 后写入新页；旧评分失败回滚或删除完成清空新页 | 每次等待后的状态修改仍属于原页面、条目与账号 | [write-context-isolation](write-context-isolation.test.js)：两个 loader 等待元数据存储时换页/换账号，含迟到存储失败；评分成功、失败、延迟刷新，删除完成与固定凭证的删除确认；正常操作不被 guard 误取消；远端评分写成功后读取失败不能回滚已提交评分 |
 | R5：A 标签清空或更换 Token，B 保存无关设置恢复旧 Token | 无关设置不持久化旧凭证；真实 GM / Chrome 存储监听更新当前账号 | [write-context-isolation](write-context-isolation.test.js)：事件尚未到达时也不能恢复旧值；清除、替换、空输入、明确新 Token、过期清除确认；Chrome 非 local 事件不改账号；相同 Token 事件保留当前收藏/编辑器，不同 Token 清除旧收藏与编辑器上下文 |
-| R6：首次收藏 POST 失败，乐观状态残留；重试错误地 PATCH；或成功写后读取失败被误回滚 | 写失败恢复原收藏和 pending，保留可重试草稿；成功写后的读取失败不撤销已提交内容 | [write-context-isolation](write-context-isolation.test.js)：无收藏失败后 `mergePendingCollection(null)` 仍为空，重试 `POST→POST`；已有收藏 `PATCH→PATCH` 且恢复原评论/评分；保存中禁用控件并阻止重复提交；换账号让旧编辑器失效；成功 POST/PATCH 后读取失败保留已提交评论 |
+| R6：首次收藏 POST 失败，乐观状态残留；重试错误地 PATCH；或成功写后读取失败被误回滚 | 写失败恢复原收藏和 pending，保留可重试草稿；成功写后的读取失败不撤销已提交内容 | [write-context-isolation](write-context-isolation.test.js)、[collection-save-refresh](collection-save-refresh.test.js)：无收藏失败后 `mergePendingCollection(null)` 仍为空，重试 `POST→POST`；已有收藏 `PATCH→PATCH` 且恢复原评论/评分；保存中禁用控件并阻止重复提交；换账号让旧编辑器失效；成功 POST/PATCH 后读取失败保留已提交评论 |
 | R7：从未编辑的进度输入在 render 后恢复旧值，覆盖刚更新的已看进度 | 未修改输入跟随新数据；真实编辑草稿只在相同上下文恢复 | [input-draft-restoration](input-draft-restoration.test.js)：未聚焦/仅聚焦的旧进度不覆盖新值；已编辑、失焦、空值、多次重绘、保存后变干净；搜索选区保留；不支持 selection 的数字输入可用；换页、路由序号、URL、条目或账号不继承草稿 |
 | R8：旧搜索响应或直接 ID 的后续绑定等待覆盖新搜索 | 搜索身份贯穿读取、元数据存储、长视频准备、绑定与持久化等待；过期结果和错误不改变当前状态 | [search-request-isolation](search-request-isolation.test.js)：同页新搜索、换页/条目/Token、清除、旧成功/失败；直接 ID 的 GET、元数据存储、readiness、模式保存；真实 `bindSubject` 的合集/长视频 proposal、共享锁及扩展存储读取等待；确认弹窗保存、wait→auto/bind、超时重试保留取消身份；无显式回调的候选点击也受保护；取消不污染已绑定 subject，正常同/不同 ID 可绑定；自动/手动 identify 不能反绑旧条目。[write-context-isolation](write-context-isolation.test.js) 另检查有效 bundle 可以刷新条目数据，但迟到成功/失败不得覆盖新搜索的结果、提示、错误与 busy |
 | R9：PiP 标签和另一标签同时更新后台整对象，快捷键发给错误视频 | 排队串行更新，命令等待已排队变化并选择 PiP 标签 | [background-pip-state](background-pip-state.test.js)：并发进入 PiP、立即快捷键、退出 PiP 后旧更新不复活；一次存储失败不阻塞后续操作；新 worker 从持久状态恢复目标 |

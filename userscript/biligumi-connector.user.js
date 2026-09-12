@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.21
+// @version      0.7.22
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -49,7 +49,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.21";
+  const SCRIPT_VERSION = "0.7.22";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
@@ -264,6 +264,7 @@
     apiRelayAutoFallbackConfirmationPending: false,
     collectionEditorOpen: false,
     collectionEditorContext: null,
+    collectionRefreshContext: null,
     collectionDeleteConfirmSubjectId: null,
     pendingCollection: null,
     message: "",
@@ -6792,27 +6793,30 @@
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     const requestKey = `${subjectId}|${state.token || ""}|${pageContext.pageKey}|${pageContext.routeSeq}`;
     const existing = subjectBundleRequests.get(requestKey);
-    if (existing) {
+    if (existing && existing.collectionRefreshContext === state.collectionRefreshContext) {
       existing.uiContext.searchSeq = subjectSearchSeq;
       return existing.promise;
     }
     const uiContext = { searchSeq: subjectSearchSeq };
     const promise = loadSubjectBundleFresh(subjectId, state.token || "", pageContext, uiContext)
-      .finally(() => subjectBundleRequests.delete(requestKey));
-    subjectBundleRequests.set(requestKey, { promise, uiContext });
+      .finally(() => {
+        if (subjectBundleRequests.get(requestKey)?.promise === promise) subjectBundleRequests.delete(requestKey);
+      });
+    subjectBundleRequests.set(requestKey, { promise, uiContext, collectionRefreshContext: state.collectionRefreshContext });
     return promise;
   }
 
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }, uiContext = { searchSeq: subjectSearchSeq }) {
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
+    const collectionRefreshContext = state.collectionRefreshContext;
     const relayScope = createBgmApiRelayScope();
     try {
       const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
         advancePanelLoad(label, loadId);
         return value;
@@ -6821,12 +6825,12 @@
         trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
         trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
         trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, dedup: false, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, dedup: false, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       await rememberBindingSubject(subject);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
@@ -6846,26 +6850,26 @@
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
     } catch (error) {
-      if (uiContext.searchSeq === subjectSearchSeq && isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
+      if (state.collectionRefreshContext === collectionRefreshContext && uiContext.searchSeq === subjectSearchSeq && isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
     } finally {
       finishPanelLoad(loadId);
     }
   }
 
   async function loadSubjectBundlePreservingLocal(localCollection) {
-    const optimistic = localCollection ? { ...localCollection } : null;
     if (!state.subjectId) return;
     const subjectId = Number(state.subjectId);
     const tokenSnapshot = state.token || "";
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
     let loadId = 0;
+    const collectionRefreshContext = state.collectionRefreshContext;
     const relayScope = createBgmApiRelayScope();
     try {
       const collectionPath = tokenSnapshot ? await getCollectionReadPath(subjectId, tokenSnapshot, relayScope) : "";
       const total = tokenSnapshot ? (5 + (collectionPath ? 1 : 0)) : 3;
       loadId = beginPanelLoad(total, "正在读取 Bangumi 数据...");
       if (tokenSnapshot) advancePanelLoad("已确认账号与收藏路径", loadId);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       const trackProgress = (promise, label) => Promise.resolve(promise).then((value) => {
         advancePanelLoad(label, loadId);
         return value;
@@ -6874,12 +6878,12 @@
         trackProgress(bgmRequest(`/v0/subjects/${subjectId}`, { relayScope }), "已读取条目信息"),
         trackProgress(bgmRequestPagedData(`/v0/episodes?subject_id=${subjectId}&type=0`, { pageSize: 200, relayScope }), "已读取章节列表"),
         trackProgress(loadSubjectCharacters(subjectId, relayScope), "已读取角色信息"),
-        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, relayScope }), "已读取收藏状态") : Promise.resolve(null),
-        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
+        collectionPath ? trackProgress(bgmRequest(collectionPath, { auth: true, authToken: tokenSnapshot, allow404: true, dedup: false, relayScope }), "已读取收藏状态") : Promise.resolve(null),
+        tokenSnapshot ? trackProgress(bgmRequestPagedData(`/v0/users/-/collections/${subjectId}/episodes?episode_type=0`, { auth: true, authToken: tokenSnapshot, allow404: true, dedup: false, pageSize: 200, relayScope }), "已读取观看进度") : Promise.resolve(null),
       ]);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       await rememberBindingSubject(subject);
-      if (!isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
+      if (state.collectionRefreshContext !== collectionRefreshContext || !isCurrentPageContext(pageContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
@@ -6889,16 +6893,13 @@
       state.characterError = charactersResult.error;
       state.collection = mergePendingCollection(collection);
       state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
-      if (optimistic && (!state.collection || Number(state.collection.rate || 0) !== Number(optimistic.rate || 0))) {
-        state.collection = { ...(state.collection || {}), ...optimistic };
-      }
       state.busy = false;
       state.error = "";
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
       checkAutoWatchProgress().catch(showError);
     } catch (error) {
-      if (isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
+      if (state.collectionRefreshContext === collectionRefreshContext && isCurrentPageContext(pageContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
     } finally {
       finishPanelLoad(loadId);
     }
@@ -7101,7 +7102,18 @@
       state.pendingCollection = null;
       return collection;
     }
-    if (collection && pending.rate != null && Number(collection.rate || 0) === Number(pending.rate || 0)) {
+    // A matching score alone does not confirm changes to tags, status or comment.
+    const synchronized = collection && ["type", "rate", "tags", "comment", "private"].every((key) => {
+      if (!Object.prototype.hasOwnProperty.call(pending, key)) return true;
+      if (key === "tags") {
+        const normalize = (tags) => JSON.stringify(Array.from(new Set(Array.isArray(tags) ? tags : [])).sort());
+        return normalize(collection.tags) === normalize(pending.tags);
+      }
+      if (key === "private") return Boolean(collection[key]) === Boolean(pending[key]);
+      if (key === "comment") return String(collection[key] || "") === String(pending[key] || "");
+      return Number(collection[key] || 0) === Number(pending[key] || 0);
+    });
+    if (synchronized) {
       state.pendingCollection = null;
       return collection;
     }
@@ -7137,6 +7149,7 @@
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
     const context = captureCollectionOperationContext();
+    state.collectionRefreshContext = context;
     setBusy("正在更新记录...");
     const payload = { ...patch };
     if (!state.collection && payload.type == null) payload.type = 3;
@@ -7158,6 +7171,7 @@
     ensureToken();
     if (!state.subjectId) throw new Error("请先绑定 Bangumi 条目");
     const context = captureCollectionOperationContext();
+    state.collectionRefreshContext = context;
     const safeRate = Math.max(0, Math.min(10, Math.round(Number(rate) || 0)));
 
     const previousCollection = state.collection ? { ...state.collection } : null;
@@ -7181,17 +7195,17 @@
         expectNoContent: true,
       });
       submitted = true;
-      if (!isCollectionOperationContextCurrent(context)) return;
+      if (!isCollectionOperationContextCurrent(context) || state.collectionRefreshContext !== context) return;
       await loadSubjectBundlePreservingLocal(state.collection);
-      if (!isCollectionOperationContextCurrent(context)) return;
+      if (!isCollectionOperationContextCurrent(context) || state.collectionRefreshContext !== context) return;
       state.message = safeRate ? `评分已更新为 ${safeRate} ${getRateLevel(safeRate)}。` : "评分已清除。";
       state.error = "";
       render();
       window.setTimeout(() => {
-        if (isCollectionOperationContextCurrent(context)) loadSubjectBundlePreservingLocal(state.collection).catch(showError);
+        if (isCollectionOperationContextCurrent(context) && state.collectionRefreshContext === context) loadSubjectBundlePreservingLocal(state.collection).catch(showError);
       }, 1200);
     } catch (error) {
-      if (!isCollectionOperationContextCurrent(context)) return;
+      if (!isCollectionOperationContextCurrent(context) || state.collectionRefreshContext !== context) return;
       if (!submitted && state.pendingCollection === pendingCollection) {
         state.collection = previousCollection;
         state.pendingCollection = previousPendingCollection;
@@ -7243,6 +7257,7 @@
     }
     setBusy("正在删除 Bangumi 收藏记录...");
     const context = captureCollectionOperationContext();
+    state.collectionRefreshContext = context;
     const subjectId = context.subjectId;
     const tokenUsername = await getCurrentUsername(context.token).catch((error) => {
       if (isCollectionOperationContextCurrent(context)) throw error;
@@ -7620,6 +7635,7 @@
       if (reload) await loadSubjectBundle();
       return isCollectionOperationContextCurrent(context);
     }
+    state.collectionRefreshContext = context;
     if (message) setBusy(message);
     try {
       await bgmRequest(`/v0/users/-/collections/${context.subjectId}/episodes`, {
@@ -9705,6 +9721,8 @@
       throw new Error("页面已经切换，本次保存已取消。请在当前页面重新打开编辑器。");
     }
     const context = captureCollectionOperationContext();
+    state.collectionRefreshContext = context;
+    const searchSeq = subjectSearchSeq;
     const subjectId = Number(editorContext.subjectId);
     const typeInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-type']:checked`);
     const rateInput = document.querySelector(`#${SETTINGS_ID} [data-role='edit-rate']`);
@@ -9755,9 +9773,57 @@
       state.collectionEditorContext = null;
       removeModal();
     }
-    await loadSubjectBundlePreservingLocal(state.collection);
-    if (!isCollectionOperationContextCurrent(context)) return;
-    state.message = "记录已保存。";
+    await refreshCollectionAfterSave(context, pendingCollection, searchSeq);
+  }
+
+  async function refreshCollectionAfterSave(context, pendingCollection, searchSeq = subjectSearchSeq) {
+    const isCurrent = () => isCollectionOperationContextCurrent(context)
+      && state.collectionRefreshContext === context
+      && (!state.pendingCollection || state.pendingCollection === pendingCollection);
+    const ownsStatus = () => isCurrent() && subjectSearchSeq === searchSeq;
+    if (!isCurrent()) return;
+    const relayScope = createBgmApiRelayScope();
+    if (ownsStatus()) {
+      state.message = "记录已保存，正在同步最新数据...";
+      state.error = "";
+      render();
+    }
+    let lastError = null;
+    let synchronized = false;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (attempt) await sleep(800 * Math.pow(2, attempt - 1));
+      if (!isCurrent()) return;
+      try {
+        const collectionPath = await getCollectionReadPath(context.subjectId, context.token, relayScope);
+        if (!isCurrent()) return;
+        if (!collectionPath) throw new Error("暂时无法确认收藏读取路径");
+        // Only mutable user data needs refreshing after an edit. Bypass reads
+        // cached before the write; retries here must never repeat the write.
+        const options = { auth: true, authToken: context.token, allow404: true, dedup: false, relayScope };
+        const [collection, episodeCollections] = await Promise.all([
+          bgmRequest(collectionPath, options),
+          bgmRequestPagedData(`/v0/users/-/collections/${context.subjectId}/episodes?episode_type=0`, { ...options, pageSize: 200 }),
+        ]);
+        if (!isCurrent()) return;
+        state.collection = mergePendingCollection(collection);
+        if (episodeCollections) state.episodeCollections = episodeCollections.data || [];
+        lastError = null;
+        synchronized = !state.pendingCollection;
+        if (synchronized) break;
+      } catch (error) {
+        if (!isCurrent()) return;
+        lastError = error;
+        if (!isRetryableApiError(error)) break;
+      }
+    }
+    if (!isCurrent()) return;
+    if (ownsStatus()) {
+      state.busy = false;
+      state.error = "";
+      state.message = lastError
+        ? `记录已保存，暂时无法刷新最新数据：${lastError.message || String(lastError)}`
+        : synchronized ? "记录已保存。" : "记录已保存，Bangumi 数据仍在同步，当前显示本次修改。";
+    }
     render();
   }
 

@@ -28,7 +28,7 @@ function sandbox(source, extension, names, extra = {}) {
     PANEL_ID: "panel", SETTINGS_ID: "settings", STORAGE: extractObjectConstant(source, "STORAGE"),
     pendingRequests: new Map(), setBusy: noop, render: noop, showError: noop,
     writeJsonValue: noop, displaySubjectName: (subject) => subject.name,
-    loadSubjectBundle: async () => {}, loadSubjectBundlePreservingLocal: async () => {},
+    loadSubjectBundle: async () => {}, loadSubjectBundlePreservingLocal: async () => {}, refreshCollectionAfterSave: async () => {},
     refreshSettingsTokenHelp: noop, shouldRenderFullPanel: () => false,
     ...extra,
   };
@@ -116,7 +116,7 @@ async function testAutomaticProgress(source, extension) {
 
 async function testBundle(source, extension) {
   for (const name of ["loadSubjectBundleFresh", "loadSubjectBundlePreservingLocal"]) {
-    for (const kind of ["success", "token", "route", "route-error", "token-error", ...(name === "loadSubjectBundleFresh" ? ["search", "search-error"] : [])]) {
+    for (const kind of ["success", "token", "route", "route-error", "token-error", "write", "write-error", ...(name === "loadSubjectBundleFresh" ? ["search", "search-error"] : [])]) {
       const entered = deferred();
       const gate = deferred();
       const scope = sandbox(source, extension, [name, "mergePendingCollection"], {
@@ -138,6 +138,10 @@ async function testBundle(source, extension) {
         scope.state.message = "newer search";
         scope.state.error = "newer search error";
         scope.state.busy = true;
+      } else if (kind.startsWith("write")) {
+        scope.state.collectionRefreshContext = {};
+        scope.state.collection = { type: 2, rate: 8, comment: "B" };
+        scope.state.pendingCollection = null;
       } else if (kind !== "success") changeContext(scope, kind.startsWith("route") ? "route" : "token");
       if (kind.endsWith("-error")) gate.reject(new Error("late storage failure"));
       else gate.resolve();
@@ -207,7 +211,7 @@ async function testRateAndDelete(source, extension) {
 
 async function testEditor(source, extension) {
   for (const existing of [false, true]) {
-  for (const kind of ["failure", "success", "route", "token", "refresh-failure"]) {
+  for (const kind of ["failure", "success", "route", "token"]) {
     const gate = deferred();
     const methods = [];
     const commentInput = { value: "draft", disabled: false };
@@ -219,7 +223,6 @@ async function testEditor(source, extension) {
         : query.includes("edit-type") ? { value: "3" } : query.includes("edit-rate") ? { value: "8" }
           : query.includes("edit-comment") ? commentInput : { value: "", checked: false } },
       bgmRequest: (_path, options) => { methods.push(options.method); return gate.promise; },
-      loadSubjectBundlePreservingLocal: async () => { if (kind === "refresh-failure") throw new Error("refresh failed"); },
     });
     const previousCollection = existing ? { type: 3, rate: 4, comment: "saved comment" } : null;
     scope.state.collection = previousCollection;
@@ -232,7 +235,7 @@ async function testEditor(source, extension) {
     await scope.api.saveCollectionEditor();
     assert.equal(methods.length, 1, "a second click cannot submit a duplicate write");
     if (kind === "route" || kind === "token") changeContext(scope, kind);
-    if (kind === "success" || kind === "refresh-failure") gate.resolve();
+    if (kind === "success") gate.resolve();
     else gate.reject(new Error("request failed"));
     if (kind === "failure") {
       await assert.rejects(task, /request failed/);
@@ -248,13 +251,6 @@ async function testEditor(source, extension) {
       assert.deepEqual(methods, existing ? ["PATCH", "PATCH"] : ["POST", "POST"]);
       assert.equal(scope.state.collection.comment, "draft");
       assert.equal(removed, 1);
-    } else if (kind === "refresh-failure") {
-      await assert.rejects(task, /refresh failed/);
-      assert.equal(scope.state.collection.comment, "draft");
-      assert.equal(scope.state.pendingCollection.comment, "draft", "a successful write cannot be rolled back by a failed follow-up read");
-      assert.equal(scope.state.collectionEditorOpen, false);
-      assert.equal(removed, 1);
-      assert.equal(methods.length, 1);
     } else {
       await task;
       assert.equal(scope.state.collection.comment, kind === "success" ? "draft" : "B");
@@ -369,10 +365,13 @@ test("write, account and editor context isolation", { timeout: 15000 }, async ()
   for (const name of ["captureCollectionOperationContext", "isCollectionOperationContextCurrent"]) {
     assert.equal(canonicalizeAdapterSyntax(extractFunction(extensionSource, name)), canonicalizeAdapterSyntax(extractFunction(userscriptSource, name)), `${name}: keep account/subject/route guards aligned`);
   }
-  for (const name of ["updateCollection", "rateSubject", "deleteCollection", "saveProgressFromInput", "patchEpisodes", "checkAutoWatchProgress", "setAccessTokenState", "syncAccessTokenFromStorage", "setCollectionEditorSaving"]) {
+  for (const name of ["updateCollection", "rateSubject", "deleteCollection", "saveProgressFromInput", "patchEpisodes", "checkAutoWatchProgress", "setAccessTokenState", "syncAccessTokenFromStorage", "setCollectionEditorSaving", "refreshCollectionAfterSave", "mergePendingCollection"]) {
     const options = { async: userscriptSource.includes(`  async function ${name}(`) };
     assert.equal(extractFunction(extensionSource, name, options), extractFunction(userscriptSource, name, options), `${name}: keep write behavior aligned across both builds`);
   }
+  const saveBody = (source) => extractFunction(source, "saveCollectionEditor", { async: true })
+    .split("    const context = captureCollectionOperationContext();")[1];
+  assert.equal(saveBody(extensionSource), saveBody(userscriptSource), "editor write and reconciliation stay aligned after platform-specific validation");
   for (const [label, path] of [["userscript", USERSCRIPT_PATH], ["extension", EXTENSION_PATH]]) {
     const source = readSource(path);
     const extension = label === "extension";

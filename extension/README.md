@@ -6,6 +6,7 @@
 
 ## 功能
 
+- 修改收藏保存成功后，仅刷新收藏与观看进度；读取遇到短暂 500 或网络错误时自动有限重试，保留已提交的状态、标签和吐槽。旧响应不会因评分相同而覆盖本次修改，持续读取失败时明确区分“已保存”与“暂时无法刷新”。
 - 注入 `https://www.bilibili.com/video/*` 和 `https://www.bilibili.com/bangumi/play/*`。
 - 复用 userscript 主体逻辑：Bangumi 面板、Token 设置、白名单、绑定、搜索、PV / 预告轻量候选、收藏/评分/章节同步、角色/CV 横栏、条目信息栏、自动标记已看、OP/ED 跳过按钮等。
 - 使用 `chrome.storage.local` 保存原 userscript 的本地设置与绑定数据。
