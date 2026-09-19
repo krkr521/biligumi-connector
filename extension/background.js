@@ -216,6 +216,7 @@
         username: owner.username || "",
       },
       durationSeconds: videoData.duration || initial.duration || 0,
+      pageCount: Math.max(Array.isArray(videoData.pages) ? videoData.pages.length : 0, Number(videoData.videos) || 0),
     };
   }
 
@@ -227,6 +228,7 @@
     const titles = input.titles && typeof input.titles === "object" ? input.titles : {};
     const owner = input.owner && typeof input.owner === "object" ? input.owner : {};
     const duration = Number(input.durationSeconds);
+    const pageCount = Number(input.pageCount);
     return {
       schemaVersion: 1,
       href,
@@ -250,6 +252,7 @@
         username: normalizePublicText(owner.username, 100),
       },
       durationSeconds: Number.isFinite(duration) && duration > 0 && duration <= 7 * 24 * 60 * 60 ? duration : 0,
+      pageCount: Number.isInteger(pageCount) && pageCount > 0 && pageCount <= 500 ? pageCount : 0,
     };
   }
 

@@ -4632,7 +4632,8 @@
           <div class="biligumi-collection-mapping-heading"><span>合集映射</span>
             <button type="button" class="biligumi-button biligumi-collection-mapping-edit" data-action="edit-collection-mapping"><svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m10.5 2.5 3 3M3 10l8-8a1.4 1.4 0 0 1 3 3l-8 8-4 1 1-4Z"/></svg><span>调整映射</span></button>
           </div>
-          <div class="biligumi-collection-mapping-detail">${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(targetLabel)}</div>
+          <div class="biligumi-collection-mapping-detail">${escapeHtml(formatCollectionSourceRange(rule))} → ${escapeHtml(formatCollectionTargetRange(rule))}</div>
+          <div class="biligumi-collection-mapping-detail">当前：来源第${escapeHtml(context.episodeNo)}集 → ${escapeHtml(targetLabel)}</div>
           <div class="biligumi-collection-mapping-help">解绑仅移除这段映射</div>
         </div>`;
       }
@@ -13382,6 +13383,48 @@
 
   function getVideoPartListNodes() {
     if (!document || typeof document.querySelectorAll !== "function") return [];
+    const bvid = String(getBvIdFromUrl() || "").toUpperCase();
+    const videoData = getPageInitialState().videoData || {};
+    // An UGC collection contains separate BV archives, each with its own P list.
+    // Trust page counts only when the snapshot still belongs to the current route.
+    const pageCount = String(videoData.bvid || "").toUpperCase() === bvid
+      ? Math.max(Array.isArray(videoData.pages) ? videoData.pages.length : 0, Number(videoData.videos) || 0)
+      : 0;
+    if (pageCount === 1) return [];
+    const nodeBvid = (node) => {
+      if (!node || typeof node.getAttribute !== "function") return "";
+      for (const name of ["data-key", "data-bvid", "href"]) {
+        const value = String(node.getAttribute(name) || "");
+        const match = value.match(/^BV[\w]+$/i) || value.match(/\/video\/(BV[\w]+)(?:[/?#]|$)/i);
+        if (match) return String(match[1] || match[0]).toUpperCase();
+      }
+      return "";
+    };
+    const ownerBvid = (node) => {
+      for (let current = node; current; current = current.parentElement) {
+        const owner = nodeBvid(current);
+        if (owner) return owner;
+      }
+      return "";
+    };
+    const validList = (nodes, containerSelector) => {
+      if (nodes.length <= 1 || nodes.length > 500 || (pageCount && nodes.length > pageCount)) return false;
+      if (containerSelector === ".video-pod__list" && nodes.some((node) => (
+        typeof node.querySelector === "function" && node.querySelector(".single-p, .multi-p")
+      ))) return false;
+      // The player also keeps hidden menus for other UGC archives. Without an
+      // owner, those menus cannot be attributed to the currently playing BV.
+      const playerRequiresOwner = containerSelector === ".bpx-player-ctrl-eplist-episodes-content"
+        && Array.from(document.querySelectorAll(".video-pod__list .video-pod__item")).some((node) => {
+          const owner = nodeBvid(node);
+          return (owner && owner !== bvid)
+            || (typeof node.querySelector === "function" && node.querySelector(".single-p, .multi-p"));
+        });
+      return nodes.every((node) => {
+        const owner = ownerBvid(node);
+        return owner ? owner === bvid : !playerRequiresOwner;
+      });
+    };
     const activeSelectors = [
       [".multi-p .page-list .page-item.active, .multi-p .page-list .page-item.on", ".page-list"],
       [".video-pod__list .video-pod__item.active, .video-pod__list [class*='base-item'].active", ".video-pod__list"],
@@ -13393,24 +13436,34 @@
         if (!active) continue;
         const container = typeof active.closest === "function" ? active.closest(containerSelector) : active.parentElement;
         const nodes = container && container.children ? Array.from(container.children) : [];
-        if (nodes.length > 1) return nodes;
+        if (validList(nodes, containerSelector)) return nodes;
       }
     }
     const fallbackSelectors = [
-      ".multi-p .page-list .page-item",
-      ".video-pod__list .video-pod__item",
-      ".bpx-player-ctrl-eplist-episodes-content > .bpx-player-ctrl-eplist-multi-menu-item",
+      [".multi-p .page-list .page-item", ".page-list"],
+      [".video-pod__list .video-pod__item", ".video-pod__list"],
+      [".bpx-player-ctrl-eplist-episodes-content > .bpx-player-ctrl-eplist-multi-menu-item", ".bpx-player-ctrl-eplist-episodes-content"],
     ];
-    for (const selector of fallbackSelectors) {
-      const nodes = Array.from(document.querySelectorAll(selector));
-      if (nodes.length > 1 && nodes.length <= 500) return nodes;
+    for (const [selector, containerSelector] of fallbackSelectors) {
+      const groups = new Map();
+      for (const node of document.querySelectorAll(selector)) {
+        const container = typeof node.closest === "function" ? node.closest(containerSelector) : node.parentElement;
+        if (!groups.has(container)) groups.set(container, []);
+        groups.get(container).push(node);
+      }
+      const lists = Array.from(groups.values()).filter((nodes) => validList(nodes, containerSelector));
+      const activeList = lists.find((nodes) => nodes.some(isActiveVideoPartNode));
+      if (activeList) return activeList;
+      if (lists.length === 1) return lists[0];
     }
     return [];
   }
 
   function isActiveVideoPartNode(node) {
     const className = String(node && node.className || "");
-    return /(?:^|\s)(?:active|on|bpx-state-multi-active-item)(?:\s|$)/i.test(className);
+    return /(?:^|\s)(?:active|on|bpx-state-multi-active-item)(?:\s|$)/i.test(className)
+      || Boolean(node && typeof node.querySelector === "function"
+        && node.querySelector("[class*='base-item'].active, [class*='base-item'].on, .page-item.active, .page-item.on"));
   }
 
   function getVideoPartNodeTitle(node) {
@@ -15123,6 +15176,7 @@
     const videoData = {
       bvid: String(identity.bvid || ""),
       duration: Number(snapshot.durationSeconds) || 0,
+      videos: Number.isInteger(snapshot.pageCount) && snapshot.pageCount > 0 && snapshot.pageCount <= 500 ? snapshot.pageCount : 0,
       owner: normalizedOwner,
     };
     return {

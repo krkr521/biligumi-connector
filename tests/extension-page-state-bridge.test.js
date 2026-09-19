@@ -56,6 +56,7 @@ test("MAIN-world collector returns only the public page-state allowlist", () => 
         videoData: {
           bvid: "BV1PUBLIC",
           duration: 1440,
+          pages: [{ page: 1, part: "第11话" }],
           owner: { mid: 42, name: "UP 主", secret: "must-not-leak" },
         },
       },
@@ -70,10 +71,11 @@ globalThis.collect = collectBilibiliPublicPageState;`, sandbox);
   assert.equal(result.titles.seasonTitle, "番名 第二季");
   assert.equal(result.owner.mid, 42);
   assert.equal(result.durationSeconds, 1440);
+  assert.equal(result.pageCount, 1);
   assert.ok(!JSON.stringify(result).includes("must-not-leak"));
   assert.deepEqual(
     Object.keys(result).sort(),
-    ["durationSeconds", "href", "identity", "owner", "schemaVersion", "titles"],
+    ["durationSeconds", "href", "identity", "owner", "pageCount", "schemaVersion", "titles"],
   );
 });
 
@@ -109,6 +111,28 @@ test("background normalizes IDs, text, duration, and rejects foreign URLs", () =
     () => sandbox.api.normalizeBilibiliPublicPageState({ href: "https://evil.example/video/BV1BAD" }),
     /Invalid page-state URL/,
   );
+});
+
+test("page counts cross the bridge as bounded numbers without exposing the page array", () => {
+  const href = "https://www.bilibili.com/video/BV1PUBLIC";
+  const api = loadBackgroundApi({
+    location: { href },
+    window: { __INITIAL_STATE__: { videoData: { bvid: "BV1PUBLIC", videos: 8, pages: [{ page: 1 }] } } },
+  }).api;
+  const content = { URL };
+  runInSandbox(extractFunction(contentSource, "toInitialStateCompat"), content);
+  const collected = api.collectBilibiliPublicPageState();
+  assert.equal(collected.pageCount, 8, "a partial page array does not reduce the declared number of P");
+  assert.equal(Object.hasOwn(collected, "pages"), false);
+  const normalized = api.normalizeBilibiliPublicPageState(collected);
+  assert.equal(content.toInitialStateCompat(normalized, href).videoData.videos, 8);
+  for (const count of [0, -1, 1.5, 501, Infinity, "invalid", undefined]) {
+    const snapshot = { ...collected, pageCount: count };
+    assert.equal(api.normalizeBilibiliPublicPageState(snapshot).pageCount, 0, `background rejects ${count}`);
+    assert.equal(content.toInitialStateCompat(snapshot, href).videoData.videos, 0, `content rejects ${count}`);
+  }
+  assert.equal(content.toInitialStateCompat({ ...normalized, identity: { bvid: "BV1STALE" } }, href).videoData, undefined,
+    "a stale BV's page count must not suppress the current video's multi-P list");
 });
 
 test("page-state read is fixed to the validated top-level sender tab and MAIN world", async () => {
@@ -169,12 +193,14 @@ globalThis.convert = toInitialStateCompat;`,
     titles: { mediaTitle: "番名", seasonTitle: "番名 第二季", episodeLongTitle: "第二话" },
     owner: { mid: "42", name: "UP 主" },
     durationSeconds: 1440,
+    pageCount: 1,
   });
   assert.equal(compat.mediaInfo.season_id, "12");
   assert.equal(compat.videoData.bvid, "BV1VALID");
   assert.equal(compat.videoData.owner.mid, "42");
   assert.equal(compat.epInfo.long_title, "第二话");
   assert.equal(compat.videoData.duration, 1440);
+  assert.equal(compat.videoData.videos, 1, "single-P evidence reaches the isolated content script");
   assert.deepEqual(
     JSON.parse(JSON.stringify(sandbox.convert({ schemaVersion: 1, href: "https://www.bilibili.com/video/BV1STALE" }))),
     {},

@@ -71,6 +71,7 @@ const IDENTICAL_FUNCTIONS = [
   "getCurrentVideoPartEpisodeNo",
   "getCurrentVideoPartContext",
   "getVideoPartListNodes",
+  "isActiveVideoPartNode",
   "getCurrentLongVideoRangeGroupContext",
   "getCurrentLongVideoRangeGroupKey",
   "getCurrentLongVideoBindingSource",

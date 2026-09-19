@@ -299,6 +299,7 @@ const sandbox = {
   ...collectionConstants,
   ...nonMainConstants,
   getPageTitle: () => "测试合集",
+  getPageInitialState: () => ({}),
   Date,
   state: { collectionMappings: {}, longVideoEpisodeGuess: null },
   inferCollectionRangeBindingStart: async () => null,
@@ -786,7 +787,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     className: index === 0 ? "active" : "",
     textContent: title,
     getAttribute: (name) => {
-      collectionTitleReadCount += 1;
+      if (name === "title" || name === "aria-label") collectionTitleReadCount += 1;
       return name === "title" ? title : "";
     },
     querySelectorAll: () => [],
@@ -796,6 +797,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     ...collectionConstants,
     ...nonMainConstants,
     getPageTitle: () => "测试合集",
+    getPageInitialState: () => ({}),
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? collectionNodes : [],
@@ -855,6 +857,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
       ...collectionConstants,
       ...nonMainConstants,
       getPageTitle: () => "测试合集",
+      getPageInitialState: () => ({}),
       document: {
         querySelector: () => null,
         querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? numericNodes : [],
@@ -932,6 +935,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
     ...collectionConstants,
     ...nonMainConstants,
     getPageTitle: () => "测试合集",
+    getPageInitialState: () => ({}),
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? incompleteNodes : [],
@@ -972,6 +976,7 @@ assert.equal(sandbox.api.getCollectionMappingResolution({ bvid, seasonKey: "defa
       ...collectionConstants,
       ...nonMainConstants,
       getPageTitle: () => "测试合集",
+      getPageInitialState: () => ({}),
       document: {
         querySelector: () => null,
         querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? splitNodes : [],
@@ -1151,6 +1156,7 @@ globalThis.readLayout = getCurrentCollectionLayoutContext;`, splitSandbox);
     ...collectionConstants,
     ...nonMainConstants,
     getPageTitle: () => "测试合集",
+    getPageInitialState: () => ({}),
     document: {
       querySelector: () => null,
       querySelectorAll: (selector) => selector === ".multi-p .page-list .page-item" ? hybridNodes : [],

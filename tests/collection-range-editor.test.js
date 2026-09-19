@@ -46,6 +46,27 @@ for (const [label, file] of [["userscript", USERSCRIPT_PATH], ["extension", EXTE
   const source = readSource(file);
   const editingNames = ["getCollectionBindingStartOptions", "reviseCollectionRangeBindingProposal"];
 
+  test(`${label}: mapping hints distinguish the full range from the current episode`, () => {
+    const current = { ...context(), episodeNo: 14 };
+    const rule = { ...proposal().rule, sourceStart: 12, sourceEnd: 19, targetStart: 1 };
+    const api = load(source, [
+      "renderCollectionMappingHint", "getCollectionMappedEpisodeNo", "formatCollectionSourceRange",
+      "formatCollectionTargetRange", "formatCollectionTargetEpisodeLabel", "escapeHtml",
+    ], {
+      getCurrentCollectionPartContext: () => current,
+      getCollectionMappingRule: () => rule,
+      formatEpisodeSort: (value) => String(value).padStart(2, "0"),
+    });
+    const html = api.renderCollectionMappingHint();
+    assert.match(html, /第4季 第12-19集 → Bangumi 第01-08集/);
+    assert.match(html, /当前：来源第14集 → Bangumi 第 03 集/);
+    assert.doesNotMatch(html, /第12-19集 → Bangumi 第 03 集/);
+    rule.targetEpisodeZero = true;
+    const zeroHtml = api.renderCollectionMappingHint();
+    assert.match(zeroHtml, /第12-19集 → Bangumi EP00-EP07/);
+    assert.match(zeroHtml, /当前：来源第14集 → Bangumi EP02/);
+  });
+
   test(`${label}: choose the actual first P without moving from fourth-season episode 14`, () => {
     const api = load(source, editingNames);
     const original = proposal();
