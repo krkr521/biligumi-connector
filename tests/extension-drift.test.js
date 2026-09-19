@@ -67,6 +67,10 @@ const IDENTICAL_FUNCTIONS = [
   "renderCollectionMappingHint",
   "detectCurrentEpisodeNo",
   "getEpisodeLabelLocalNo",
+  "getStandaloneEpisodeInferenceContext",
+  "isStandaloneEpisodeInferenceContextCurrent",
+  "getStandaloneEpisodeInferenceResult",
+  "isCurrentEpisodeNumber",
   "refreshCurrentEpisodeRecognitionState",
   "getCurrentVideoPartEpisodeNo",
   "getCurrentVideoPartContext",
@@ -118,6 +122,10 @@ for (const name of IDENTICAL_FUNCTIONS) {
 }
 
 for (const name of [
+  "loadCollectionInferenceChain",
+  "inferCollectionRangeBindingStart",
+  "inferStandaloneEpisodeFromPrequels",
+  "refreshStandaloneEpisodeInference",
   "buildCollectionRangeBindingProposal",
   "buildLongVideoRangeGroupBindingProposal",
   "getSubjectMainEpisodeCountForMapping",

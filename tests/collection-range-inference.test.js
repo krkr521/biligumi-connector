@@ -20,12 +20,13 @@ const functionNames = [
   "getCollectionInferenceAirDay",
   "getCollectionInferenceEpisodeEvidence",
   "inferCollectionRangeBindingStartFromEvidence",
+  "loadCollectionInferenceChain",
   "inferCollectionRangeBindingStart",
 ];
 const source = readSource(USERSCRIPT_PATH);
 const extension = readSource(EXTENSION_PATH);
 const functions = functionNames.map((name) => {
-  const options = { async: name === "inferCollectionRangeBindingStart" };
+  const options = { async: name === "inferCollectionRangeBindingStart" || name === "loadCollectionInferenceChain" };
   const implementation = extractFunction(source, name, options);
   assert.equal(implementation, extractFunction(extension, name, options), name + " must stay mirrored");
   return implementation;

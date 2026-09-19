@@ -14,7 +14,7 @@ const names = [
   "getCollectionInferenceSeasonInfo", "getCollectionInferenceSubjectTitles", "getCollectionInferenceSubjectIdentity",
   "collectionInferenceTitlesMatch", "collectionInferenceSourceMatches", "getCollectionInferenceSourceCount",
   "getCollectionInferenceAirDay", "getCollectionInferenceEpisodeEvidence",
-  "inferCollectionRangeBindingStartFromEvidence", "inferCollectionRangeBindingStart",
+  "inferCollectionRangeBindingStartFromEvidence", "loadCollectionInferenceChain", "inferCollectionRangeBindingStart",
   "getCollectionBindingStartOptions", "reviseCollectionRangeBindingProposal", "buildCollectionRangeBindingProposal",
   "getCollectionSegmentProgressKey", "recordCurrentCollectionSegmentProgressIfNeeded", "isCurrentCollectionPartAutoMarkEligible",
 ];

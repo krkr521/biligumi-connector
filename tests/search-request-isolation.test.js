@@ -158,6 +158,7 @@ function loadSharedBundleSearch(file) {
     subjectBundleRequests: new Map(),
     createBgmApiRelayScope: () => ({}), getCollectionReadPath: async () => "",
     beginPanelLoad: () => 1, advancePanelLoad() {}, finishPanelLoad() {}, refreshSubjectInfoLinksInBackground() {},
+    refreshStandaloneEpisodeInference: async () => null,
     loadSubjectCharacters: async () => ({ characters: [], error: "" }),
     bgmRequestPagedData: async () => ({ data: [] }),
     bgmRequest: async (path) => {

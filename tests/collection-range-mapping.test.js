@@ -264,6 +264,7 @@ for (const [label, bindSource] of [
 }
 
 const recognitionSandbox = {
+  refreshStandaloneEpisodeInference: async () => null,
   state: {
     autoEpisodeSyncLastKey: "old-subject:old-episode",
     currentEpisodeNo: null,

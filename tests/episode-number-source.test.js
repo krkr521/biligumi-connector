@@ -31,6 +31,7 @@ function setup(source) {
     location: { pathname: "/video/BVTEST" }, officialOrdinal: null, collection: null, rule: null, part: null,
     episodeContextRefreshSeq: 1, rawTitle: "", getPageTitle: () => api.rawTitle,
     refreshCurrentBindingIfChanged: () => false,
+    refreshStandaloneEpisodeInference: async () => null,
     getCurrentCollectionPartContext: () => api.collection,
     isCurrentOrdinaryEpisodeCollection: () => false,
     getCollectionMappingRule: () => api.rule,

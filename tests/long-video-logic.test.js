@@ -170,6 +170,7 @@ const sandbox = {
   writeJsonValueAsync: (...args) => sandbox.writeJsonValueAsyncImpl(...args),
   writeJsonValueAsyncImpl: async () => {},
   resetAutoWatchObservationState: () => {},
+  refreshStandaloneEpisodeInference: async () => null,
   animeMovieClassificationRequests: new Map(),
   animeMovieApiResponse: null,
   animeMovieApiCallCount: 0,

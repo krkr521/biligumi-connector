@@ -123,6 +123,7 @@ async function testBundle(source, extension) {
         createBgmApiRelayScope: () => ({}), getCollectionReadPath: async () => "/v0/users/account_A/collections/101",
         beginPanelLoad: () => 1, advancePanelLoad: noop, finishPanelLoad: noop,
         refreshSubjectInfoLinksInBackground: noop, checkAutoWatchProgress: async () => {},
+        refreshStandaloneEpisodeInference: async () => null,
         bgmRequest: async (path) => path.startsWith("/v0/subjects/") ? { id: 101, name: "A" } : { type: 3, rate: 9, comment: "A response" },
         bgmRequestPagedData: async (path) => ({ data: path.startsWith("/v0/episodes?") ? [{ id: 1001, type: 0, sort: 1 }] : [] }),
         loadSubjectCharacters: async () => ({ characters: [], error: "" }),

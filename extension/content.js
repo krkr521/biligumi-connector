@@ -246,6 +246,7 @@
     episodes: [],
     episodeCollections: [],
     currentEpisodeNo: null,
+    standaloneEpisodeInference: null,
     currentEpisodeNumberSource: "",
     bindingGuardMessage: "",
     busy: false,
@@ -4650,7 +4651,14 @@
       return `<div class="biligumi-notice">检测到多条目合集（${context.parsedPartCount} 个可识别分P）。当前未建立范围映射，已停止继承整 BV 绑定；请选择正确的 Bangumi 条目。</div>`;
     }
     const layout = getCurrentCollectionLayoutContext();
-    if (!layout) return "";
+    if (!layout) {
+      const inferred = state.standaloneEpisodeInference?.result && getStandaloneEpisodeInferenceResult();
+      return inferred ? `<div class="biligumi-notice biligumi-collection-mapping-hint">
+        <div class="biligumi-collection-mapping-heading">集数换算</div>
+        <div class="biligumi-collection-mapping-detail">本季第${escapeHtml(inferred.sourceEpisodeNo)}集 → Bangumi 第${escapeHtml(formatEpisodeSort(inferred.episodeNo))}集</div>
+        <div class="biligumi-collection-mapping-help">已核对同季前篇共${escapeHtml(inferred.previousCount)}集</div>
+      </div>` : "";
+    }
     if (layout.currentKind === "long-range") {
       const range = layout.currentLongVideo && layout.currentLongVideo.rangeLabel || layout.part.title;
       const bindingSource = state.subjectId ? getCurrentLongVideoBindingSource(state.subjectId) : null;
@@ -6754,6 +6762,7 @@
       }
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
+      refreshStandaloneEpisodeInference().catch(() => {});
     } catch (error) {
       if (state.collectionRefreshContext === collectionRefreshContext && uiContext.searchSeq === subjectSearchSeq && isRouteContextCurrent(routeContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
     } finally {
@@ -6802,6 +6811,7 @@
       state.error = "";
       render();
       refreshSubjectInfoLinksInBackground(subjectId);
+      refreshStandaloneEpisodeInference().catch(() => {});
       checkAutoWatchProgress().catch(showError);
     } catch (error) {
       if (state.collectionRefreshContext === collectionRefreshContext && isRouteContextCurrent(routeContext) && Number(state.subjectId) === Number(subjectId) && String(state.token || "") === String(tokenSnapshot || "")) throw error;
@@ -12011,6 +12021,7 @@
     if (seq !== episodeContextRefreshSeq) return;
     const rawTitle = getPageTitle();
     refreshCurrentBindingIfChanged();
+    refreshStandaloneEpisodeInference().catch(() => {});
     if (isCurrentVideoAutoProgressDisabled()) {
       if (state.currentEpisodeNo !== null) {
         state.rawTitle = rawTitle;
@@ -12956,10 +12967,10 @@
     };
   }
 
-  async function inferCollectionRangeBindingStart(context, subjectId, options = {}) {
+  async function loadCollectionInferenceChain(context, subjectId, options = {}) {
     const safeSubjectId = Number(subjectId);
     const isCurrent = typeof options.isCurrent === "function" ? options.isCurrent : () => true;
-    if (!Number.isInteger(safeSubjectId) || safeSubjectId <= 0 || !getCollectionInferenceSourceCount(context) || !isCurrent()) return null;
+    if (!Number.isInteger(safeSubjectId) || safeSubjectId <= 0 || !isCurrent()) return null;
     try {
       const readEvidence = async (id) => {
         const [subject, episodes] = await Promise.all([
@@ -12969,8 +12980,8 @@
         if (!isCurrent() || Number(subject && subject.id) !== id) return null;
         return getCollectionInferenceEpisodeEvidence(subject, episodes);
       };
-      const selected = await readEvidence(safeSubjectId);
-      if (!isCurrent() || !selected || !collectionInferenceSourceMatches(context, selected.identity)) return null;
+      const selected = options.selectedEvidence || await readEvidence(safeSubjectId);
+      if (!isCurrent() || !selected || selected.subjectId !== safeSubjectId || !collectionInferenceSourceMatches(context, selected.identity)) return null;
       const chain = [selected];
       const seen = new Set([safeSubjectId]);
       const relationCache = new Map();
@@ -12986,7 +12997,7 @@
       ));
       // Inspect only a single direct path in each direction, with five subjects total.
       // Distinct season numbers mark a boundary; unknown seasons/branches/cycles do not.
-      for (const direction of ["前传", "续集"]) {
+      for (const direction of (options.includeSuccessors === false ? ["前传"] : ["前传", "续集"])) {
         for (;;) {
           const edge = direction === "前传" ? chain[0] : chain.at(-1);
           const relations = await readRelations(edge.subjectId);
@@ -13017,11 +13028,114 @@
         const backward = directRelations(relationCache.get(next.subjectId) || [], "前传");
         if (forward.length !== 1 || backward.length !== 1
           || Number(forward[0].id) !== next.subjectId || Number(backward[0].id) !== previous.subjectId) return null;
+        const orderedSort = next.firstSort === previous.lastSort + 1;
+        const orderedEp = next.firstEp != null && previous.lastEp != null && next.firstEp === previous.lastEp + 1;
+        if ((!orderedSort && !orderedEp)
+          || getCollectionInferenceAirDay(next.episodes[0].airdate) < getCollectionInferenceAirDay(previous.episodes.at(-1).airdate)) return null;
       }
-      return isCurrent() ? inferCollectionRangeBindingStartFromEvidence(context, chain, { ...options, targetSubjectId: safeSubjectId }) : null;
+      return isCurrent() ? chain : null;
     } catch (_) {
       return null;
     }
+  }
+
+  async function inferCollectionRangeBindingStart(context, subjectId, options = {}) {
+    if (!getCollectionInferenceSourceCount(context)) return null;
+    const chain = await loadCollectionInferenceChain(context, subjectId, options);
+    if (!chain || (typeof options.isCurrent === "function" && !options.isCurrent())) return null;
+    return inferCollectionRangeBindingStartFromEvidence(context, chain, { ...options, targetSubjectId: Number(subjectId) });
+  }
+
+  async function inferStandaloneEpisodeFromPrequels(context, subjectId, options = {}) {
+    const sourceEpisodeNo = Number(context && context.episodeNo);
+    if (!Number.isInteger(sourceEpisodeNo) || sourceEpisodeNo < 1) return null;
+    const chain = await loadCollectionInferenceChain(context, subjectId, { ...options, includeSuccessors: false });
+    if (!chain || chain.length < 2 || (typeof options.isCurrent === "function" && !options.isCurrent())) return null;
+    const selected = chain.at(-1);
+    // Preserve labels that already identify an episode, including local/global
+    // numbering. A standalone upload provides no evidence about missing uploads.
+    if (getEpisodeLabelLocalNo(sourceEpisodeNo, selected.episodes) != null) return null;
+    const previousCount = chain.slice(0, -1).reduce((total, entry) => total + entry.count, 0);
+    const episodeNo = sourceEpisodeNo - previousCount;
+    const episode = selected.episodes[episodeNo - 1];
+    if (!episode) return null;
+    const now = options.now == null ? new Date() : new Date(options.now);
+    if (!Number.isFinite(now.getTime())) return null;
+    const today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
+    if (chain.slice(0, -1).some((entry) => getCollectionInferenceAirDay(entry.episodes.at(-1).airdate) >= today)
+      || getCollectionInferenceAirDay(episode.airdate) > today + 86400000) return null;
+    return { sourceEpisodeNo, episodeNo, episodeId: Number(episode.id), previousCount };
+  }
+
+  function getStandaloneEpisodeInferenceContext(rawTitle = getPageTitle()) {
+    const bvid = getBvIdFromUrl();
+    const subjectId = Number(state.subjectId);
+    if (!bvid || !subjectId || Number(state.subject?.id) !== subjectId
+      || isOfficialBangumiPage() || isCurrentVideoAutoProgressDisabled()
+      || getLongVideoEpisodeModeDecision() === true || state.longVideoEpisodeGuess?.active
+      || hasEpisodeRangeMarker(rawTitle) || isNonMainEpisodeTitle(rawTitle)
+      || getVideoPartListNodes().length > 1 || getCurrentCollectionLayoutContext()) return null;
+    const part = getCurrentVideoPartContext();
+    const videoData = getPageInitialState().videoData || {};
+    if (Number(part?.partNo) > 1 || Number(part?.partCount) > 1
+      || (String(videoData.bvid || "").toUpperCase() === String(bvid).toUpperCase()
+        && Math.max(Number(videoData.videos) || 0, Array.isArray(videoData.pages) ? videoData.pages.length : 0) > 1)) return null;
+    const episodeNo = detectEpisodeNo(rawTitle, { allowZero: true });
+    if (!Number.isInteger(episodeNo) || episodeNo < 1 || !state.episodes.length
+      || getEpisodeLabelLocalNo(episodeNo) != null) return null;
+    const season = getCollectionInferenceSeasonInfo(rawTitle);
+    const identity = getCollectionInferenceSubjectIdentity(state.subject);
+    const context = { episodeNo, seasonNo: season?.seasonNo, videoTitle: rawTitle };
+    if (!season || !collectionInferenceSourceMatches(context, identity)) return null;
+    return {
+      ...context,
+      key: JSON.stringify([bvid, state.pageKey, routeRefreshSeq, subjectId, rawTitle]),
+      subjectId, subject: state.subject, episodes: state.episodes,
+      tokenSnapshot: state.token || "",
+    };
+  }
+
+  function isStandaloneEpisodeInferenceContextCurrent(context, current = getStandaloneEpisodeInferenceContext()) {
+    return Boolean(context && current && context.key === current.key
+      && context.subject === current.subject && context.episodes === current.episodes
+      && context.tokenSnapshot === current.tokenSnapshot);
+  }
+
+  function getStandaloneEpisodeInferenceResult() {
+    const cached = state.standaloneEpisodeInference;
+    if (!cached?.result || state.currentEpisodeNumberSource !== "label"
+      || Number(state.currentEpisodeNo) !== cached.result.sourceEpisodeNo
+      || !isStandaloneEpisodeInferenceContextCurrent(cached.context)) return null;
+    return cached.result;
+  }
+
+  async function refreshStandaloneEpisodeInference() {
+    const context = getStandaloneEpisodeInferenceContext();
+    if (!context) {
+      state.standaloneEpisodeInference = null;
+      return null;
+    }
+    const cached = state.standaloneEpisodeInference;
+    if (cached && isStandaloneEpisodeInferenceContextCurrent(cached.context, context)) return cached.promise || cached.result;
+    const record = { context, result: null, promise: null };
+    state.standaloneEpisodeInference = record;
+    const selectedEvidence = getCollectionInferenceEpisodeEvidence(context.subject, { total: context.episodes.length, data: context.episodes });
+    if (!selectedEvidence) return null;
+    const isCurrent = () => state.standaloneEpisodeInference === record && isStandaloneEpisodeInferenceContextCurrent(context);
+    // Cache both success and failure for this loaded subject. Refreshing its
+    // data, changing the title, or leaving the route allows a fresh attempt.
+    record.promise = inferStandaloneEpisodeFromPrequels(context, context.subjectId, { selectedEvidence, isCurrent })
+      .then((result) => {
+        if (!isCurrent()) return null;
+        record.result = result;
+        record.promise = null;
+        if (result) render();
+        return result;
+      }).catch(() => {
+        if (isCurrent()) record.promise = null;
+        return null;
+      });
+    return record.promise;
   }
 
 
@@ -13743,6 +13857,7 @@
     state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
       ? null
       : detectCurrentEpisodeNo(state.rawTitle || getPageTitle());
+    refreshStandaloneEpisodeInference().catch(() => {});
   }
 
   async function setCurrentVideoAutoProgressDisabled(disabled) {
@@ -14663,7 +14778,10 @@
   function isCurrentEpisodeNumber(episode, localNo, total) {
     const currentNo = Number(state.currentEpisodeNo);
     if (state.currentEpisodeNo != null && state.currentEpisodeNumberSource === "label") {
-      return Number(localNo) === getEpisodeLabelLocalNo(currentNo);
+      const directNo = getEpisodeLabelLocalNo(currentNo);
+      if (directNo != null) return Number(localNo) === directNo;
+      const inferred = state.standaloneEpisodeInference?.result && getStandaloneEpisodeInferenceResult();
+      return Boolean(inferred && Number(episode && episode.id) === inferred.episodeId);
     }
     if (!Number.isFinite(currentNo) || currentNo <= 0) return false;
     if (!Number.isInteger(currentNo)) return Number(episode && episode.sort) === currentNo;
