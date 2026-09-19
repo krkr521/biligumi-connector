@@ -10120,7 +10120,10 @@
   }
 
   function isPanelLoadActive() {
-    return isSubjectDataLoading() || Boolean(state.busy && state.subjectId) || Boolean(state.nonMainBusy);
+    // A saved binding can exist in search-only mode without loading subject data.
+    const fullPanelLoading = shouldRenderFullPanel()
+      && (isSubjectDataLoading() || Boolean(state.busy && state.subjectId));
+    return fullPanelLoading || Boolean(state.nonMainBusy);
   }
 
   function getPanelProgressState() {
