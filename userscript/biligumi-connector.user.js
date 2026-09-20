@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.23
+// @version      0.7.24
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -49,7 +49,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.23";
+  const SCRIPT_VERSION = "0.7.24";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
