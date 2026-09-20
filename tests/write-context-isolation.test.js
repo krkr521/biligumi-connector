@@ -265,7 +265,7 @@ async function testEditor(source, extension) {
 }
 
 function settingsSandbox(source, extension, store, tokenInput) {
-  const scope = sandbox(source, extension, ["applySettingsFromDialog", "clearSavedAccessToken", "getApiRelayAutoFallbackSetting", "normalizeAccessTokenInput", "isValidAccessToken", "syncAccessTokenFromStorage", "bindAccessTokenChanges", ...(extension ? ["queueClearSavedAccessToken", "bindStorageMirrorUpdates"] : [])], {
+  const scope = sandbox(source, extension, ["applySettingsFromDialog", "setOpedSkipEnabled", "clearSavedAccessToken", "getApiRelayAutoFallbackSetting", "normalizeAccessTokenInput", "isValidAccessToken", "syncAccessTokenFromStorage", "bindAccessTokenChanges", ...(extension ? ["queueClearSavedAccessToken", "bindStorageMirrorUpdates"] : [])], {
     BANGUMI_ACCESS_TOKEN_LENGTH: 40, requestInlineConfirm: async () => true,
     isSettingsDialogOpen: () => true, getLongVideoSettingsContext: () => ({ ownerKey: "" }),
     parseTimecode: () => 0, normalizeLongVideoOffsetSeconds: () => 0, normalizeAutoWatchThreshold: () => 80,

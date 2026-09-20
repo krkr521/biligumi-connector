@@ -1,12 +1,10 @@
 "use strict";
 
-// OP/ED skip duration: global default + per-subject override + hover slider.
-// The seconds in the settings dialog are global; the hover slider on the
-// player "跳OP/ED" button stores a per-subject override (20-100s, 5s step).
-// Legacy per-subject entries that already carry `seconds` keep working as
-// overrides.
+// Persistent OP/ED controls use the settings duration without a hover slider.
+// Legacy per-subject seconds and visibility preferences stay compatible.
 
 const assert = require("node:assert/strict");
+const test = require("node:test");
 
 const {
   USERSCRIPT_PATH,
@@ -14,6 +12,7 @@ const {
   readSource,
   extractFunction,
   extractConstants,
+  extractObjectConstant,
   runInSandbox,
 } = require("./_source");
 
@@ -25,12 +24,8 @@ const CONFIG_FUNCTIONS = [
   "getGlobalOpedSkipSeconds",
   "hasOpedSkipSecondsOverride",
   "setOpedSkipEnabled",
-  "setOpedSkipSecondsOverride",
   "clearOpedSkipSecondsOverride",
-  "applyOpedHoverSliderSeconds",
-  "formatOpedHoverSecondsLabel",
   "normalizeOpedSkipSeconds",
-  "normalizeOpedHoverSliderSeconds",
 ];
 
 // Userscript and extension must keep this logic mirrored byte-for-byte.
@@ -42,28 +37,18 @@ for (const name of CONFIG_FUNCTIONS) {
   );
 }
 
-// The hover-panel UI layer must stay mirrored too (identity-only guard;
-// these functions need a DOM, so behavior is reviewed rather than sandboxed).
-const HOVER_UI_FUNCTIONS = [
+// The button UI layer must stay mirrored too; real DOM interactions
+// are additionally exercised by the isolated browser QA fixture.
+const BUTTON_UI_FUNCTIONS = [
   "refreshOpedSkipButton",
-  "buildOpedSkipHoverPanel",
-  "syncOpedSkipHoverPanel",
-  "handleOpedSkipButtonMouseEnter",
-  "handleOpedSkipButtonMouseLeave",
-  "handleOpedSkipButtonFocusOut",
-  "cancelOpedSkipHoverHide",
-  "scheduleOpedSkipHoverHide",
-  "handleOpedHoverSliderPointerDown",
-  "handleOpedHoverGlobalPointerUp",
-  "handleOpedHoverSliderInput",
-  "handleOpedHoverSliderChange",
-  "isOpedSkipHoverEvent",
   "findOpedSkipButtonPlacement",
+  "shouldShowOpedSkipButton",
+  "skipOpedForActiveVideo",
   "handleOpedSkipButtonClick",
   "handleOpedSkipButtonMouseDown",
   "handleOpedSkipButtonKeydown",
 ];
-for (const name of HOVER_UI_FUNCTIONS) {
+for (const name of BUTTON_UI_FUNCTIONS) {
   assert.equal(
     extractFunction(extensionSource, name),
     extractFunction(userscriptSource, name),
@@ -71,22 +56,9 @@ for (const name of HOVER_UI_FUNCTIONS) {
   );
 }
 
-const CONSTANTS = [
-  "DEFAULT_OPED_SKIP_SECONDS",
-  "OPED_SKIP_SLIDER_MIN",
-  "OPED_SKIP_SLIDER_MAX",
-  "OPED_SKIP_SLIDER_STEP",
-];
+const CONSTANTS = ["DEFAULT_OPED_SKIP_SECONDS"];
 for (const source of [userscriptSource, extensionSource]) {
-  const constants = extractConstants(source, CONSTANTS);
-  assert.equal(constants.DEFAULT_OPED_SKIP_SECONDS, 85);
-  assert.equal(constants.OPED_SKIP_SLIDER_MIN, 20);
-  assert.equal(constants.OPED_SKIP_SLIDER_MAX, 100);
-  assert.equal(constants.OPED_SKIP_SLIDER_STEP, 5);
-  assert.equal(
-    extractConstants(source, ["OPED_SKIP_HOVER_HIDE_DELAY_MS"]).OPED_SKIP_HOVER_HIDE_DELAY_MS,
-    300,
-  );
+  assert.equal(extractConstants(source, CONSTANTS).DEFAULT_OPED_SKIP_SECONDS, 85);
 }
 
 function buildApi(source) {
@@ -97,7 +69,7 @@ function buildApi(source) {
   };
   const code = CONFIG_FUNCTIONS.map((name) => extractFunction(source, name)).join("\n");
   runInSandbox(`${code}\n;globalThis.api = { ${CONFIG_FUNCTIONS.join(", ")} };`, sandbox);
-  return { api: sandbox.api, state: sandbox.state };
+  return { api: sandbox.api, state: sandbox.state, sandbox };
 }
 
 // vm-realm objects fail deepStrictEqual prototypes; compare plain snapshots.
@@ -122,40 +94,19 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.deepEqual(snapshot(api.getOpedSkipConfig()), { enabled: false, seconds: 40 }, label);
   assert.equal(api.hasOpedSkipSecondsOverride(), false, label);
 
-  // Slider commit stores a per-subject override and keeps the enabled flag.
-  assert.equal(api.applyOpedHoverSliderSeconds(65), 65, label);
-  assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false, seconds: 65 }, label);
-  assert.equal(api.getOpedSkipConfig().seconds, 65, label);
-
-  // Returning the slider to the global value clears the override without
-  // touching the per-subject enabled flag.
-  assert.equal(api.applyOpedHoverSliderSeconds(40), 40, label);
+  // Clearing a legacy override preserves the visibility setting.
+  state.opedSkips["123"].seconds = 65;
+  api.clearOpedSkipSecondsOverride();
   assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false }, label);
   assert.equal(api.getOpedSkipConfig().seconds, 40, label);
   assert.equal(api.hasOpedSkipSecondsOverride(), false, label);
   api.clearOpedSkipSecondsOverride();
-  assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false }, `${label}: clearing twice is a no-op`);
+  assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: false }, label);
 
-  // Toggling the button visibility preserves the seconds override.
-  api.setOpedSkipSecondsOverride(75);
+  // Toggling visibility preserves an existing duration override.
+  state.opedSkips["123"].seconds = 75;
   api.setOpedSkipEnabled(true);
   assert.deepEqual(snapshot(state.opedSkips["123"]), { enabled: true, seconds: 75 }, label);
-
-  // Slider normalization: 20-100 range, 5s step, clamped ends.
-  assert.equal(api.normalizeOpedHoverSliderSeconds(20), 20, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds(100), 100, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds(87), 85, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds(88), 90, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds(150), 100, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds(3), 20, label);
-  assert.equal(api.normalizeOpedHoverSliderSeconds("not-a-number"), 20, label);
-
-  // Values beyond the quick slider range are clearly marked as custom instead
-  // of silently presenting a clamped thumb as the exact stored value.
-  assert.equal(api.formatOpedHoverSecondsLabel(180, false), "180 秒 · 自定义", label);
-  assert.equal(api.formatOpedHoverSecondsLabel(180, true), "180 秒 · 自定义", label);
-  assert.equal(api.formatOpedHoverSecondsLabel(85, false), "85 秒 · 全局", label);
-  assert.equal(api.formatOpedHoverSecondsLabel(90, true), "90 秒", label);
 
   // Global seconds normalization still accepts the wider 1-600 range.
   state.opedSkipSeconds = 150;
@@ -163,72 +114,13 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
   assert.equal(api.getOpedSkipConfig().seconds, 75, `${label}: override wins over wide global`);
 }
 
-// Hover interaction: input previews only; change commits once. Pointer
-// cancellation and window blur share the drag cleanup path.
+// Buttons keep keyboard activation while no hover slider can change settings.
 for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
-  const bindBlock = extractFunction(source, "bindOpedSkipButtonEvents");
-  assert.match(bindBlock, /addEventListener\("pointercancel", handleOpedHoverGlobalPointerUp, true\)/, label);
-  assert.match(bindBlock, /addEventListener\("blur", handleOpedHoverGlobalPointerUp\)/, label);
-
-  const buildBlock = extractFunction(source, "buildOpedSkipHoverPanel");
-  assert.match(buildBlock, /addEventListener\("change", handleOpedHoverSliderChange\)/, label);
-  assert.match(buildBlock, /aria-label="当前番剧 OP\/ED 跳过时长"/, label);
-
   const refreshBlock = extractFunction(source, "refreshOpedSkipButton");
-  assert.ok(!/button\.setAttribute\("role", "button"\)/.test(refreshBlock), `${label}: wrapper must not own button semantics`);
   assert.match(refreshBlock, /label\.setAttribute\("role", "button"\)/, label);
   assert.match(refreshBlock, /label\.addEventListener\("keydown", handleOpedSkipButtonKeydown, true\)/, label);
-  assert.match(refreshBlock, /button\.addEventListener\("focusin", handleOpedSkipButtonMouseEnter\)/, label);
-  assert.match(refreshBlock, /button\.addEventListener\("focusout", handleOpedSkipButtonFocusOut\)/, label);
-
-  const inputBlock = extractFunction(source, "handleOpedHoverSliderInput");
-  assert.ok(!/writeJsonValue/.test(inputBlock), `${label}: input must not persist`);
-  assert.ok(!/setOpedSkipSecondsOverride/.test(inputBlock), `${label}: input must not mutate the saved config`);
-
-  const changeBlock = extractFunction(source, "handleOpedHoverSliderChange");
-  assert.match(changeBlock, /applyOpedHoverSliderSeconds\(slider\.value\)/, label);
-  assert.match(changeBlock, /writeJsonValue\(STORAGE\.opedSkips, state\.opedSkips\)/, label);
-}
-
-// Periodic button refreshes must not replace the live preview with the last
-// saved value while a pointer drag (or focused keyboard edit) is in progress.
-for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
-  const slider = { value: "65" };
-  const valueNode = { textContent: "" };
-  const panel = {
-    querySelector(selector) {
-      return selector.includes("slider") ? slider : valueNode;
-    },
-  };
-  const button = { querySelector: () => panel };
-  const sandbox = {
-    state: { opedHoverDragging: true },
-    document: { activeElement: null },
-    OPED_SKIP_HOVER_PANEL_CLASS: "biligumi-oped-hover-panel",
-    normalizeOpedSkipSeconds: Number,
-    normalizeOpedHoverSliderSeconds: Number,
-    getGlobalOpedSkipSeconds: () => 85,
-    hasOpedSkipSecondsOverride: () => false,
-    formatOpedHoverSecondsLabel: (seconds, hasOverride) => `${seconds}:${hasOverride}`,
-  };
-  runInSandbox(`${extractFunction(source, "syncOpedSkipHoverPanel")}
-;globalThis.sync = syncOpedSkipHoverPanel;`, sandbox);
-
-  sandbox.sync(button, { seconds: 85 });
-  assert.equal(slider.value, "65", `${label}: drag preview slider`);
-  assert.equal(valueNode.textContent, "65:true", `${label}: drag preview label`);
-
-  sandbox.state.opedHoverDragging = false;
-  sandbox.document.activeElement = slider;
-  slider.value = "70";
-  sandbox.sync(button, { seconds: 85 });
-  assert.equal(slider.value, "70", `${label}: focused preview slider`);
-  assert.equal(valueNode.textContent, "70:true", `${label}: focused preview label`);
-
-  sandbox.document.activeElement = null;
-  sandbox.sync(button, { seconds: 85 });
-  assert.equal(slider.value, "85", `${label}: idle slider follows saved config`);
-  assert.equal(valueNode.textContent, "85:false", `${label}: idle label follows saved config`);
+  assert.ok(!source.includes("oped-hover-slider"), label);
+  assert.ok(!source.includes("handleOpedHoverSliderChange"), label);
 }
 
 // Settings dialog: the seconds input binds the global value and stays enabled
@@ -244,6 +136,82 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
     !/settings-oped-skip-seconds"[^>]*disabled/.test(renderBlock),
     `${label}: settings seconds input must not be subject-gated anymore`,
   );
+  assert.ok(
+    !/settings-oped-skip-enabled"[^>]*disabled/.test(renderBlock),
+    `${label}: unbound pages can change the default button visibility`,
+  );
+}
+
+// Unbound video pages have working skip controls, not just a visible label.
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  const { api, state, sandbox } = buildApi(source);
+  const writes = [];
+  const video = { currentTime: 10, duration: 300 };
+  Object.assign(sandbox, {
+    STORAGE: extractObjectConstant(source, "STORAGE"),
+    OPED_SKIP_BUTTON_CLASS: "biligumi-oped-skip-btn",
+    getActiveVideoElement: () => video,
+    render: () => {},
+    showError: (error) => { throw error; },
+    writeValue: (key, value) => writes.push([key, value]),
+    writeJsonValue: (key, value) => writes.push([key, snapshot(value)]),
+    document: { title: "普通视频", pictureInPictureElement: null },
+    location: { href: "https://www.bilibili.com/video/BV1test" },
+    notifyExtensionPageState: () => {},
+    isCapturingOpedSkipHotkey: () => false,
+    isEditableTarget: (target) => target.editable,
+    getKeyboardEventHotkey: () => "Ctrl+Alt+ArrowRight",
+  });
+  const names = ["shouldShowOpedSkipButton", "skipOpedForActiveVideo", "handleOpedSkipHotkey"];
+  if (label === "extension") names.push("executeExtensionOpedSkipCommand");
+  runInSandbox(names.map((name) => extractFunction(source, name)).join("\n"), sandbox);
+  state.opedSkipHotkey = "Ctrl+Alt+ArrowRight";
+  assert.equal(sandbox.shouldShowOpedSkipButton(), true, `${label}: visible without a subject`);
+  sandbox.skipOpedForActiveVideo();
+  assert.equal(video.currentTime, 95, `${label}: unbound skip advances by the global duration`);
+  assert.equal(state.autoWatchLastVideoTime, 95, `${label}: skip still updates the auto-watch baseline`);
+
+  const event = { target: {}, preventDefault() {}, stopPropagation() {}, stopImmediatePropagation() {} };
+  sandbox.handleOpedSkipHotkey(event);
+  assert.equal(video.currentTime, 180, `${label}: unbound hotkey works`);
+  sandbox.handleOpedSkipHotkey({ ...event, repeat: true });
+  sandbox.handleOpedSkipHotkey({ ...event, target: { editable: true } });
+  assert.equal(video.currentTime, 180, `${label}: repeated and editable-target keys are ignored`);
+
+  state.opedSkips = { "123": { enabled: false, seconds: 90 } };
+  assert.deepEqual(writes, [], label + ": button and hotkey never write duration settings");
+  assert.equal(state.opedSkipSeconds, 85, label);
+  video.currentTime = 280;
+  sandbox.skipOpedForActiveVideo();
+  assert.equal(video.currentTime, 300, `${label}: skip clamps to the video end`);
+
+  api.setOpedSkipEnabled(false);
+  assert.equal(sandbox.shouldShowOpedSkipButton(), false, `${label}: unbound default can be disabled`);
+  video.currentTime = 10;
+  sandbox.skipOpedForActiveVideo();
+  assert.equal(video.currentTime, 10, `${label}: disabled controls cannot seek`);
+  state.subjectId = 456;
+  assert.equal(api.getOpedSkipConfig().enabled, false, `${label}: a new subject follows the default visibility`);
+  api.setOpedSkipEnabled(true);
+  assert.equal(sandbox.shouldShowOpedSkipButton(), true, `${label}: explicit subject preference overrides the default`);
+  state.subjectId = 0;
+  assert.equal(sandbox.shouldShowOpedSkipButton(), false, `${label}: leaving the subject restores the default`);
+  api.setOpedSkipEnabled(true);
+  state.subjectId = 123;
+  assert.deepEqual(snapshot(api.getOpedSkipConfig()), { enabled: false, seconds: 90 }, `${label}: legacy subject preference remains intact`);
+  state.subjectId = 0;
+  assert.deepEqual(snapshot(api.getOpedSkipConfig()), { enabled: true, seconds: 85 }, `${label}: unbinding restores global controls`);
+  assert.ok(!Object.hasOwn(state.opedSkips, "0") && !Object.hasOwn(state.opedSkips, ""), `${label}: no synthetic subject settings`);
+
+  if (label === "extension") {
+    assert.equal(sandbox.executeExtensionOpedSkipCommand().ok, true, "extension: actual browser-command entry point works without a binding");
+    assert.equal(video.currentTime, 95);
+    api.setOpedSkipEnabled(false);
+    assert.deepEqual(snapshot(sandbox.executeExtensionOpedSkipCommand()), { ok: false, handled: true, reason: "disabled" });
+    api.setOpedSkipEnabled(true);
+    sandbox.getActiveVideoElement = () => null;
+    assert.equal(sandbox.executeExtensionOpedSkipCommand().reason, "no-video");
+  }
 }
 
 // Placement: the button anchors to the rendered time label only. The bare
@@ -254,6 +222,72 @@ for (const [label, source] of [["userscript", userscriptSource], ["extension", e
     !/control-bottom-left/.test(placementBlock),
     `${label}: placement must not fall back to the bare bottom-left container`,
   );
+}
+
+for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
+  test(`${label}: unbound settings save and reset persist the default controls`, async () => {
+    const { api, state, sandbox } = buildApi(source);
+    const store = {};
+    const noop = () => {};
+    const inputs = {
+      "settings-oped-skip-enabled": { checked: false },
+      "settings-oped-skip-seconds": { value: "45" },
+      "settings-oped-skip-hotkey": { value: "", dataset: {} },
+    };
+    const settings = { querySelector: (selector) => inputs[selector.match(/settings-[\w-]+/)[0]] || null };
+    Object.assign(state, {
+      token: "", whitelist: [], whitelistLabels: {}, longVideoEpisodeOffsets: {}, autoWatchThresholds: {},
+      characterStripEnabled: false, subjectInfoPanelEnabled: false, longVideoEpisodeGuessEnabled: false,
+      opedSkips: { "123": { enabled: false, seconds: 90 } },
+    });
+    const write = (key, value) => { store[key] = snapshot(value); };
+    Object.assign(sandbox, {
+      STORAGE: extractObjectConstant(source, "STORAGE"), SETTINGS_ID: "settings",
+      ...extractConstants(source, ["DEFAULT_CHARACTER_STRIP_ENABLED", "DEFAULT_SUBJECT_INFO_PANEL_ENABLED", "DEFAULT_AUTO_WATCH_THRESHOLD", "DEFAULT_OPED_SKIP_HOTKEY"]),
+      document: { getElementById: () => settings }, isSettingsDialogOpen: () => true,
+      normalizeAccessTokenInput: () => "", isValidAccessToken: () => false,
+      getApiRelayAutoFallbackSetting: () => false, getLongVideoSettingsContext: () => ({ ownerKey: "" }),
+      parseTimecode: () => 0, normalizeLongVideoOffsetSeconds: () => 0,
+      normalizeAutoWatchThreshold: () => 80, normalizeHotkey: () => "",
+      parseWhitelistInput: () => ({ items: [], labels: {} }), pruneWhitelistLabels: () => ({}),
+      setAccessTokenState: (token) => { state.token = token; },
+      requestInlineConfirm: async () => true,
+      writeValue: write, writeJsonValue: write, writeListValue: write,
+      writeValueAsync: async (...args) => write(...args),
+      writeJsonValueAsync: async (...args) => write(...args), writeListValueAsync: async (...args) => write(...args),
+    });
+    for (const name of ["setAutoWatchThreshold", "refreshSettingsTokenHelp", "updateAutoWatchThresholdPreview", "syncSubjectInfoPanel", "syncCharacterStrip", "layoutPanelWithoutOwningBiliDom", "refreshOpedSkipButton", "resetAutoWatchObservationState", "remountSettingsDialog", "render"]) sandbox[name] = noop;
+    runInSandbox(
+      extractFunction(source, "applySettingsFromDialog", { async: label === "extension" })
+      + extractFunction(source, "resetSettingsToDefaults", { async: true }), sandbox,
+    );
+    assert.equal(await sandbox.applySettingsFromDialog(), true);
+    assert.deepEqual(store[sandbox.STORAGE.opedSkips], {
+      "123": { enabled: false, seconds: 90 }, default: { enabled: false },
+    });
+    assert.equal(store[sandbox.STORAGE.opedSkipSeconds], "45");
+    const reloaded = buildApi(source);
+    reloaded.state.opedSkips = store[sandbox.STORAGE.opedSkips];
+    reloaded.state.opedSkipSeconds = store[sandbox.STORAGE.opedSkipSeconds];
+    assert.deepEqual(snapshot(reloaded.api.getOpedSkipConfig()), { enabled: false, seconds: 45 });
+
+    await sandbox.resetSettingsToDefaults();
+    assert.deepEqual(snapshot(api.getOpedSkipConfig()), { enabled: true, seconds: 85 });
+    assert.deepEqual(store[sandbox.STORAGE.opedSkips], {
+      "123": { enabled: false, seconds: 90 }, default: { enabled: true },
+    });
+    assert.equal(store[sandbox.STORAGE.opedSkipSeconds], "85");
+
+    state.opedSkips.default.enabled = false;
+    state.opedSkips["456"] = { enabled: false, seconds: 60 };
+    state.subjectId = 123;
+    await sandbox.resetSettingsToDefaults();
+    assert.deepEqual(store[sandbox.STORAGE.opedSkips], {
+      "123": { enabled: true }, "456": { enabled: false, seconds: 60 }, default: { enabled: true },
+    }, "reset from a bound page restores the global default and current subject, preserving other subjects");
+    state.subjectId = 0;
+    assert.equal(api.getOpedSkipConfig().enabled, true);
+  });
 }
 
 console.log("oped skip config tests passed");
