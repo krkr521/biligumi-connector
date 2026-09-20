@@ -3315,6 +3315,7 @@
     if (reuseSubject && document.getElementById(PANEL_ID)) {
       render(true);
       repositionPanel();
+      schedulePanelReposition();
       scheduleEpisodeContextRefresh();
     } else {
       injectWhenReady(true);

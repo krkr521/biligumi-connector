@@ -99,7 +99,7 @@ function routeHarness(source, extension, extraNames = []) {
   scope.repositionPanel = () => { scope.repositionCount += 1; };
   scope.scheduleEpisodeContextRefresh = () => { scope.episodeScheduleCount += 1; };
   const names = [
-    "scheduleRouteRefresh", "refreshAfterRouteChange", "resetAutoWatchObservationState",
+    "scheduleRouteRefresh", "refreshAfterRouteChange", "schedulePanelReposition", "resetAutoWatchObservationState",
     "refreshCurrentEpisodeRecognitionState", "trackCollectionWrite",
     "captureCollectionOperationContext", "isCollectionOperationContextCurrent",
     ...(extension ? ["captureRouteContext", "isRouteContextCurrent"] : ["capturePageContext", "isCurrentPageContext"]),
@@ -198,6 +198,43 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
     assert.equal(scope.episodeScheduleCount, 1);
     assert.equal(scope.isCollectionOperationContextCurrent(oldOperation), false);
     assert.equal(scope.isCollectionOperationContextCurrent(scope.captureCollectionOperationContext()), true);
+  });
+
+  test(`${label}: a reused panel follows a layout anchor that expands after navigation settles`, () => {
+    const scope = routeHarness(source, extension, ["repositionPanel", "layoutPanelWithoutOwningBiliDom"]);
+    let anchorBottom = 100;
+    const anchor = { getBoundingClientRect: () => ({ bottom: anchorBottom }) };
+    const rightColumn = {
+      querySelector: () => ({ querySelector: () => anchor }),
+      getBoundingClientRect: () => ({ left: 900, width: 340 }),
+    };
+    scope.document.body = {};
+    Object.assign(scope.panel, {
+      parentElement: scope.document.body,
+      style: {},
+      classList: { toggle: noop },
+      getBoundingClientRect: () => ({ height: 400 }),
+    });
+    scope.findRightColumn = () => rightColumn;
+    scope.findOfficialBangumiLayoutAnchor = () => null;
+    scope.hasOverlappingBiliMusicOverlay = () => false;
+    scope.isVisible = () => true;
+    scope.reserveLayoutSpace = noop;
+    scope.stabilizePanelReserve = (_panel, reserve) => reserve;
+    const panel = scope.panel;
+    const subject = scope.state.subject;
+    beginRoute(scope);
+    scope.timers.length = 0;
+    completeRoute(scope);
+    assert.equal(panel.style.top, "112px");
+    const layoutTimers = scope.timers.splice(0).sort((left, right) => left.delay - right.delay);
+    for (const timer of layoutTimers.filter(({ delay }) => delay < 600)) timer.callback();
+    anchorBottom += 140;
+    for (const timer of layoutTimers.filter(({ delay }) => delay >= 600)) timer.callback();
+    assert.equal(panel.style.top, "252px", "late Bilibili layout changes must reposition the retained panel without scrolling");
+    assert.equal(scope.panel, panel);
+    assert.equal(scope.state.subject, subject);
+    assert.deepEqual(scope.injections, [], "layout recovery must not remount or reload the subject");
   });
 
   test(`${label}: repeated route notifications and a rapid second navigation keep one reusable snapshot`, async () => {
