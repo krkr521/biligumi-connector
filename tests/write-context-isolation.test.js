@@ -33,7 +33,7 @@ function sandbox(source, extension, names, extra = {}) {
     ...extra,
   };
   const functions = [...new Set([
-    "captureCollectionOperationContext", "isCollectionOperationContextCurrent", "setAccessTokenState",
+    "captureCollectionOperationContext", "isCollectionOperationContextCurrent", "setAccessTokenState", "trackCollectionWrite",
     "ensureToken", "hasCollection", "getCollectionType", "ensureCollectionForEpisodeSync",
     "getNormalEpisodes", "getEpisodeCollectionType",
     ...(extension ? ["captureRouteContext", "isRouteContextCurrent", "ensureRouteContext"] : ["capturePageContext", "isCurrentPageContext"]),

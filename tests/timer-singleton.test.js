@@ -172,6 +172,7 @@ const SUBJECT_INFO_ID = "biligumi-connector-subject-info";
 const CHARACTER_STRIP_ID = "biligumi-connector-characters";
 
 const TIMER_SOURCE = [
+  extractFunction(userscriptSource, "updatePanelHtml"),
   extractFunction(userscriptSource, "syncSubjectInfoPanel"),
   extractFunction(userscriptSource, "scheduleSubjectInfoSyncRetry"),
   extractFunction(userscriptSource, "cancelSubjectInfoSyncRetry"),
@@ -201,6 +202,7 @@ function createSandbox(opts = {}) {
   const location = { pathname: opts.pathname || "/video/BV1TEST", hostname: "www.bilibili.com" };
 
   const sandbox = {
+    panelMarkupCache: new WeakMap(),
     SUBJECT_INFO_ID,
     CHARACTER_STRIP_ID,
     PANEL_ID: "biligumi-connector-panel",

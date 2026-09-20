@@ -5,7 +5,7 @@ const test = require("node:test");
 const { USERSCRIPT_PATH, EXTENSION_PATH, readSource, extractFunction, runInSandbox } = require("./_source");
 
 const functions = [
-  "render", "renderStandaloneSearchPanel", "shouldRenderFullPanel", "isSubjectDataLoading",
+  "render", "updatePanelHtml", "renderStandaloneSearchPanel", "shouldRenderFullPanel", "isSubjectDataLoading",
   "isPanelLoadActive", "getPanelProgressState", "renderPanelProgressSlot", "updatePanelProgressBar",
   "beginPanelLoad", "advancePanelLoad", "finishPanelLoad",
 ];
@@ -45,6 +45,7 @@ function setup(source) {
       panelCollapsed: false, standaloneSearchExpanded: false,
     },
     panelLoadProgress: { total: 0, done: 0, label: "", loadId: 0 },
+    panelMarkupCache: new WeakMap(),
     PANEL_ID: "biligumi-panel", SCRIPT_VERSION: "test", EXTENSION_VERSION: "test", BGM_WEB_BASE: "https://bgm.tv",
     document: { getElementById: () => panel },
     escapeHtml: (value) => String(value),

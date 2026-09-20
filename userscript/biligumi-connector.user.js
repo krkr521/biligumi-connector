@@ -163,6 +163,8 @@
   const subjectBundleRequests = new Map();
   const nonMainPreviewRequests = new Map();
   const panelInputDraftContexts = new WeakMap();
+  const panelEventNodes = new WeakSet();
+  const panelMarkupCache = new WeakMap();
   const subjectInfoLinkRequests = new Map();
   const subjectInfoLinkCache = new Map();
   const animeMovieClassificationRequests = new Map();
@@ -240,6 +242,11 @@
     whitelistLabels: readJsonValue(STORAGE.whitelistLabels, {}),
     subjectId: null,
     subject: null,
+    subjectBundleContext: null,
+    collectionWriteCount: 0,
+    collectionWriteVersion: 0,
+    routeRefreshPending: false,
+    routeSubjectReuse: null,
     subjectInfoLinks: {},
     subjectInfoWebRows: [],
     characters: [],
@@ -3252,6 +3259,22 @@
   }
 
   function scheduleRouteRefresh(previousRawTitle, previousPageKey = state.pageKey) {
+    if (!state.routeRefreshPending) {
+      const bundle = state.subjectBundleContext;
+      // Capture before setting busy, and retain the decision across duplicate
+      // history/observer notifications. A partially saved bundle is not reusable.
+      state.routeSubjectReuse = bundle && state.subject
+        && Number(state.subject.id) === Number(state.subjectId)
+        && bundle.subjectId === Number(state.subjectId)
+        && bundle.token === String(state.token || "")
+        && bundle.collectionRefreshContext === state.collectionRefreshContext
+        && !state.busy && !state.autoEpisodeSyncing && !state.collectionWriteCount
+        && !state.pendingCollection && !state.error && !state.inlineConfirm
+        && !state.longVideoBindingPrompt && !state.apiRelayPrompt
+        && !state.searchResults.length && !subjectBundleRequests.size
+        ? bundle : null;
+    }
+    state.routeRefreshPending = true;
     if (state.officialBangumiPlayingSection && state.officialBangumiPlayingSection.href !== location.href) state.officialBangumiPlayingSection = null;
     const seq = ++routeRefreshSeq;
     invalidatePageInitialState();
@@ -3269,7 +3292,13 @@
     state.message = "正在等待 B站页面更新...";
     state.error = "";
     state.searchResults = [];
-    render();
+    if (state.routeSubjectReuse) {
+      const panel = document.getElementById(PANEL_ID);
+      if (panel) panel.inert = true;
+      hideEpisodeTooltip();
+    } else {
+      render();
+    }
     [350, 900, 1800, 3000].forEach((delay, index, list) => {
       window.setTimeout(() => {
         const refresh = () => refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, index === list.length - 1);
@@ -3289,19 +3318,30 @@
 
     refreshPageContext();
     state.subjectId = getCurrentBinding();
-    state.subject = null;
-    state.subjectInfoLinks = {};
-    state.subjectInfoWebRows = [];
-    state.characters = [];
-    state.characterError = "";
+    const bundle = state.routeSubjectReuse;
+    const reuseSubject = Boolean(bundle && bundle === state.subjectBundleContext
+      && bundle.subjectId === Number(state.subjectId)
+      && bundle.token === String(state.token || "")
+      && bundle.collectionRefreshContext === state.collectionRefreshContext
+      && !state.collectionWriteCount && shouldRenderFullPanel());
+    state.routeRefreshPending = false;
+    state.routeSubjectReuse = null;
+    if (!reuseSubject) {
+      state.subject = null;
+      state.subjectBundleContext = null;
+      state.subjectInfoLinks = {};
+      state.subjectInfoWebRows = [];
+      state.characters = [];
+      state.characterError = "";
+      state.collection = null;
+      state.episodes = [];
+      state.episodeCollections = [];
+    }
     state.previewSubject = null;
     state.previewCharacters = [];
     state.previewCharacterError = "";
     state.previewCharacterKey = "";
     state.previewCharacterBusy = false;
-    state.collection = null;
-    state.episodes = [];
-    state.episodeCollections = [];
     state.settingsOpen = false;
     state.collectionEditorOpen = false;
     state.collectionEditorContext = null;
@@ -3324,9 +3364,18 @@
     clearLongVideoBindingPrompt();
     settleInlineConfirm(false);
     state.longVideoIdentifyDismissedKey = "";
+    refreshCurrentEpisodeRecognitionState();
+    panelLoadProgress.loadId += 1;
+    finishPanelLoad();
     refreshOpedSkipButton();
     refreshDanmakuFavoriteButtons();
-    injectWhenReady(true);
+    if (reuseSubject && document.getElementById(PANEL_ID)) {
+      render(true);
+      repositionPanel();
+      scheduleEpisodeContextRefresh();
+    } else {
+      injectWhenReady(true);
+    }
   }
 
   function refreshPageContext() {
@@ -3758,10 +3807,11 @@
     return Boolean(node && (node.offsetWidth || node.offsetHeight || node.getClientRects().length));
   }
 
-  function render() {
+  function render(preserveContent = false) {
     hideEpisodeTooltip();
     const panel = document.getElementById(PANEL_ID);
     if (!panel) return;
+    panel.inert = Boolean(state.routeRefreshPending);
     const inputDrafts = capturePanelInputDrafts(panel);
     updateCurrentWhitelistLabel();
     syncSettingsDialog();
@@ -3772,7 +3822,7 @@
       const nonMainKeyword = getNonMainPreviewKeyword();
       const collapseStandalonePanel = !nonMainKeyword && !state.standaloneSearchExpanded && !state.longVideoBindingPrompt && !(state.inlineConfirm && state.inlineConfirm.context === "panel");
       panel.className = `biligumi-panel biligumi-free-search-panel${collapseStandalonePanel ? " biligumi-panel-collapsed" : ""}${state.nonMainBusy ? " biligumi-panel-loading" : ""}`;
-      panel.innerHTML = renderStandaloneSearchPanel(nonMainKeyword);
+      updatePanelHtml(panel, renderStandaloneSearchPanel(nonMainKeyword), preserveContent);
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3802,7 +3852,7 @@
     `;
 
     if (state.panelCollapsed) {
-      panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;
+      updatePanelHtml(panel, `${headerHtml}${renderInlineConfirm()}`, preserveContent);
       bindPanelEvents();
       restorePanelInputDrafts(panel, inputDrafts);
       layoutPanelWithoutOwningBiliDom();
@@ -3812,7 +3862,7 @@
       return;
     }
 
-    panel.innerHTML = `
+    updatePanelHtml(panel, `
       ${headerHtml}
       ${renderPanelProgressSlot()}
       ${renderSearchOrSubject()}
@@ -3823,7 +3873,7 @@
         <span>${state.busy ? "处理中..." : progress.summary} · v${SCRIPT_VERSION}</span>
         ${footerLink}
       </div>
-    `;
+    `, preserveContent);
 
     bindPanelEvents();
     restorePanelInputDrafts(panel, inputDrafts);
@@ -3833,6 +3883,55 @@
     refreshOpedSkipButton();
     const inlineAutoKeyword = getInlineAutoPreviewKeyword();
     if (inlineAutoKeyword) ensureNonMainPreviewSearch(inlineAutoKeyword);
+  }
+
+  function updatePanelHtml(panel, html, preserveContent = false) {
+    if (preserveContent && panelMarkupCache.get(panel) === html) return;
+    if (preserveContent && panelMarkupCache.has(panel)) {
+      const template = document.createElement("template");
+      template.innerHTML = html;
+      reconcilePanelChildren(panel, template.content);
+    } else {
+      panel.innerHTML = html;
+    }
+    panelMarkupCache.set(panel, html);
+  }
+
+  function reconcilePanelChildren(parent, nextParent) {
+    const key = (node) => node.nodeType === 1
+      ? [node.nodeName, node.id, node.getAttribute("data-role"), node.getAttribute("data-action"),
+        node.getAttribute("data-episode-id"), (node.getAttribute("class") || "").split(/\s+/)[0]].join("|")
+      : String(node.nodeType);
+    let current = parent.firstChild;
+    for (const next of Array.from(nextParent.childNodes)) {
+      const nextKey = key(next);
+      if (!current || key(current) !== nextKey) {
+        let match = current && current.nextSibling;
+        while (match && key(match) !== nextKey) match = match.nextSibling;
+        const node = match || next.cloneNode(true);
+        parent.insertBefore(node, current);
+        current = node;
+      }
+      if (!current.isEqualNode(next)) {
+        if (current.nodeType === 1) {
+          for (const attribute of Array.from(current.attributes)) {
+            if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+          }
+          for (const attribute of Array.from(next.attributes)) {
+            if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
+          }
+          reconcilePanelChildren(current, next);
+        } else {
+          current.nodeValue = next.nodeValue;
+        }
+      }
+      current = current.nextSibling;
+    }
+    while (current) {
+      const next = current.nextSibling;
+      current.remove();
+      current = next;
+    }
   }
 
   function capturePanelInputDrafts(panel) {
@@ -3882,6 +3981,8 @@
     ["search-keyword", "progress"].forEach((role) => {
       const input = panel.querySelector(`[data-role='${role}']`);
       if (!input) return;
+      const previousContext = panelInputDraftContexts.get(input);
+      if (previousContext && !isPanelInputDraftContextCurrent(previousContext)) input.value = input.defaultValue;
       panelInputDraftContexts.set(input, {
         pageKey: state.pageKey,
         routeSeq: routeRefreshSeq,
@@ -3932,7 +4033,7 @@
     }
     syncSubjectSideLayout(host);
 
-    box.innerHTML = renderSubjectInfoPanel();
+    updatePanelHtml(box, renderSubjectInfoPanel(), true);
   }
 
   function removeSubjectInfoPanel() {
@@ -3995,7 +4096,7 @@
       host.node.parentElement.insertBefore(strip, host.node);
     }
 
-    strip.innerHTML = renderCharacterStrip();
+    updatePanelHtml(strip, renderCharacterStrip(), true);
   }
 
   function ensureOfficialCharacterStripPreview() {
@@ -5536,26 +5637,32 @@
     if (!panel) return;
     bindPanelInputDrafts(panel);
     const collectionStart = panel.querySelector("[data-role='collection-binding-start']");
-    if (collectionStart) collectionStart.addEventListener("change", handleCollectionBindingStartChange);
+    if (collectionStart && !panelEventNodes.has(collectionStart)) {
+      panelEventNodes.add(collectionStart);
+      collectionStart.addEventListener("change", handleCollectionBindingStartChange);
+    }
 
     const typeSelect = panel.querySelector("[data-role='subject-type']");
-    if (typeSelect) {
+    if (typeSelect && !panelEventNodes.has(typeSelect)) {
+      panelEventNodes.add(typeSelect);
       typeSelect.addEventListener("change", (event) => {
-        if (!event.isTrusted) return;
+        if (!event.isTrusted || state.routeRefreshPending) return;
         updateCollection({ type: Number(typeSelect.value) }).catch(showError);
       });
     }
 
     const rateSelect = panel.querySelector("[data-role='rate']");
-    if (rateSelect) {
+    if (rateSelect && !panelEventNodes.has(rateSelect)) {
+      panelEventNodes.add(rateSelect);
       rateSelect.addEventListener("change", (event) => {
-        if (!event.isTrusted) return;
+        if (!event.isTrusted || state.routeRefreshPending) return;
         updateCollection({ rate: Number(rateSelect.value) }).catch(showError);
       });
     }
 
     const starBox = panel.querySelector("[data-role='rate-stars']");
-    if (starBox) {
+    if (starBox && !panelEventNodes.has(starBox)) {
+      panelEventNodes.add(starBox);
       starBox.addEventListener("mouseover", handleRatePreviewEvent);
       starBox.addEventListener("focusin", handleRatePreviewEvent);
       starBox.addEventListener("mouseout", handleRatePreviewLeave);
@@ -5563,7 +5670,8 @@
     }
 
     const episodeGrid = panel.querySelector(".biligumi-episode-grid");
-    if (episodeGrid) {
+    if (episodeGrid && !panelEventNodes.has(episodeGrid)) {
+      panelEventNodes.add(episodeGrid);
       episodeGrid.addEventListener("mouseover", (event) => {
         episodeTooltipPointer.x = event.clientX;
         episodeTooltipPointer.y = event.clientY;
@@ -5588,8 +5696,8 @@
         hideEpisodeTooltip();
       });
       episodeGrid.addEventListener("scroll", hideEpisodeTooltip);
-      restoreEpisodeTooltipIfNeeded(episodeGrid);
     }
+    if (episodeGrid) restoreEpisodeTooltipIfNeeded(episodeGrid);
   }
 
   document.addEventListener("click", handlePanelClick, true);
@@ -5604,6 +5712,10 @@
     const inSettings = Boolean(settings && settings.contains(event.target));
     const inApiRelay = Boolean(apiRelay && apiRelay.contains(event.target));
     if (!inPanel && !inSettings && !inApiRelay) return;
+    if (state.routeRefreshPending) {
+      blockPanelEvent(event);
+      return;
+    }
     if (!event.isTrusted) {
       blockPanelEvent(event);
       return;
@@ -5707,6 +5819,7 @@
   }
 
   function handlePanelKeydown(event) {
+    if (state.routeRefreshPending) return;
     if (!event.isTrusted) return;
     if (event.key === "Escape") {
       const settings = document.getElementById(SETTINGS_ID);
@@ -5737,6 +5850,7 @@
   }
 
   function handlePanelContextMenu(event) {
+    if (state.routeRefreshPending) return;
     const panel = document.getElementById(PANEL_ID);
     if (!panel || !panel.contains(event.target)) return;
 
@@ -6816,6 +6930,7 @@
   }
 
   async function loadSubjectBundleFresh(subjectId, tokenSnapshot, pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq }, uiContext = { searchSeq: subjectSearchSeq }) {
+    const reusableWriteVersion = state.collectionWriteCount ? null : (state.collectionWriteVersion || 0);
     setBusy("正在读取 Bangumi 数据...");
     let loadId = 0;
     const collectionRefreshContext = state.collectionRefreshContext;
@@ -6849,6 +6964,8 @@
       state.characterError = charactersResult.error;
       state.collection = mergePendingCollection(collection);
       state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
+      state.subjectBundleContext = reusableWriteVersion !== null && reusableWriteVersion === (state.collectionWriteVersion || 0)
+        ? { subjectId, token: String(tokenSnapshot || ""), collectionRefreshContext } : null;
       // A newer search owns the panel status, even while this subject's shared
       // data request is still valid and should finish populating its details.
       if (uiContext.searchSeq === subjectSearchSeq) {
@@ -6868,6 +6985,7 @@
 
   async function loadSubjectBundlePreservingLocal(localCollection) {
     if (!state.subjectId) return;
+    const reusableWriteVersion = state.collectionWriteCount ? null : (state.collectionWriteVersion || 0);
     const subjectId = Number(state.subjectId);
     const tokenSnapshot = state.token || "";
     const pageContext = { pageKey: state.pageKey, routeSeq: routeRefreshSeq };
@@ -6903,6 +7021,8 @@
       state.characterError = charactersResult.error;
       state.collection = mergePendingCollection(collection);
       state.episodeCollections = episodeCollections && episodeCollections.data ? episodeCollections.data : [];
+      state.subjectBundleContext = reusableWriteVersion !== null && reusableWriteVersion === (state.collectionWriteVersion || 0)
+        ? { subjectId: Number(subjectId), token: String(tokenSnapshot || ""), collectionRefreshContext } : null;
       state.busy = false;
       state.error = "";
       render();
@@ -7277,7 +7397,7 @@
     if (!isCollectionOperationContextCurrent(context)) return;
     if (!tokenUsername) throw new Error("无法读取 Access Token 对应的 Bangumi 账号，已停止删除。");
     try {
-      await requestBangumiFirstPartyDelete(subjectId, tokenUsername, context.token, context);
+      await trackCollectionWrite(requestBangumiFirstPartyDelete(subjectId, tokenUsername, context.token, context));
     } catch (error) {
       if (isCollectionOperationContextCurrent(context)) throw error;
       return;
@@ -7745,6 +7865,7 @@
   }
 
   async function checkAutoWatchProgress() {
+    if (state.routeRefreshPending) return;
     if (!isSupportedWatchPage()) return;
     if (isCurrentVideoAutoProgressDisabled()) return;
     const video = getActiveVideoElement();
@@ -8939,6 +9060,7 @@
   }
 
   function handleAutoWatchSeekEnd(video) {
+    if (state.routeRefreshPending) return;
     if (isCurrentVideoAutoProgressDisabled()) {
       state.autoWatchSeekStartTime = null;
       return;
@@ -9345,6 +9467,7 @@
     const nextToken = String(token || "");
     if (nextToken === state.token) return false;
     state.token = nextToken;
+    state.subjectBundleContext = null;
     state.username = "";
     state.collection = null;
     state.episodeCollections = [];
@@ -10401,7 +10524,8 @@
         window.setTimeout(() => pendingRequests.delete(dedupKey), REQUEST_DEDUP_TTL);
       });
     }
-    return promise;
+    return options.auth && /^(POST|PATCH|DELETE)$/i.test(method) && String(path).startsWith("/v0/users/-/collections/")
+      ? trackCollectionWrite(promise) : promise;
   }
 
   function buildBgmApiUrl(path, baseUrl = API_BASE) {
@@ -10411,6 +10535,18 @@
       throw new Error("Blocked Bangumi API target");
     }
     return `${baseUrl}${normalizedPath}`;
+  }
+
+  function trackCollectionWrite(promise) {
+    state.collectionWriteCount = (state.collectionWriteCount || 0) + 1;
+    state.collectionWriteVersion = (state.collectionWriteVersion || 0) + 1;
+    state.subjectBundleContext = null;
+    return Promise.resolve(promise).finally(() => {
+      state.collectionWriteCount -= 1;
+      state.collectionWriteVersion += 1;
+      // A read that raced this write cannot become a reusable snapshot.
+      state.subjectBundleContext = null;
+    });
   }
 
   async function bgmRequestPagedData(path, options = {}) {
@@ -12217,7 +12353,7 @@
   }
 
   function refreshEpisodeContextIfChanged(seq) {
-    if (seq !== episodeContextRefreshSeq) return;
+    if (state.routeRefreshPending || seq !== episodeContextRefreshSeq) return;
     const rawTitle = getPageTitle();
     refreshCurrentBindingIfChanged();
     refreshStandaloneEpisodeInference().catch(() => {});
@@ -12225,7 +12361,7 @@
       if (state.currentEpisodeNo !== null) {
         state.rawTitle = rawTitle;
         state.currentEpisodeNo = null;
-        render();
+        render(true);
       }
       return;
     }
@@ -12242,7 +12378,7 @@
       ) {
         state.rawTitle = rawTitle;
         state.currentEpisodeNo = null;
-        render();
+        render(true);
       }
       return;
     }
@@ -12250,7 +12386,7 @@
       && previousNumberSource === state.currentEpisodeNumberSource) return;
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
-    render();
+    render(true);
   }
 
   function refreshCurrentBindingIfChanged() {

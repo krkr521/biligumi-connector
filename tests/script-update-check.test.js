@@ -92,7 +92,7 @@ assert.match(renderSettingsDialog, /aria-live="polite"/);
 
 const renderPanel = extractFunction(source, "render");
 assert.equal(renderPanel.includes("renderScriptUpdateBanner()"), false, "the update banner must not be rendered as a top-level panel layer");
-assert.ok(renderPanel.includes('panel.innerHTML = `${headerHtml}${renderInlineConfirm()}`;'), "collapsed bound panel must render only its header and pending inline confirmation");
+assert.ok(renderPanel.includes('updatePanelHtml(panel, `${headerHtml}${renderInlineConfirm()}`, preserveContent);'), "collapsed bound panel must render only its header and pending inline confirmation");
 
 const renderPanelNoticeSlot = extractFunction(source, "renderPanelNoticeSlot");
 assert.match(renderPanelNoticeSlot, /renderScriptUpdateBanner\(\)/, "userscript panel notice slot must render the update warning");
