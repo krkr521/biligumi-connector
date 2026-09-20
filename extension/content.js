@@ -12958,7 +12958,18 @@
     const identities = titles.map(getCollectionInferenceSeasonInfo).filter(Boolean);
     const seasons = [...new Set(identities.map((identity) => identity.seasonNo))];
     if (seasons.length !== 1) return null;
-    return { seasonNo: seasons[0], bases: [...new Set(identities.map((identity) => identity.base))] };
+    // Upload titles may omit the stylized Re: prefix. These source-only aliases
+    // must not relax the identity checks between API prequel/sequel subjects.
+    const sourceBases = titles.map((title) => title.normalize("NFKC").trim())
+      .filter((title) => /^re\s*:\s*(?=[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}])/iu.test(title))
+      .map((title) => getCollectionInferenceSeasonInfo(title.replace(/^re\s*:\s*/iu, "")))
+      .filter((identity) => identity?.seasonNo === seasons[0] && Array.from(identity.base).length >= 6)
+      .map((identity) => identity.base);
+    return {
+      seasonNo: seasons[0],
+      bases: [...new Set(identities.map((identity) => identity.base))],
+      sourceBases: [...new Set(sourceBases)],
+    };
   }
 
   function collectionInferenceTitlesMatch(left, right) {
@@ -12971,11 +12982,14 @@
     if (seasonNo !== identity.seasonNo) return false;
     const title = String(context.collectionTitle || context.videoTitle || "").normalize("NFKC").toLowerCase();
     const compact = title.replace(/[^\p{L}\p{N}]+/gu, "");
-    return identity.bases.some((base) => {
+    if (identity.bases.some((base) => {
       if (base.length >= 5) return compact.includes(base);
       // Short aliases such as "re0" require a whole token, not an arbitrary substring.
       return /^[a-z0-9]+$/.test(base) && title.split(/[^\p{L}\p{N}]+/u).includes(base);
-    });
+    })) return true;
+    if (!identity.sourceBases?.length) return false;
+    const source = getCollectionInferenceSeasonInfo(title);
+    return Boolean(source && source.seasonNo === seasonNo && identity.sourceBases.includes(source.base));
   }
 
   function getCollectionInferenceSourceCount(context) {

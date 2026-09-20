@@ -144,6 +144,90 @@ for (const [label, file] of [["userscript", USERSCRIPT_PATH], ["extension", EXTE
     assert.equal(api.getEpisodeLabelLocalNo(17), null, "the existing label path alone cannot identify this video");
   });
 
+  test(`${label}: the user's omitted Re prefix title flows through context, prequels and the current-episode consumer`, async () => {
+    const api = setup(source);
+    const bvid = "BV1GgeP6QEPx";
+    const title = "『从零开始的异世界生活 第四季』第17话";
+    api.rawTitle = api.state.rawTitle = title;
+    api.state.pageKey = `video:${bvid}`;
+    api.location.pathname = `/video/${bvid}/`;
+    api.location.href = `https://www.bilibili.com/video/${bvid}/`;
+    api.part = { bvid, partNo: 1, partCount: 1, title };
+    api.initialState.videoData.bvid = bvid;
+    const current = api.getStandaloneEpisodeInferenceContext();
+    assert.ok(current, "the full Chinese work name and fourth season should remain recognizable without Re:");
+    assert.equal(current.episodeNo, 17);
+    assert.equal(current.seasonNo, 4);
+    assert.equal(api.getCurrentNormalEpisode(), null, "no offset is available before checking the API evidence");
+    await api.refreshStandaloneEpisodeInference();
+    assertInference(api.getStandaloneEpisodeInferenceResult());
+    assert.equal(api.getCurrentNormalEpisode().sort, 83);
+    assert.ok(api.requests.includes(`/v0/subjects/${FIRST_ID}/subjects`), "the accepted title still requires reciprocal prequel evidence");
+  });
+
+  test(`${label}: omitted Re prefix aliases require the complete same-season source name`, () => {
+    const api = setup(source);
+    const identity = api.getCollectionInferenceSubjectIdentity(api.state.subject);
+    const valid = "『从零开始的异世界生活 第四季』第17话";
+    assert.equal(api.collectionInferenceSourceMatches({ videoTitle: valid, seasonNo: 4 }, identity), true);
+    for (const title of [
+      valid.replace("第四季", "第三季"),
+      valid.replace("从零开始", "零开始"),
+      valid.replace("异世界生活", "异世界"),
+      valid.replace("异世界生活", "异世界生活续篇"),
+      valid.replace("从零开始", "EX：从零开始"),
+      valid.replace("从零开始", "Zero：从零开始"),
+      valid.replace("第四季", "第三季 第四季"),
+    ]) {
+      api.rawTitle = title;
+      assert.equal(api.getStandaloneEpisodeInferenceContext(), null, title);
+    }
+  });
+
+  test(`${label}: omitted Re prefix aliases come only from explicit Re-colon CJK titles with six-character work names`, () => {
+    const api = setup(source);
+    for (const [apiTitle, sourceTitle] of [
+      ["Re:六字中文标题 第四季", "六字中文标题 第四季"],
+      ["Re：六字中文标题 第四季", "六字中文标题 第四季"],
+      ["Re:ゼロから始める異世界生活 第四季", "ゼロから始める異世界生活 第四季"],
+    ]) {
+      const identity = api.getCollectionInferenceSubjectIdentity({ id: LAST_ID, type: 2, name: apiTitle });
+      assert.equal(api.collectionInferenceSourceMatches({ videoTitle: sourceTitle, seasonNo: 4 }, identity), true, apiTitle);
+    }
+    for (const [apiTitle, sourceTitle] of [
+      ["Re：五字标题啊 第四季", "五字标题啊 第四季"],
+      ["EX：六字中文标题 第四季", "六字中文标题 第四季"],
+      ["Re 六字中文标题 第四季", "六字中文标题 第四季"],
+      ["Prefix Re：六字中文标题 第四季", "六字中文标题 第四季"],
+      ["Re：Starting Life in Another World Season 4", "Starting Life in Another World Season 4"],
+      ["Re：ABC六字中文标题 第四季", "ABC六字中文标题 第四季"],
+    ]) {
+      const identity = api.getCollectionInferenceSubjectIdentity({ id: LAST_ID, type: 2, name: apiTitle });
+      assert.equal(api.collectionInferenceSourceMatches({ videoTitle: sourceTitle, seasonNo: 4 }, identity), false, apiTitle);
+    }
+  });
+
+  test(`${label}: omitted Re prefix source compatibility never relaxes API-to-API relation identity`, async () => {
+    const api = setup(source);
+    const original = api.getCollectionInferenceSubjectIdentity({ id: LAST_ID, type: 2, name: "Re：六字中文标题 第四季" });
+    assert.deepEqual(Array.from(original.bases), ["re六字中文标题"], "keep the strict API identity unchanged");
+    assert.equal(api.collectionInferenceSourceMatches({ videoTitle: "六字中文标题 第四季", seasonNo: 4 }, original), true);
+    for (const title of ["六字中文标题 第四季", "EX：六字中文标题 第四季"]) {
+      const other = api.getCollectionInferenceSubjectIdentity({ id: FIRST_ID, type: 2, name: title });
+      assert.equal(api.collectionInferenceTitlesMatch(original, other), false, title);
+      assert.equal(api.collectionInferenceTitlesMatch(other, original), false, `reverse: ${title}`);
+    }
+    const responses = fixture();
+    const prequel = responses[`/v0/subjects/${FIRST_ID}`];
+    prequel.name = prequel.name.replace(/^Re:/, "");
+    prequel.name_cn = prequel.name_cn.replace(/^Re：/, "");
+    responses[`/v0/subjects/${LAST_ID}/subjects`] = [relation(prequel)];
+    const altered = setup(source, responses);
+    const result = await altered.inferStandaloneEpisodeFromPrequels({ ...context(), videoTitle: "『从零开始的异世界生活 第四季』第17话" }, LAST_ID, { now: NOW });
+    assert.equal(result, null, "matching an upload alias cannot join a differently named API prequel");
+    assert.equal(altered.requests.includes(`/v0/subjects/${FIRST_ID}`), false, "reject the relation identity before reading the other work's episodes");
+  });
+
   test(`${label}: an old standalone episode still resolves after the whole season finishes`, async () => {
     const api = setup(source);
     assertInference(await api.inferStandaloneEpisodeFromPrequels(context(), LAST_ID, { now: "2026-12-01T12:00:00" }));
