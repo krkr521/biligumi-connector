@@ -27,6 +27,7 @@ function sandbox(source, extension, names, extra = {}) {
     document: { querySelector: () => ({ value: "1" }), getElementById: () => null },
     PANEL_ID: "panel", SETTINGS_ID: "settings", STORAGE: extractObjectConstant(source, "STORAGE"),
     pendingRequests: new Map(), setBusy: noop, render: noop, showError: noop,
+    isVideoCollectionSelectionAheadOfRoute: () => false,
     writeJsonValue: noop, displaySubjectName: (subject) => subject.name,
     loadSubjectBundle: async () => {}, loadSubjectBundlePreservingLocal: async () => {}, refreshCollectionAfterSave: async () => {},
     refreshSettingsTokenHelp: noop, shouldRenderFullPanel: () => false,

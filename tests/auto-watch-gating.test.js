@@ -155,6 +155,7 @@ function createSandbox() {
   };
   Object.assign(sandbox, {
     isCurrentVideoAutoProgressDisabled: () => sandbox.autoProgressDisabled,
+    isVideoCollectionSelectionAheadOfRoute: () => false,
     getActiveVideoElement: () => sandbox.video,
     maybeOfferLongVideoAutoIdentify: () => false,
     refreshLongVideoEpisodeGuess: () => sandbox.seekGuess,

@@ -43,7 +43,7 @@ function routeHarness(source, extension, extraNames = []) {
     repositionCount: 0,
     episodeScheduleCount: 0,
     state: {
-      pageKey: "video:A", rawTitle: "Series episode 1", pageTitle: "Series",
+      pageKey: "video:A", routeSelectionKey: "video:A:p1", rawTitle: "Series episode 1", pageTitle: "Series",
       subjectId: 101, token: "token-a", subject: { id: 101, name: "Series" },
       subjectBundleContext: bundle, collectionRefreshContext,
       subjectInfoLinks: { Studio: "/person/7" }, subjectInfoWebRows: [{ key: "Studio", value: "Studio" }],
@@ -74,12 +74,14 @@ function routeHarness(source, extension, extraNames = []) {
     refreshDanmakuFavoriteButtons: noop,
     showError: (error) => { throw error; },
     refreshStandaloneEpisodeInference: async () => {},
+    isVideoCollectionSelectionAheadOfRoute: () => false,
     normalizeBindingToken: (value) => String(value || "").toLowerCase(),
   };
   scope.window = { setTimeout: (callback, delay) => { scope.timers.push({ callback, delay }); return scope.timers.length; } };
   scope.document = { getElementById: () => scope.panel };
   scope.getPageTitle = () => scope.next.rawTitle;
   scope.getPageKey = () => scope.next.pageKey;
+  scope.getCurrentRouteSelectionKey = () => scope.next.routeSelectionKey || `${scope.next.pageKey}:p1`;
   scope.getCurrentBinding = () => scope.next.subjectId;
   scope.shouldRenderFullPanel = () => scope.fullPanel;
   scope.isCurrentVideoAutoProgressDisabled = () => scope.paused;
@@ -90,6 +92,7 @@ function routeHarness(source, extension, extraNames = []) {
   };
   scope.refreshPageContext = () => {
     scope.state.pageKey = scope.next.pageKey;
+    scope.state.routeSelectionKey = scope.getCurrentRouteSelectionKey();
     scope.state.rawTitle = scope.next.rawTitle;
     // Recognition must run again after binding resolution and player reset.
     scope.state.currentEpisodeNo = -1;
@@ -157,6 +160,45 @@ function bundleHarness(source, extension) {
 
 for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], ["extension", EXTENSION_PATH, true]]) {
   const source = readSource(file);
+
+  test(`${label}: route selection distinguishes P and ignores tracking parameters`, () => {
+    const scope = { URL, location: { href: "https://www.bilibili.com/video/BV1SXTd6fEnC?p=1&spm_id_from=old" } };
+    runInSandbox(functions(source, ["getCurrentRouteSelectionKey", "getCurrentRouteKey", "getCurrentPartNoFromUrl"]), scope);
+    const first = scope.getCurrentRouteSelectionKey();
+    scope.location.href = "https://www.bilibili.com/video/BV1SXTd6fEnC?p=2&spm_id_from=new";
+    assert.notEqual(scope.getCurrentRouteSelectionKey(), first);
+    const second = scope.getCurrentRouteSelectionKey();
+    scope.location.href = "https://www.bilibili.com/video/BV1SXTd6fEnC?p=2&spm_id_from=other";
+    assert.equal(scope.getCurrentRouteSelectionKey(), second);
+  });
+
+  test(`${label}: a sidebar BV or P selection ahead of the URL is recognized as a partial transition`, () => {
+    let selected = [{ bvid: "BV1GfeJ6PEWC", activePart: 1, itemClass: "normal" }];
+    const item = ({ bvid, activePart }) => ({
+      getAttribute: () => bvid,
+      querySelectorAll: () => Array.from({ length: 7 }, (_, index) => ({ active: index + 1 === activePart })),
+    });
+    const scope = {
+      getBvIdFromUrl: () => "BV1D4bV6AE8p",
+      getCurrentPartNoFromUrl: () => 2,
+      isActiveVideoPartNode: (node) => node.active,
+      document: { querySelectorAll: (selector) => selected.filter((record) => (
+        !selector.includes(":is(.head, .normal)") || ["head", "normal"].includes(record.itemClass)
+      )).map((record) => ({
+        closest: () => item(record),
+      })) },
+    };
+    runInSandbox(functions(source, ["isVideoCollectionSelectionAheadOfRoute"]), scope);
+    assert.equal(scope.isVideoCollectionSelectionAheadOfRoute(), true);
+    selected = [{ bvid: "BV1D4bV6AE8p", activePart: 3, itemClass: "head" }];
+    assert.equal(scope.isVideoCollectionSelectionAheadOfRoute(), true, "same-BV P3 is ahead of the URL's P2");
+    selected = [{ bvid: "BV1D4bV6AE8p", activePart: 2, itemClass: "head" }];
+    assert.equal(scope.isVideoCollectionSelectionAheadOfRoute(), false);
+    selected = [{ bvid: "BV1GfeJ6PEWC", activePart: 1, itemClass: "normal" }, { bvid: "BV1D4bV6AE8p", activePart: 2, itemClass: "page-item" }];
+    assert.equal(scope.isVideoCollectionSelectionAheadOfRoute(), true, "a stale P active in the old BV cannot outvote the new single-P active item");
+    selected = [{ bvid: "BV1D4bV6AE8p", activePart: 2, itemClass: "head" }, { bvid: "BV1GfeJ6PEWC", activePart: 1, itemClass: "normal" }];
+    assert.equal(scope.isVideoCollectionSelectionAheadOfRoute(), false, "ambiguous active markers do not override the current route");
+  });
 
   test(`${label}: a settled same-subject route preserves the complete bundle and resets episode observations`, () => {
     const scope = routeHarness(source, extension);
@@ -293,6 +335,127 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
     assert.equal(scope.renders.length, 0);
     scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, true);
     assert.equal(scope.state.currentEpisodeNo, 2);
+    assert.deepEqual(scope.renders, [true]);
+  });
+
+  test(`${label}: a same-BV part switch settles on the first ready pass despite an unchanged H1`, () => {
+    const scope = routeHarness(source, extension);
+    scope.next.pageKey = scope.state.pageKey;
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.routeSelectionKey = "video:A:p2";
+    const originalPanel = scope.panel;
+    const originalBundle = scope.state.subjectBundleContext;
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, false);
+    assert.equal(scope.state.routeSelectionKey, "video:A:p2");
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.panel, originalPanel);
+    assert.equal(scope.state.currentEpisodeNo, 2);
+    assert.deepEqual(scope.renders, [true]);
+    assert.deepEqual(scope.injections, []);
+  });
+
+  test(`${label}: a P selection ahead of the URL leaves the old panel reusable`, () => {
+    const scope = routeHarness(source, extension, ["refreshEpisodeContextIfChanged"]);
+    const originalPanel = scope.panel;
+    const originalBundle = scope.state.subjectBundleContext;
+    scope.isVideoCollectionSelectionAheadOfRoute = () => true;
+    scope.refreshCurrentBindingIfChanged = () => { scope.state.subject = null; scope.state.subjectBundleContext = null; };
+    scope.refreshEpisodeContextIfChanged(scope.episodeContextRefreshSeq);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    scope.isVideoCollectionSelectionAheadOfRoute = () => false;
+    scope.next.pageKey = scope.state.pageKey;
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.routeSelectionKey = "video:A:p3";
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.panel, originalPanel);
+    assert.deepEqual(scope.renders, [true]);
+    assert.deepEqual(scope.injections, []);
+  });
+
+  test(`${label}: official ep routes with an unchanged H1 and page key keep the existing settle delay`, () => {
+    const scope = routeHarness(source, extension);
+    scope.state.routeSelectionKey = "/bangumi/play/ep101";
+    scope.next.pageKey = scope.state.pageKey;
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.routeSelectionKey = "/bangumi/play/ep102";
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, true);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, true);
+    assert.equal(scope.state.routeRefreshPending, false);
+    assert.deepEqual(scope.renders, [true]);
+  });
+
+  test(`${label}: a new BV waits for its H1 before resolving the binding`, () => {
+    const scope = routeHarness(source, extension);
+    const originalPanel = scope.panel;
+    const originalBundle = scope.state.subjectBundleContext;
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.subjectId = null; // The old H1 does not identify the new archive yet.
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, true);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.state.subjectId, 101);
+    assert.deepEqual(scope.injections, []);
+    scope.next.rawTitle = "Series episode 2";
+    scope.next.subjectId = 101;
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, false);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.panel, originalPanel);
+    assert.deepEqual(scope.renders, [true]);
+    assert.deepEqual(scope.injections, []);
+  });
+
+  test(`${label}: a stable binding page key does not hide a cross-BV title transition`, () => {
+    const scope = routeHarness(source, extension);
+    scope.next.pageKey = scope.state.pageKey;
+    scope.next.routeSelectionKey = "video:B:p1";
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.subjectId = null;
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, true);
+    assert.equal(scope.state.subjectId, 101);
+    scope.next.rawTitle = "Series episode 2";
+    scope.next.subjectId = 101;
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, false);
+    assert.deepEqual(scope.renders, [true]);
+    assert.deepEqual(scope.injections, []);
+  });
+
+  test(`${label}: active sidebar BV, route, and H1 may settle in that order without dropping the panel`, () => {
+    const scope = routeHarness(source, extension, ["refreshEpisodeContextIfChanged"]);
+    const originalPanel = scope.panel;
+    const originalBundle = scope.state.subjectBundleContext;
+    let bindingChecks = 0;
+    let sidebarAhead = true;
+    scope.isVideoCollectionSelectionAheadOfRoute = () => sidebarAhead;
+    scope.refreshCurrentBindingIfChanged = () => { bindingChecks += 1; scope.state.subject = null; };
+    scope.next.pageKey = scope.state.pageKey;
+    scope.next.rawTitle = scope.state.rawTitle;
+    scope.next.subjectId = null;
+    scope.refreshEpisodeContextIfChanged(scope.episodeContextRefreshSeq);
+    assert.equal(bindingChecks, 0);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.state.subject?.id, 101);
+    sidebarAhead = false;
+    scope.next.pageKey = "video:B";
+    const seq = beginRoute(scope);
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.routeRefreshPending, true, "the new BV still shows the previous H1");
+    scope.next.rawTitle = "Series episode 2";
+    scope.next.subjectId = 101;
+    scope.refreshAfterRouteChange(seq, scope.state.rawTitle, scope.state.pageKey, false);
+    assert.equal(scope.state.subjectBundleContext, originalBundle);
+    assert.equal(scope.panel, originalPanel);
+    assert.deepEqual(scope.injections, []);
     assert.deepEqual(scope.renders, [true]);
   });
 
@@ -437,7 +600,7 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
     assert.equal(scope.state.episodeCollections[0].type, 2);
   });
 
-  test(`${label}: pending navigation stops automatic marking, seek inference, and old episode timers before side effects`, async () => {
+  test(`${label}: pending navigation and sidebar selection ahead of URL stop old-episode side effects`, async () => {
     const scope = routeHarness(source, extension, ["checkAutoWatchProgress", "handleAutoWatchSeekEnd", "refreshEpisodeContextIfChanged"]);
     let watchChecks = 0;
     let seekChecks = 0;
@@ -454,6 +617,15 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
     assert.equal(episodeChecks, 0);
     assert.equal(scope.state.autoWatchSeekStartTime, 690);
     scope.state.routeRefreshPending = false;
+    scope.isVideoCollectionSelectionAheadOfRoute = () => true;
+    await scope.checkAutoWatchProgress();
+    scope.handleAutoWatchSeekEnd({ currentTime: 900 });
+    scope.refreshEpisodeContextIfChanged(scope.episodeContextRefreshSeq);
+    assert.equal(watchChecks, 0);
+    assert.equal(seekChecks, 0);
+    assert.equal(episodeChecks, 0);
+    assert.equal(scope.state.autoWatchSeekStartTime, 690);
+    scope.isVideoCollectionSelectionAheadOfRoute = () => false;
     scope.state.currentEpisodeNo = null;
     await scope.checkAutoWatchProgress();
     scope.handleAutoWatchSeekEnd({ currentTime: 900 });

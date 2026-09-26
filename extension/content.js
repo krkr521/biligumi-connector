@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.25";
+  const SCRIPT_VERSION = "0.3.26";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -216,6 +216,7 @@
 
   const state = {
     pageKey: "",
+    routeSelectionKey: "",
     rawTitle: "",
     pageTitle: "",
     officialBangumiPlayingSection: null,
@@ -3237,7 +3238,18 @@
     const titleChanged = normalizeBindingToken(currentRawTitle) !== normalizeBindingToken(previousRawTitle);
     // An unknown previous key (first load) must not force a refresh on its own.
     const pageKeyChanged = Boolean(previousPageKey) && getPageKey() !== previousPageKey;
-    if (!force && previousRawTitle && !titleChanged && !pageKeyChanged) return;
+    // The binding key deliberately ignores ?p=, but a same-BV part switch is
+    // still a new playback selection even when the archive's H1 stays fixed.
+    const routeSelectionKey = getCurrentRouteSelectionKey();
+    const routeSelectionChanged = routeSelectionKey !== state.routeSelectionKey;
+    const previousArchiveKey = state.routeSelectionKey.replace(/:p\d+$/i, "");
+    const currentArchiveKey = routeSelectionKey.replace(/:p\d+$/i, "");
+    const bothVideoRoutes = /:p\d+$/i.test(state.routeSelectionKey) && /:p\d+$/i.test(routeSelectionKey);
+    const videoChanged = bothVideoRoutes && previousArchiveKey !== currentArchiveKey;
+    const sameVideoPartChanged = bothVideoRoutes && previousArchiveKey === currentArchiveKey && routeSelectionChanged;
+    // Bilibili can update the BV route before replacing the old H1. Do not
+    // resolve the new binding against the previous archive's title.
+    if (!force && previousRawTitle && !titleChanged && (videoChanged || (!pageKeyChanged && !sameVideoPartChanged))) return;
     routeRefreshSeq += 1;
 
     refreshPageContext();
@@ -3302,6 +3314,7 @@
   function refreshPageContext() {
     const rawTitle = getPageTitle();
     state.pageKey = getPageKey();
+    state.routeSelectionKey = getCurrentRouteSelectionKey();
     state.rawTitle = rawTitle;
     state.pageTitle = resolveCurrentPageTitle(rawTitle);
     state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
@@ -7716,7 +7729,7 @@
   }
 
   async function checkAutoWatchProgress() {
-    if (state.routeRefreshPending) return;
+    if (state.routeRefreshPending || isVideoCollectionSelectionAheadOfRoute()) return;
     if (!isSupportedWatchPage()) return;
     if (isCurrentVideoAutoProgressDisabled()) return;
     const video = getActiveVideoElement();
@@ -8789,7 +8802,7 @@
   }
 
   function handleAutoWatchSeekEnd(video) {
-    if (state.routeRefreshPending) return;
+    if (state.routeRefreshPending || isVideoCollectionSelectionAheadOfRoute()) return;
     if (isCurrentVideoAutoProgressDisabled()) {
       state.autoWatchSeekStartTime = null;
       return;
@@ -10391,6 +10404,13 @@
     return getOfficialBangumiSectionBindingKey() || getStableBiliSubjectKey() || getCurrentRouteKey();
   }
 
+  function getCurrentRouteSelectionKey() {
+    const routeKey = getCurrentRouteKey();
+    return /\/video\/BV[\w]+/i.test(routeKey)
+      ? `${routeKey.toUpperCase()}:p${getCurrentPartNoFromUrl() || 1}`
+      : routeKey;
+  }
+
   function getCurrentRouteKey() {
     const url = new URL(location.href);
     const match = url.pathname.match(/\/bangumi\/play\/(ss\d+|ep\d+|md\d+)|\/video\/(BV[\w]+)/i);
@@ -11952,6 +11972,10 @@
 
   function refreshEpisodeContextIfChanged(seq) {
     if (state.routeRefreshPending || seq !== episodeContextRefreshSeq) return;
+    // A collection click can select the next BV or P in the sidebar more than a
+    // second before Bilibili changes the URL. The old page must not adopt that
+    // half-updated selection and invalidate its loaded subject bundle.
+    if (isVideoCollectionSelectionAheadOfRoute()) return;
     const rawTitle = getPageTitle();
     refreshCurrentBindingIfChanged();
     refreshStandaloneEpisodeInference().catch(() => {});
@@ -11985,6 +12009,22 @@
     state.rawTitle = rawTitle;
     state.currentEpisodeNo = safeNextEpisodeNo;
     render(true);
+  }
+
+  function isVideoCollectionSelectionAheadOfRoute() {
+    const routeBvid = String(getBvIdFromUrl() || "").toUpperCase();
+    if (!routeBvid || !document || typeof document.querySelectorAll !== "function") return false;
+    const selectedItems = Array.from(document.querySelectorAll(
+      ".video-pod__list .video-pod__item[data-key] .simple-base-item.active:is(.head, .normal)"
+    )).map((node) => node.closest(".video-pod__item[data-key]")).filter(Boolean);
+    const selectedBvids = new Set(selectedItems.map((item) => String(item.getAttribute("data-key") || "").toUpperCase())
+      .filter((value) => /^BV[\w]+$/i.test(value)));
+    if (selectedBvids.size !== 1) return false;
+    if (!selectedBvids.has(routeBvid)) return true;
+    const selectedItem = selectedItems.find((item) => String(item.getAttribute("data-key") || "").toUpperCase() === routeBvid);
+    const parts = selectedItem && Array.from(selectedItem.querySelectorAll(".page-list .page-item")) || [];
+    const activeParts = parts.map((node, index) => isActiveVideoPartNode(node) ? index + 1 : 0).filter(Boolean);
+    return activeParts.length === 1 && activeParts[0] !== (getCurrentPartNoFromUrl() || 1);
   }
 
   function refreshCurrentBindingIfChanged() {
