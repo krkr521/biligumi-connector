@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.26";
+  const SCRIPT_VERSION = "0.3.27";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -4626,7 +4626,7 @@
     return `
       <div class="biligumi-update-banner" role="status" aria-label="Biligumi Connector 插件有可用更新">
         <div class="biligumi-update-banner-title">发现插件新版本 v${escapeHtml(extensionUpdateState.remoteVersion)}</div>
-        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。下载后覆盖原扩展目录，并在扩展管理页重新加载。</div>
+        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。下载后覆盖原扩展目录，并在扩展管理页重新加载；返回视频页时会自动刷新。</div>
         <div class="biligumi-update-banner-actions">
           <button type="button" class="biligumi-button primary" data-action="open-extension-update">打开下载页</button>
           <button type="button" class="biligumi-button dismiss" data-action="dismiss-extension-update">本次更新不再提醒</button>

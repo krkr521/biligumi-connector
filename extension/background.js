@@ -13,6 +13,8 @@
   const MSG_OPEN_EXTENSION_UPDATE = "biligumi-open-extension-update";
   const RUNTIME_STATE_KEY = "__biligumiOpedRuntimeState";
   const EXTENSION_UPDATE_CACHE_KEY = "biligumi.extensionUpdateCache";
+  const EXTENSION_UPDATE_PENDING_TABS_KEY = "biligumi.extensionUpdatePendingTabs";
+  const EXTENSION_UPDATE_PENDING_TTL_MS = 24 * 60 * 60 * 1000;
   const EXTENSION_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
   const EXTENSION_UPDATE_TIMEOUT_MS = 4000;
   const EXTENSION_UPDATE_MAX_RESPONSE_BYTES = 64 * 1024;
@@ -36,6 +38,7 @@
     "https://www.bilibili.com/bangumi/play/*",
   ];
   let runtimeStateUpdateQueue = Promise.resolve();
+  let pendingUpdateQueue = Promise.resolve();
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message && message.type === MSG_OPEN_DELETE_BRIDGE) {
@@ -610,6 +613,131 @@
     }
   }
 
+  function queuePendingUpdateTask(task) {
+    const update = pendingUpdateQueue.catch(() => {}).then(task);
+    pendingUpdateQueue = update.catch(() => {});
+    return update;
+  }
+
+  function getPendingUpdateTabs() {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.get(EXTENSION_UPDATE_PENDING_TABS_KEY, (items) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(items && items[EXTENSION_UPDATE_PENDING_TABS_KEY] || null);
+      });
+    });
+  }
+
+  function setPendingUpdateTabs(state) {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.set({ [EXTENSION_UPDATE_PENDING_TABS_KEY]: state }, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+  }
+
+  function clearPendingUpdateTabs() {
+    return new Promise((resolve, reject) => {
+      chrome.storage.local.remove(EXTENSION_UPDATE_PENDING_TABS_KEY, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
+      });
+    });
+  }
+
+  function normalizePendingUpdateTabs(value) {
+    if (!value || typeof value !== "object") return null;
+    const oldVersion = String(value.oldVersion || "");
+    const newVersion = String(value.newVersion || "");
+    const createdAt = Number(value.createdAt);
+    const age = Date.now() - createdAt;
+    if (
+      !isValidExtensionVersion(oldVersion)
+      || !isValidExtensionVersion(newVersion)
+      || compareExtensionVersions(newVersion, oldVersion) <= 0
+      || newVersion !== String(chrome.runtime.getManifest().version || "")
+      || !Number.isFinite(createdAt)
+      || createdAt <= 0
+      || age < 0
+      || age > EXTENSION_UPDATE_PENDING_TTL_MS
+      || !Array.isArray(value.tabs)
+      || value.tabs.length > 1000
+    ) return null;
+    const tabs = value.tabs.filter((tab) => (
+      tab && Number.isInteger(tab.id) && tab.id > 0 && isBilibiliVideoUrl(tab.url)
+    ));
+    return { oldVersion, newVersion, createdAt, tabs };
+  }
+
+  async function markTabsForUpdatedExtension(details) {
+    const oldVersion = String(details && details.previousVersion || "");
+    const newVersion = String(chrome.runtime.getManifest().version || "");
+    if (
+      !details || details.reason !== "update"
+      || !isValidExtensionVersion(oldVersion)
+      || !isValidExtensionVersion(newVersion)
+      || compareExtensionVersions(newVersion, oldVersion) <= 0
+    ) return;
+    const tabs = (await tabsQuery({ url: BILIBILI_URL_PATTERNS }))
+      .filter((tab) => Number.isInteger(tab.id)
+        && tab.id > 0
+        && tab.status === "complete"
+        && !tab.discarded
+        && isBilibiliVideoUrl(tab.url))
+      .map((tab) => ({ id: tab.id, url: tab.url }));
+    if (tabs.length) {
+      await setPendingUpdateTabs({ oldVersion, newVersion, createdAt: Date.now(), tabs });
+    } else {
+      await clearPendingUpdateTabs();
+    }
+  }
+
+  async function removePendingUpdateTab(tabId) {
+    const raw = await getPendingUpdateTabs();
+    if (!raw) return;
+    const state = normalizePendingUpdateTabs(raw);
+    if (!state) {
+      await clearPendingUpdateTabs();
+      return;
+    }
+    const tabs = state.tabs.filter((tab) => tab.id !== tabId);
+    if (tabs.length === state.tabs.length) return;
+    if (tabs.length) await setPendingUpdateTabs({ ...state, tabs });
+    else await clearPendingUpdateTabs();
+  }
+
+  async function reloadUpdatedTabOnReturn(tabId) {
+    const raw = await getPendingUpdateTabs();
+    if (!raw) return;
+    const state = normalizePendingUpdateTabs(raw);
+    if (!state) {
+      await clearPendingUpdateTabs();
+      return;
+    }
+    if (!state.tabs.some((entry) => entry.id === tabId)) return;
+    const tab = await tabsGet(tabId);
+    if (!tab || !isBilibiliVideoUrl(tab.url) || tab.status === "loading") {
+      await removePendingUpdateTab(tabId);
+      return;
+    }
+    if (!tab.active || tab.status !== "complete" || tab.discarded) return;
+    // Consume before reload so overlapping activation and focus events cannot reload twice.
+    await removePendingUpdateTab(tabId);
+    await tabsReload(tabId);
+  }
+
+  chrome.runtime.onInstalled.addListener((details) => {
+    queuePendingUpdateTask(() => markTabsForUpdatedExtension(details)).catch(() => {});
+  });
+
+  chrome.runtime.onStartup.addListener(() => {
+    queuePendingUpdateTask(clearPendingUpdateTabs).catch(() => {});
+  });
+
   chrome.commands.onCommand.addListener((command) => {
     if (command === COMMAND_SKIP_OPED) {
       executeSkipCommand().catch((error) => {
@@ -619,6 +747,7 @@
   });
 
   chrome.tabs.onActivated.addListener((activeInfo) => {
+    queuePendingUpdateTask(() => reloadUpdatedTabOnReturn(activeInfo.tabId)).catch(() => {});
     chrome.tabs.get(activeInfo.tabId, (tab) => {
       if (chrome.runtime.lastError || !isBilibiliVideoUrl(tab && tab.url)) return;
       recordBilibiliTab(tab, { reason: "tab-activated" }).catch(() => {});
@@ -626,9 +755,24 @@
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (changeInfo.status === "loading") {
+      queuePendingUpdateTask(() => removePendingUpdateTab(tabId)).catch(() => {});
+    }
     const nextUrl = changeInfo.url || tab.url;
     if (!isBilibiliVideoUrl(nextUrl)) return;
     recordBilibiliTab({ ...tab, id: tabId, url: nextUrl }, { reason: "tab-updated" }).catch(() => {});
+  });
+
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    queuePendingUpdateTask(() => removePendingUpdateTab(tabId)).catch(() => {});
+  });
+
+  chrome.windows.onFocusChanged.addListener((windowId) => {
+    if (windowId === chrome.windows.WINDOW_ID_NONE) return;
+    queuePendingUpdateTask(async () => {
+      const tabs = await tabsQuery({ active: true, windowId });
+      if (tabs[0]) await reloadUpdatedTabOnReturn(tabs[0].id);
+    }).catch(() => {});
   });
 
   async function executeSkipCommand() {
@@ -798,6 +942,15 @@
           return;
         }
         resolve(tab || null);
+      });
+    });
+  }
+
+  function tabsReload(tabId) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.reload(tabId, () => {
+        if (chrome.runtime.lastError) reject(new Error(chrome.runtime.lastError.message));
+        else resolve();
       });
     });
   }

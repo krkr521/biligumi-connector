@@ -37,12 +37,13 @@ function createBackground(initialState = { lastActiveBilibiliTabId: recentTab.id
   const sandbox = {
     URL,
     chrome: {
-      runtime: { onMessage: event() },
+      runtime: { onMessage: event(), onInstalled: event(), onStartup: event() },
       commands: { onCommand: event() },
       storage: { session: storage, local: storage },
       tabs: {
         onActivated: event(),
         onUpdated: event(),
+        onRemoved: event(),
         query(query, callback) {
           queueMicrotask(() => callback(query.active
             ? [{ id: 3, url: "https://example.org/", active: true }]
@@ -56,6 +57,7 @@ function createBackground(initialState = { lastActiveBilibiliTabId: recentTab.id
           queueMicrotask(() => callback({ ok: true }));
         },
       },
+      windows: { WINDOW_ID_NONE: -1, onFocusChanged: event() },
     },
   };
   assert.match(backgroundSource, /\}\)\(\);\s*$/);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Biligumi Connector
 // @namespace    https://github.com/krkr521/biligumi-connector
-// @version      0.7.25
+// @version      0.7.26
 // @description  Embed a Bangumi collection/rating/progress panel into Bilibili watch pages.
 // @author       krkr521
 // @match        https://www.bilibili.com/bangumi/play/*
@@ -49,9 +49,11 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.7.25";
+  const SCRIPT_VERSION = "0.7.26";
   const SCRIPT_UPDATE_TIMEOUT_MS = 4000;
   const SCRIPT_UPDATE_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+  const SCRIPT_UPDATE_TAB_ACTIVATION_MS = 10 * 1000;
+  const SCRIPT_UPDATE_RETURN_TTL_MS = 30 * 60 * 1000;
   const SCRIPT_UPDATE_SOURCES = [
     {
       id: "github",
@@ -3119,6 +3121,7 @@
   let subjectBindRequestSeq = 0;
   let scriptUpdateCheckPromise = null;
   let scriptUpdateOpening = false;
+  let scriptUpdateReturn = null;
   let scriptUpdateState = readCachedScriptUpdateState();
   let longVideoBindWaitSeq = 0;
   let longVideoBindWaitTimer = 0;
@@ -3144,6 +3147,7 @@
     observeRouteChanges();
     hookHistoryNavigation();
     bindAutoWatchProgressEvents();
+    bindScriptUpdateReturnReload();
     bindOpedSkipButtonEvents();
     bindDanmakuEnhancementEvents();
   }
@@ -4737,7 +4741,7 @@
     return `
       <div class="biligumi-update-banner" role="status" aria-label="Biligumi Connector 有可用更新">
         <div class="biligumi-update-banner-title">发现新版本 v${escapeHtml(scriptUpdateState.remoteVersion)}</div>
-        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。打开用户脚本后，由 Tampermonkey 确认更新。</div>
+        <div class="biligumi-update-banner-copy">当前 v${SCRIPT_VERSION}${sourceSuffix}。打开用户脚本后，由 Tampermonkey 确认更新；返回此页时会自动刷新。</div>
         <div class="biligumi-update-banner-actions">
           <button type="button" class="biligumi-button primary" data-action="open-script-update">立即更新</button>
           ${scriptUpdateState.source && scriptUpdateState.source.id === "gitcode" ? "" : `<button type="button" class="biligumi-button" data-action="open-script-update-gitcode">使用 GitCode 更新</button>`}
@@ -9270,16 +9274,59 @@
   async function openLatestUserscript(preferredSourceId = "") {
     if (scriptUpdateOpening) return;
     scriptUpdateOpening = true;
+    scriptUpdateReturn = null;
     syncSettingsUpdateUi();
     try {
       const source = await resolvePreferredScriptUpdateSource(preferredSourceId);
-      GM_openInTab(source.url, { active: true, insert: true, setParent: true });
+      const updateTab = GM_openInTab(source.url, { active: true, insert: true, setParent: true });
+      if (!updateTab || typeof updateTab !== "object" || updateTab.closed === true) {
+        throw new Error("未能打开用户脚本安装页，请重试。");
+      }
+      // Tampermonkey does not expose installation confirmation to this page.
+      scriptUpdateReturn = {
+        openedAt: Date.now(),
+        leftForUpdate: document.visibilityState === "hidden",
+      };
     } finally {
       window.setTimeout(() => {
         scriptUpdateOpening = false;
         syncSettingsUpdateUi();
       }, 1200);
     }
+  }
+
+  function bindScriptUpdateReturnReload() {
+    document.addEventListener("visibilitychange", handleScriptUpdateReturnVisibility);
+    window.addEventListener("focus", reloadAfterScriptUpdateReturn);
+  }
+
+  function handleScriptUpdateReturnVisibility() {
+    const pending = scriptUpdateReturn;
+    if (!pending) return;
+    const elapsed = Date.now() - pending.openedAt;
+    if (elapsed < 0 || elapsed > SCRIPT_UPDATE_RETURN_TTL_MS) {
+      scriptUpdateReturn = null;
+      return;
+    }
+    if (document.visibilityState === "hidden") {
+      if (elapsed <= SCRIPT_UPDATE_TAB_ACTIVATION_MS) pending.leftForUpdate = true;
+      else if (!pending.leftForUpdate) scriptUpdateReturn = null;
+      return;
+    }
+    reloadAfterScriptUpdateReturn();
+  }
+
+  function reloadAfterScriptUpdateReturn() {
+    const pending = scriptUpdateReturn;
+    if (!pending) return;
+    const elapsed = Date.now() - pending.openedAt;
+    if (elapsed < 0 || elapsed > SCRIPT_UPDATE_RETURN_TTL_MS) {
+      scriptUpdateReturn = null;
+      return;
+    }
+    if (!pending.leftForUpdate || document.visibilityState !== "visible" || !document.hasFocus()) return;
+    scriptUpdateReturn = null;
+    location.reload();
   }
 
   function openSettings() {
