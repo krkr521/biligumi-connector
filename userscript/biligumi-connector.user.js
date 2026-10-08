@@ -3207,6 +3207,13 @@
   }
 
   function scheduleRouteRefresh(previousRawTitle, previousPageKey = state.pageKey) {
+    // Search links may be rewritten only to add/remove tracking parameters.
+    // Refresh the page-state snapshot without waiting for an unchanged H1.
+    const samePlaybackSelection = Boolean(state.routeSelectionKey)
+      && getCurrentRouteSelectionKey() === state.routeSelectionKey
+      && getPageKey() === state.pageKey
+      && normalizeBindingToken(getPageTitle()) === normalizeBindingToken(state.rawTitle)
+      && !isVideoCollectionSelectionAheadOfRoute();
     if (!state.routeRefreshPending) {
       const bundle = state.subjectBundleContext;
       // Capture before setting busy, and retain the decision across duplicate
@@ -3246,6 +3253,23 @@
       hideEpisodeTooltip();
     } else {
       render();
+    }
+    if (samePlaybackSelection) {
+      const refresh = () => {
+        if (seq !== routeRefreshSeq) return;
+        // A new sidebar selection can begin while the page-state read is pending.
+        // Re-enter the normal settle checks if playback is no longer unchanged.
+        if (getCurrentRouteSelectionKey() !== state.routeSelectionKey
+          || getPageKey() !== state.pageKey
+          || normalizeBindingToken(getPageTitle()) !== normalizeBindingToken(state.rawTitle)
+          || isVideoCollectionSelectionAheadOfRoute()) {
+          scheduleRouteRefresh(previousRawTitle, previousPageKey);
+          return;
+        }
+        refreshAfterRouteChange(seq, previousRawTitle, previousPageKey, true);
+      };
+      Promise.resolve(pageInitialStateReady).then(refresh, refresh);
+      return;
     }
     [350, 900, 1800, 3000].forEach((delay, index, list) => {
       window.setTimeout(() => {
@@ -3347,7 +3371,10 @@
     state.currentEpisodeNo = isCurrentVideoAutoProgressDisabled()
       ? null
       : detectCurrentEpisodeNo(rawTitle);
-    const previewKeyword = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle) : "";
+    // Match the unbound search keyword without consulting the previous subject,
+    // which is still present until the new route's binding has been resolved.
+    const previewKeyword = shouldUseRawTitleForPreview(rawTitle) ? cleanTitle(rawTitle)
+      : getCurrentSeasonSearchKeyword() || getCurrentPageSearchKeyword() || cleanTitle(getBilibiliCollectionTitle());
     if (previewKeyword !== state.nonMainKeyword) {
       state.nonMainKeyword = "";
       state.nonMainResults = [];
@@ -6028,6 +6055,7 @@
   }
 
   function ensureNonMainPreviewSearch(keyword) {
+    if (state.routeRefreshPending) return;
     const searchKeyword = String(keyword || "").trim();
     if (!searchKeyword) return;
     if (state.nonMainKeyword === searchKeyword && (state.nonMainBusy || state.nonMainSearched || state.nonMainError)) return;

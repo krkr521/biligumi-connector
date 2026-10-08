@@ -342,7 +342,8 @@ test("route refresh waits for the page-state bridge before consuming the new rou
   let resolvePageState;
   const sandbox = {
     Promise,
-    state: { pageKey: "old-key" },
+    state: { pageKey: "old-key", routeSelectionKey: "/video/BV1OLD:p1" },
+    getCurrentRouteSelectionKey: () => "/video/BV1NEW:p1",
     window: {
       setTimeout(callback, delay) {
         timers.push({ callback, delay });
