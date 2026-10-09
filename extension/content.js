@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.27";
+  const SCRIPT_VERSION = "0.3.28";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
