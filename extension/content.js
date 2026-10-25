@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.28";
+  const SCRIPT_VERSION = "0.3.29";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -152,6 +152,7 @@
   const WHITELIST_NEWS_NON_MAIN_PATTERN = /(?:TV\s*)?(?:动画化|動畫化|アニメ化|anime化)\s*(?:决定|決定|确定|確定|企划|企劃|制作决定|制作決定|发表|發表|公布)|(?:剧场|劇場)?上映\s*(?:决定|決定|确定|確定)/i;
 
   const pendingRequests = new Map();
+  const bgmApiRetryRequests = new Map();
   const subjectBundleRequests = new Map();
   const nonMainPreviewRequests = new Map();
   const panelInputDraftContexts = new WeakMap();
@@ -164,7 +165,7 @@
   let bindingsUpdateQueue = Promise.resolve();
   const COLLECTION_COMMENT_MAX_LENGTH = 380;
   const REQUEST_DEDUP_TTL = 500;
-  const REQUEST_MAX_RETRIES = 1;
+  const REQUEST_MAX_RETRIES = 3;
   const REQUEST_RETRY_BASE_MS = 500;
   const BGM_API_REQUEST_TIMEOUT_MS = 4000;
   const BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS = 2000;
@@ -4639,7 +4640,34 @@
   }
 
   function renderPanelNoticeSlot() {
-    return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;
+    return `${renderBgmApiRetryNotice()}${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;
+  }
+
+  function renderBgmApiRetryNotice() {
+    const retry = Array.from(bgmApiRetryRequests.values()).find((item) => isBgmApiRetryContextCurrent(item.context));
+    return retry ? `<div class="biligumi-notice error" role="status">${escapeHtml(retry.message)}</div>` : "";
+  }
+
+  function isBgmApiRetryContextCurrent(context) {
+    return context.pageKey === state.pageKey
+      && context.routeSeq === routeRefreshSeq
+      && context.routeKey === getCurrentRouteSelectionKey()
+      && context.subjectId === Number(state.subjectId || 0)
+      && context.token === String(state.token || "")
+      && context.searchSeq === subjectSearchSeq
+      && context.nonMainSearchSeq === state.nonMainSearchSeq;
+  }
+
+  function captureBgmApiRetryContext() {
+    return {
+      pageKey: state.pageKey,
+      routeSeq: routeRefreshSeq,
+      routeKey: getCurrentRouteSelectionKey(),
+      subjectId: Number(state.subjectId || 0),
+      token: String(state.token || ""),
+      searchSeq: subjectSearchSeq,
+      nonMainSearchSeq: state.nonMainSearchSeq,
+    };
   }
 
   function isExtensionUpdateNoticeVisible() {
@@ -10163,14 +10191,14 @@
     const dedupKey = `${method} ${url} ${authKey} ${data || ""}`;
     if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
 
-    const requestOptions = { ...options, authToken };
+    const requestOptions = { ...options, authToken, retryContext: captureBgmApiRetryContext() };
     const retryScope = options.relayScope && typeof options.relayScope === "object" ? options.relayScope : null;
     const forcedRetryChoice = retryScope && retryScope.choice || "";
     const officialRequestOptions = state.apiRelayAutoFallbackEnabled
       ? { ...requestOptions, maxRetries: 0, requestTimeoutMs: BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS }
       : requestOptions;
     const promise = (forcedRetryChoice && forcedRetryChoice !== "official"
-      ? bgmRequestOnce(method, buildBgmApiUrl(path, BGM_API_RELAYS[forcedRetryChoice]), data, requestOptions)
+      ? bgmRequestWithRetry(method, buildBgmApiUrl(path, BGM_API_RELAYS[forcedRetryChoice]), data, requestOptions)
       : bgmRequestWithRetry(method, url, data, officialRequestOptions)).catch(async (error) => {
       if (!isRelayEligibleTransportError(error) || forcedRetryChoice) throw error;
       const choice = state.apiRelayAutoFallbackEnabled
@@ -10182,7 +10210,7 @@
       if (choice === "cancel") throw error;
       const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
       if (!retryBase) throw error;
-      return bgmRequestOnce(method, buildBgmApiUrl(path, retryBase), data, requestOptions);
+      return bgmRequestWithRetry(method, buildBgmApiUrl(path, retryBase), data, requestOptions);
     });
     if (shouldDedup) {
       pendingRequests.set(dedupKey, promise);
@@ -10258,18 +10286,26 @@
   }
 
   async function bgmRequestWithRetry(method, url, data, options) {
-    let lastError = null;
     const maxRetries = Number.isInteger(options.maxRetries) ? Math.max(0, options.maxRetries) : REQUEST_MAX_RETRIES;
-    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
-      try {
-        return await bgmRequestOnce(method, url, data, options);
-      } catch (error) {
-        lastError = error;
-        if (!isRetryableApiError(error) || attempt >= maxRetries) throw error;
-        await sleep(REQUEST_RETRY_BASE_MS * Math.pow(2, attempt));
+    const retryId = {};
+    const context = options.retryContext || captureBgmApiRetryContext();
+    try {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await bgmRequestOnce(method, url, data, options);
+        } catch (error) {
+          if (!isRetryableApiError(error) || attempt >= maxRetries) throw error;
+          const message = error.transportKind === "timeout"
+            ? "Bangumi API 请求超时，正在自动重试…"
+            : "Bangumi API 请求暂时失败，正在自动重试…";
+          bgmApiRetryRequests.set(retryId, { context, message });
+          render();
+          await sleep(REQUEST_RETRY_BASE_MS * Math.pow(2, attempt));
+        }
       }
+    } finally {
+      if (bgmApiRetryRequests.delete(retryId)) render();
     }
-    throw lastError || new Error("Bangumi API 请求失败");
   }
 
   function bgmRequestOnce(method, url, data, options) {

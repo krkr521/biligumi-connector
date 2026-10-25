@@ -29,6 +29,9 @@ for (const name of [
   "settleBgmApiRelayPrompt",
   "removeBgmApiRelayPrompt",
   "bgmRequest",
+  "renderBgmApiRetryNotice",
+  "isBgmApiRetryContextCurrent",
+  "captureBgmApiRetryContext",
   "buildBgmApiUrl",
   "makeNetworkError",
   "isRelayEligibleTransportError",
@@ -50,7 +53,7 @@ assert.ok(userscriptSource.includes("// @connect      api.bgmapi.com"));
 assert.ok(manifest.host_permissions.includes("https://api.bgmapi.com/*"));
 assert.ok(userscriptSource.includes("const BGM_API_REQUEST_TIMEOUT_MS = 4000;"));
 assert.ok(userscriptSource.includes("const BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS = 2000;"));
-assert.ok(userscriptSource.includes("const REQUEST_MAX_RETRIES = 1;"));
+assert.ok(userscriptSource.includes("const REQUEST_MAX_RETRIES = 3;"));
 assert.ok(userscriptSource.includes("const REQUEST_RETRY_BASE_MS = 500;"));
 assert.ok(userscriptSource.includes("timeout: Number(options.requestTimeoutMs) > 0 ? Number(options.requestTimeoutMs) : BGM_API_REQUEST_TIMEOUT_MS,"));
 assert.ok(userscriptSource.includes("不会自动选择或记住中继"));
@@ -66,8 +69,8 @@ assert.ok(userscriptSource.includes("color: #bd2441;"));
 assert.ok(userscriptSource.includes("class=\"biligumi-button danger\""));
 assert.match(userscriptSource, /#\$\{PANEL_ID\} #\$\{API_RELAY_ID\} \.biligumi-button \{[\s\S]*?min-height: 30px;[\s\S]*?padding: 4px 10px;[\s\S]*?border-radius: 6px;/, "relay actions must use the standard panel button shape");
 assert.equal(userscriptSource.includes("#${PANEL_ID} #${API_RELAY_ID} .biligumi-button {\n      min-height: 32px;"), false, "relay buttons must not retain the pill-button dimensions");
-assert.ok(userscriptSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderScriptUpdateBanner()}`;"), "userscript relay warnings must render inside the panel notice slot");
-assert.ok(extensionSource.includes("return `${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;"), "extension relay warnings must render inside the panel notice slot");
+assert.ok(userscriptSource.includes("return `${renderBgmApiRetryNotice()}${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderScriptUpdateBanner()}`;"), "userscript retry and relay warnings must render inside the panel notice slot");
+assert.ok(extensionSource.includes("return `${renderBgmApiRetryNotice()}${renderBgmApiRelayPrompt()}${renderBgmApiRelayRetryNotice()}${renderExtensionUpdateBanner()}`;"), "extension retry and relay warnings must render inside the panel notice slot");
 for (const [label, source] of [["userscript", userscriptSource], ["extension", extensionSource]]) {
   const relayRootStyle = source.match(/#\$\{API_RELAY_ID\}\s*\{[\s\S]*?\}/);
   assert.ok(relayRootStyle, label + " relay root style must exist");
@@ -140,8 +143,12 @@ const requestSandbox = {
   window: { setTimeout(callback) { callback(); } },
   calls: [],
   choice: "cancel",
+  captureBgmApiRetryContext() { return {}; },
   bgmRequestWithRetry(method, url, data, options) {
-    requestSandbox.calls.push({ phase: "official", method, url, data, options });
+    requestSandbox.calls.push({ phase: "with-retry", method, url, data, options });
+    if (new URL(url).origin !== requestSandbox.API_BASE || requestSandbox.calls.length > 1) {
+      return Promise.resolve({ ok: true, url });
+    }
     const error = new Error("offline");
     error.status = 0;
     error.transportKind = "timeout";
@@ -149,8 +156,7 @@ const requestSandbox = {
     return Promise.reject(error);
   },
   bgmRequestOnce(method, url, data, options) {
-    requestSandbox.calls.push({ phase: "manual", method, url, data, options });
-    return Promise.resolve({ ok: true, url });
+    assert.fail("normal official and relay requests must both use the retry wrapper");
   },
   requestBgmApiFallbackChoice() { return Promise.resolve(requestSandbox.choice); },
 };

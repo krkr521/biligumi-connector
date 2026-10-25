@@ -731,7 +731,7 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
       ["POST", "/v0/search/subjects", false, false],
     ];
     for (const [method, path, auth, tracked] of cases) {
-      const scope = routeHarness(source, extension, ["bgmRequest"]);
+      const scope = routeHarness(source, extension, ["bgmRequest", "captureBgmApiRetryContext"]);
       const gate = deferred();
       const context = scope.state.subjectBundleContext;
       scope.API_BASE = "https://example.invalid";
