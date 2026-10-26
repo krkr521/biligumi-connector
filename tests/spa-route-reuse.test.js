@@ -48,6 +48,7 @@ function routeHarness(source, extension, extraNames = []) {
       subjectBundleContext: bundle, collectionRefreshContext,
       subjectInfoLinks: { Studio: "/person/7" }, subjectInfoWebRows: [{ key: "Studio", value: "Studio" }],
       characters: [{ id: 7 }], characterError: "",
+      subjectImageRelayBase: "https://api.bgmapi.com", previewImageRelayBase: "https://api.bgmapi.com",
       collection: { type: 3, rate: 8 }, episodes: [{ id: 1001, sort: 1 }, { id: 1002, sort: 2 }],
       episodeCollections: [{ episode: { id: 1001 }, type: 2 }],
       currentEpisodeNo: 1, currentEpisodeNumberSource: "label",
@@ -131,6 +132,8 @@ async function fireTimers(scope) {
 function assertReloaded(scope, message) {
   assert.equal(scope.state.subject, null, message);
   assert.equal(scope.state.subjectBundleContext, null, message);
+  assert.equal(scope.state.subjectImageRelayBase, "", message);
+  assert.equal(scope.state.previewImageRelayBase, "", message);
   for (const field of ["characters", "episodes", "episodeCollections"]) assert.equal(scope.state[field].length, 0, message);
   assert.equal(scope.state.collection, null, message);
   assert.deepEqual(scope.injections, [true], message);
@@ -203,7 +206,7 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
   test(`${label}: a settled same-subject route preserves the complete bundle and resets episode observations`, () => {
     const scope = routeHarness(source, extension);
     const retained = Object.fromEntries([
-      "subject", "subjectBundleContext", "subjectInfoLinks", "subjectInfoWebRows", "characters",
+      "subject", "subjectBundleContext", "subjectInfoLinks", "subjectInfoWebRows", "characters", "subjectImageRelayBase",
       "collection", "episodes", "episodeCollections",
     ].map((field) => [field, scope.state[field]]));
     const oldOperation = scope.captureCollectionOperationContext();
@@ -731,7 +734,7 @@ for (const [label, file, extension] of [["userscript", USERSCRIPT_PATH, false], 
       ["POST", "/v0/search/subjects", false, false],
     ];
     for (const [method, path, auth, tracked] of cases) {
-      const scope = routeHarness(source, extension, ["bgmRequest", "captureBgmApiRetryContext"]);
+      const scope = routeHarness(source, extension, ["bgmRequest", "applyBgmApiRequestScope", "captureBgmApiRetryContext"]);
       const gate = deferred();
       const context = scope.state.subjectBundleContext;
       scope.API_BASE = "https://example.invalid";

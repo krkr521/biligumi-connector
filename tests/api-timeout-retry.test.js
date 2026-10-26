@@ -50,7 +50,7 @@ function setup(source) {
     respond() { return Promise.resolve({ ok: true }); },
   };
   runInSandbox([
-    "bgmRequest", "buildBgmApiUrl", "isRelayEligibleTransportError", "renderPanelNoticeSlot",
+    "bgmRequest", "applyBgmApiRequestScope", "buildBgmApiUrl", "isRelayEligibleTransportError", "renderPanelNoticeSlot",
     "renderBgmApiRetryNotice", "isBgmApiRetryContextCurrent", "captureBgmApiRetryContext", "isRetryableApiError", "isSubjectDataLoading",
   ].map((name) => extractFunction(source, name)).concat(
     extractFunction(source, "bgmRequestWithRetry", { async: true }),

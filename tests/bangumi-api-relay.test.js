@@ -29,6 +29,7 @@ for (const name of [
   "settleBgmApiRelayPrompt",
   "removeBgmApiRelayPrompt",
   "bgmRequest",
+  "applyBgmApiRequestScope",
   "renderBgmApiRetryNotice",
   "isBgmApiRetryContextCurrent",
   "captureBgmApiRetryContext",
@@ -163,6 +164,7 @@ const requestSandbox = {
 vm.createContext(requestSandbox);
 vm.runInContext([
   extractFunction(userscriptSource, "bgmRequest"),
+  extractFunction(userscriptSource, "applyBgmApiRequestScope"),
   extractFunction(userscriptSource, "buildBgmApiUrl"),
   extractFunction(userscriptSource, "isRelayEligibleTransportError"),
   extractFunction(userscriptSource, "isExpectedBgmApiFinalUrl"),

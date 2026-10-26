@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.29";
+  const SCRIPT_VERSION = "0.3.30";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -240,9 +240,11 @@
     subjectInfoWebRows: [],
     characters: [],
     characterError: "",
+    subjectImageRelayBase: "",
     previewSubject: null,
     previewCharacters: [],
     previewCharacterError: "",
+    previewImageRelayBase: "",
     previewCharacterKey: "",
     previewCharacterBusy: false,
     previewCharacterFailedKey: "",
@@ -3289,6 +3291,7 @@
     state.routeSubjectReuse = null;
     if (!reuseSubject) {
       state.subject = null;
+      state.subjectImageRelayBase = "";
       state.subjectBundleContext = null;
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
@@ -3299,6 +3302,7 @@
       state.episodeCollections = [];
     }
     state.previewSubject = null;
+    state.previewImageRelayBase = "";
     state.previewCharacters = [];
     state.previewCharacterError = "";
     state.previewCharacterKey = "";
@@ -4074,10 +4078,12 @@
 
     state.previewCharacterBusy = true;
     state.previewCharacterKey = key;
+    const relayScope = createBgmApiRelayScope();
     bgmRequest("/v0/search/subjects?limit=1", {
       method: "POST",
       body: { keyword, sort: "match", filter: { type: [2] } },
       dedup: true,
+      relayScope,
     })
       .then(async (response) => {
         const subject = response && Array.isArray(response.data) ? response.data[0] : null;
@@ -4085,9 +4091,10 @@
           if (!subject || !subject.id) state.previewCharacterFailedKey = key;
           return;
         }
-        const charactersResult = await loadSubjectCharacters(subject.id);
+        const charactersResult = await loadSubjectCharacters(subject.id, relayScope);
         if (state.subjectId || state.previewCharacterKey !== key) return;
         state.previewSubject = subject;
+        state.previewImageRelayBase = relayScope.imageRelayBase || "";
         state.previewCharacters = charactersResult.characters;
         state.previewCharacterError = charactersResult.error;
         if (!charactersResult.characters.length && charactersResult.error) state.previewCharacterFailedKey = key;
@@ -4095,6 +4102,7 @@
       .catch((error) => {
         if (state.previewCharacterKey !== key) return;
         state.previewSubject = null;
+        state.previewImageRelayBase = "";
         state.previewCharacters = [];
         state.previewCharacterError = error && error.message ? error.message : "角色信息读取失败";
         state.previewCharacterFailedKey = key;
@@ -4140,7 +4148,7 @@
     const subjectName = state.subject ? displaySubjectName(state.subject) : "Bangumi";
     const safeSubjectId = Number(state.subjectId) || 0;
     const bangumiUrl = `${BGM_WEB_BASE}/subject/${safeSubjectId}`;
-    const image = getBestSubjectCover(state.subject);
+    const image = getBestSubjectCover(state.subject, state.subjectImageRelayBase);
     const body = rows.length
       ? rows.map(renderSubjectInfoRow).join("")
       : `<div class="biligumi-subject-info-row"><div class="biligumi-subject-info-value">暂时没有条目信息。</div></div>`;
@@ -4178,9 +4186,10 @@
     `;
   }
 
-  function getBestSubjectCover(subject) {
+  function getBestSubjectCover(subject, relayBase = "") {
     const images = subject && subject.images ? subject.images : {};
-    return images.large || images.common || images.medium || images.grid || images.small || "";
+    const image = images.large || images.common || images.medium || images.grid || images.small || "";
+    return getBgmImageUrl(image, relayBase);
   }
 
   function getSubjectInfoRows() {
@@ -4617,7 +4626,8 @@
   function getBestCharacterImage(character) {
     const images = character && character.images ? character.images : {};
     const source = images.large || images.medium || images.grid || images.small || "";
-    return getBgmCharacterCoverUrl(source) || images.large || normalizeBgmImageUrl(images.medium) || images.grid || normalizeBgmImageUrl(images.small) || "";
+    const image = getBgmCharacterCoverUrl(source) || images.large || normalizeBgmImageUrl(images.medium) || images.grid || normalizeBgmImageUrl(images.small) || "";
+    return getBgmImageUrl(image, state.subjectId ? state.subjectImageRelayBase : state.previewImageRelayBase);
   }
 
   function getBgmCharacterCoverUrl(url) {
@@ -4625,6 +4635,21 @@
     return value
       .replace(/\/pic\/crt\/[lgs]\//, "/pic/crt/m/")
       .replace(/\/pic\/crt\/m\//, "/pic/crt/m/");
+  }
+
+  function getBgmImageUrl(url, relayBase = "") {
+    const value = String(url || "");
+    if (!value || !Object.values(BGM_API_RELAYS).includes(relayBase)) return value;
+    try {
+      const image = new URL(value);
+      if (!/^https?:$/.test(image.protocol) || image.hostname !== "lain.bgm.tv" || image.port || image.username || image.password) return value;
+      const path = image.pathname.replace(/^\/r\/(?:100|200|400)\//, "/");
+      if (!/^\/pic\/(?:crt|cover)\//.test(path)) return value;
+      // The relay serves /pic/... bytes; its /v0/.../image endpoint redirects.
+      return `${relayBase}${path}${image.search}`;
+    } catch (_error) {
+      return value;
+    }
   }
 
   function normalizeBgmImageUrl(url) {
@@ -6639,6 +6664,7 @@
     if (!applied || !isCurrent()) return;
     state.bindingGuardMessage = "";
     state.subject = resolveLongVideoBindingSubject(subjectId);
+    state.subjectImageRelayBase = "";
     state.subjectId = subjectId;
     refreshCurrentEpisodeRecognitionState();
     state.collectionDeleteConfirmSubjectId = null;
@@ -6647,6 +6673,7 @@
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
+    state.previewImageRelayBase = "";
     state.previewCharacters = [];
     state.previewCharacterError = "";
     state.previewCharacterKey = "";
@@ -6729,11 +6756,13 @@
     state.subjectId = null;
     state.collectionDeleteConfirmSubjectId = null;
     state.subject = null;
+    state.subjectImageRelayBase = "";
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
+    state.previewImageRelayBase = "";
     state.previewCharacters = [];
     state.previewCharacterError = "";
     state.previewCharacterKey = "";
@@ -6875,6 +6904,7 @@
       await rememberBindingSubject(subject);
       if (state.collectionRefreshContext !== collectionRefreshContext || !isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
+      state.subjectImageRelayBase = relayScope.imageRelayBase || "";
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
       state.episodes = episodes.data || [];
@@ -6932,6 +6962,7 @@
       await rememberBindingSubject(subject);
       if (state.collectionRefreshContext !== collectionRefreshContext || !isRouteContextCurrent(routeContext) || Number(state.subjectId) !== Number(subjectId) || String(state.token || "") !== String(tokenSnapshot || "")) return;
       state.subject = subject;
+      state.subjectImageRelayBase = relayScope.imageRelayBase || "";
       state.subjectInfoLinks = {};
       state.subjectInfoWebRows = [];
       state.episodes = episodes.data || [];
@@ -10188,12 +10219,16 @@
     const shouldDedup = options.dedup === true || (options.dedup !== false && method === "GET");
     const authToken = options.authToken != null ? String(options.authToken || "") : String(state.token || "");
     const authKey = options.auth ? `auth:${authToken}` : "public";
-    const dedupKey = `${method} ${url} ${authKey} ${data || ""}`;
-    if (shouldDedup && pendingRequests.has(dedupKey)) return pendingRequests.get(dedupKey);
-
-    const requestOptions = { ...options, authToken, retryContext: captureBgmApiRetryContext() };
     const retryScope = options.relayScope && typeof options.relayScope === "object" ? options.relayScope : null;
     const forcedRetryChoice = retryScope && retryScope.choice || "";
+    const dedupKey = `${method} ${url} ${authKey} ${forcedRetryChoice || "default"} ${data || ""}`;
+    if (shouldDedup && pendingRequests.has(dedupKey)) {
+      return applyBgmApiRequestScope(pendingRequests.get(dedupKey), retryScope);
+    }
+
+    const requestOptions = { ...options, authToken, retryContext: captureBgmApiRetryContext() };
+    const request = { promise: null, imageRelayBase: "" };
+    let requestBase = forcedRetryChoice && forcedRetryChoice !== "official" ? BGM_API_RELAYS[forcedRetryChoice] : API_BASE;
     const officialRequestOptions = state.apiRelayAutoFallbackEnabled
       ? { ...requestOptions, maxRetries: 0, requestTimeoutMs: BGM_API_AUTO_FALLBACK_PROBE_TIMEOUT_MS }
       : requestOptions;
@@ -10210,18 +10245,32 @@
       if (choice === "cancel") throw error;
       const retryBase = choice === "official" ? API_BASE : BGM_API_RELAYS[choice];
       if (!retryBase) throw error;
+      requestBase = retryBase;
       return bgmRequestWithRetry(method, buildBgmApiUrl(path, retryBase), data, requestOptions);
+    }).then((response) => {
+      request.imageRelayBase = requestBase === API_BASE ? "" : requestBase;
+      return response;
     });
+    request.promise = promise;
     if (shouldDedup) {
-      pendingRequests.set(dedupKey, promise);
-      promise.then(() => {
-        window.setTimeout(() => pendingRequests.delete(dedupKey), REQUEST_DEDUP_TTL);
-      }, () => {
-        window.setTimeout(() => pendingRequests.delete(dedupKey), REQUEST_DEDUP_TTL);
-      });
+      pendingRequests.set(dedupKey, request);
+      const expire = () => window.setTimeout(() => {
+        if (pendingRequests.get(dedupKey) === request) pendingRequests.delete(dedupKey);
+      }, REQUEST_DEDUP_TTL);
+      promise.then(expire, expire);
     }
+    const result = applyBgmApiRequestScope(request, retryScope);
     return options.auth && /^(POST|PATCH|DELETE)$/i.test(method) && String(path).startsWith("/v0/users/-/collections/")
-      ? trackCollectionWrite(promise) : promise;
+      ? trackCollectionWrite(result) : result;
+  }
+
+  function applyBgmApiRequestScope(request, relayScope) {
+    if (!relayScope) return request.promise;
+    return request.promise.then((response) => {
+      // Every consumer of a shared request must inherit its successful source.
+      if (request.imageRelayBase) relayScope.imageRelayBase = request.imageRelayBase;
+      return response;
+    });
   }
 
   function buildBgmApiUrl(path, baseUrl = API_BASE) {
@@ -12100,11 +12149,13 @@
     routeRefreshSeq += 1;
     state.subjectId = nextSubjectId;
     state.subject = null;
+    state.subjectImageRelayBase = "";
     state.subjectInfoLinks = {};
     state.subjectInfoWebRows = [];
     state.characters = [];
     state.characterError = "";
     state.previewSubject = null;
+    state.previewImageRelayBase = "";
     state.previewCharacters = [];
     state.previewCharacterError = "";
     state.previewCharacterKey = "";
