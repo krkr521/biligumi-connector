@@ -55,7 +55,7 @@
   const OFFICIAL_BANGUMI_EPISODE_LIST_SELECTOR = "#eplist_module, [class*='eplist_ep_list_wrapper'], [class*='PaginatedEpList_root'], [class*='SectionPanel_panel'], [class*='SectionSelector_SectionSelector']";
   let episodeTooltipViewportBound = false;
   const episodeTooltipPointer = { x: 0, y: 0 };
-  const SCRIPT_VERSION = "0.3.30";
+  const SCRIPT_VERSION = "0.3.31";
   const EXTENSION_UPDATE_CHECK_MESSAGE = "biligumi-check-extension-update";
   const EXTENSION_UPDATE_OPEN_MESSAGE = "biligumi-open-extension-update";
   const STORAGE = {
@@ -11476,9 +11476,12 @@
     const normalized = typeof raw.normalize === "function" ? raw.normalize("NFKC") : raw;
     const compact = normalized
       .replace(/^[「『《【\[]+|[」』》】\]]+$/g, "")
-      .replace(/\s+/g, "")
+      .replace(/[\s\\/／＼.．_-]+/g, "")
+      .replace(/新番|番剧|番劇|动画|動畫|动漫|動漫|合集|补档|補檔|补番|補番|补|補/g, "")
       .trim();
-    return /^(?:(?:\d{2}|\d{4})年[\\/／＼.．_-]?)?\d{1,2}月(?:新番|番剧|番劇|动画|動畫|动漫|動漫|合集)*$/i.test(compact);
+    // Only pure calendar metadata is an archive; keep work names such as 7月与安生.
+    return /^(?:(?:\d{2}|\d{4})年)?(?:0?[1-9]|1[0-2])月$/.test(compact)
+      || /^(?:0?[1-9]|1[0-2])月(?:\d{2}|\d{4})年$/.test(compact);
   }
 
   function getElementTitleText(element) {
@@ -11790,6 +11793,8 @@
   function cleanupAnimeTitle(title) {
     return stripEpisodeMarkersAtEdges(title)
       .replace(new RegExp(`\\s*${EPISODE_MARKER_SOURCE}\\s*`, "gi"), " ")
+      // A leading total count is metadata, but the text after it is the work title.
+      .replace(/^\s*全\s*\d+(?:\.\d+)?\s*[话話集]\s*/i, "")
       .replace(/\s*全\s*\d+(?:\.\d+)?\s*[话話集].*$/i, "")
       .replace(/\s*\d+(?:\.\d+)?(?:\s*[-~]\s*\d+(?:\.\d+)?)?\s*[话話集]\s*$/i, "")
       .replace(new RegExp(`\\s*S(?:EASON)?\\s*0*(\\d+)\\s*(?:EPISODE|E(?:P)?\\.?)\\s*${EPISODE_NUMBER_SOURCE}\\s*[-~～〜－–—―至到]\\s*(?:(?:EPISODE|E(?:P)?\\.?)\\s*)?${EPISODE_NUMBER_SOURCE}\\s*$`, "i"), (_, season) => ` S${Number(season)}`)
